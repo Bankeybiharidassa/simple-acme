@@ -641,6 +641,33 @@ function Get-CsrAlgorithms {
     }
 }
 
+
+function Get-CsrExecutionPlan {
+    param([Parameter(Mandatory)][hashtable]$EnvValues)
+
+    $preferred = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec').Trim().ToLowerInvariant())
+    $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0').Trim() -eq '1')
+    if ($preferred -notin @('ec','rsa')) { throw "Unsupported ACME_CSR_ALGORITHM value '$preferred'. Supported values: ec, rsa." }
+    if ($preferred -eq 'ec' -and $fallbackEnabled) { return @('ec','rsa') }
+    return @($preferred)
+}
+
+function Get-MaskedWacsArgumentsText {
+    param([Parameter(Mandatory)][string[]]$Args)
+    $masked = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $Args.Count; $i++) {
+        $arg = [string]$Args[$i]
+        if ($arg -eq '--eab-key' -and $i -lt ($Args.Count - 1)) {
+            $masked.Add('--eab-key')
+            $masked.Add('<hidden>')
+            $i++
+            continue
+        }
+        $masked.Add($arg)
+    }
+    return $masked
+}
+
 function Invoke-WacsWithRetry {
     param(
         [Parameter(Mandatory)][string[]]$Args,
@@ -649,13 +676,12 @@ function Invoke-WacsWithRetry {
     )
     if ((Get-SafeCount $Args) -eq 0) {
         throw @'
-wacs was launched without non-interactive arguments and entered interactive mode.
-Fix the wrapper command generation.
+WACS entered interactive menu. The generated command is incomplete.
 '@
     }
 
-    $attempts = 3
-    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_ATTEMPTS' -Default '3'), [ref]$attempts)
+    $attempts = 1
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_ATTEMPTS' -Default '1'), [ref]$attempts)
     if ($attempts -lt 1) { $attempts = 1 }
     $delaySeconds = 2
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_DELAY_SECONDS' -Default '2'), [ref]$delaySeconds)
@@ -678,7 +704,7 @@ Fix the wrapper command generation.
         }
     }
 
-    if ($last.TimedOut) { throw "wacs timed out after $attempts attempt(s)." }
+    if ($last.TimedOut) { throw "wacs timed out after $TimeoutSeconds seconds and was terminated." }
     $lastOutput = @($last.OutputLines | Select-Object -Last 30)
     $latestLog = Get-LatestSimpleAcmeLogFile
     $stderr = [string]$last.StdErr
@@ -823,8 +849,7 @@ function Get-WacsOutputAnalysis {
 
     if ($RequireNonInteractiveMode -and $enteredInteractiveMode) {
         throw @'
-wacs was launched without non-interactive arguments and entered interactive mode.
-Fix the wrapper command generation.
+WACS entered interactive menu. The generated command is incomplete.
 '@
     }
 
@@ -869,42 +894,49 @@ function Invoke-WacsIssue {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
     $storePlugins = @('certificatestore')
-    $csrAlgorithms = Get-CsrAlgorithms -EnvValues $EnvValues
+    $csrAlgorithms = Get-CsrExecutionPlan -EnvValues $EnvValues
+    $timeoutSeconds = 300
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
+    if ($timeoutSeconds -lt 30) { $timeoutSeconds = 30 }
     $args = @(
-        '--accepttos',
-        '--source', 'manual',
-        '--order', 'single',
-        '--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
-        '--validation', 'none',
-        '--globalvalidation', 'none',
-        '--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
+        '--accepttos','--source', 'manual','--order', 'single','--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
+        '--validation', 'none','--globalvalidation', 'none','--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     )
     $args += @('--store', ($storePlugins -join ','))
-    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) {
-        $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))
-    }
-    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) {
-        $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))
-    }
-    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) {
-        $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))
-    }
+    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
+    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
+    $args += @('--installation', 'script','--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', '{CertThumbprint}')
 
-    $args += @('--installation', 'script')
-    $args += @('--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', '{CertThumbprint}')
+    $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $wrapperLog = Join-Path $logDir ('reconcile-{0}.log' -f (Get-Date).ToString('yyyyMMdd-HHmmss'))
+    [Console]::WriteLine('Wrapper log:')
+    [Console]::WriteLine($wrapperLog)
 
     $lastError = $null
-    foreach ($algorithm in $csrAlgorithms) {
+    for ($idx = 0; $idx -lt $csrAlgorithms.Count; $idx++) {
+        $algorithm = [string]$csrAlgorithms[$idx]
+        $commandArgs = $args + @('--csr', $algorithm)
+        $maskedArgs = Get-MaskedWacsArgumentsText -Args $commandArgs
+        Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' command=' + ($maskedArgs -join ' ')) -Encoding UTF8
+        [Console]::WriteLine('Executing WACS command')
+        [Console]::WriteLine('----------------------')
+        [Console]::WriteLine('Arguments:')
+        foreach ($a in $maskedArgs) { [Console]::WriteLine($a) }
+        [Console]::WriteLine('')
+        [Console]::WriteLine("Timeout seconds:`n$timeoutSeconds")
         try {
-            Invoke-WacsWithRetry -Args ($args + @('--csr', $algorithm)) -EnvValues $EnvValues
+            Invoke-WacsWithRetry -Args $commandArgs -EnvValues $EnvValues -TimeoutSeconds $timeoutSeconds | Out-Null
+            Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' result=success csr=' + $algorithm) -Encoding UTF8
             return
         } catch {
             $lastError = $_
-            Write-Warning "wacs issuance with CSR '$algorithm' failed: $($_.Exception.Message)"
-            [Console]::WriteLine('')
+            Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' result=failure csr=' + $algorithm + ' message=' + $_.Exception.Message) -Encoding UTF8
+            if ($idx -lt ($csrAlgorithms.Count - 1)) { Write-Warning "WACS issuance failed using selected CSR algorithm: $algorithm. Fallback enabled; trying rsa." }
+            else { if ($csrAlgorithms.Count -eq 1 -and $algorithm -eq 'ec') { Write-Warning 'WACS issuance failed using selected CSR algorithm: ec'; Write-Warning 'Fallback to RSA is disabled.' } }
         }
     }
-
     if ($null -ne $lastError) { throw $lastError }
     throw 'wacs issuance failed for unknown reason.'
 }

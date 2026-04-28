@@ -210,7 +210,7 @@ Please choose from the menu:
             $null = Get-WacsOutputAnalysis -OutputLines $lines -RequireNonInteractiveMode
         } catch {
             $threw = $true
-            if ($_.Exception.Message -notmatch 'entered interactive mode') {
+            if ($_.Exception.Message -notmatch 'interactive menu') {
                 throw "Expected interactive-mode guidance, got '$($_.Exception.Message)'."
             }
         }
@@ -327,5 +327,21 @@ No version here
             }
             Remove-Item -Path $transcriptDir -Recurse -Force -ErrorAction SilentlyContinue
         }
+    }
+
+
+    & $Assert 'csr plan defaults to ec only with fallback disabled' {
+        $plan = Get-CsrExecutionPlan -EnvValues @{}
+        if (($plan -join ',') -ne 'ec') { throw "Expected ec only, got $($plan -join ',')" }
+    }
+
+    & $Assert 'csr plan supports explicit rsa' {
+        $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM = 'rsa'; ACME_ALLOW_CSR_FALLBACK = '0' }
+        if (($plan -join ',') -ne 'rsa') { throw "Expected rsa only, got $($plan -join ',')" }
+    }
+
+    & $Assert 'csr plan supports ec to rsa fallback when enabled' {
+        $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM = 'ec'; ACME_ALLOW_CSR_FALLBACK = '1' }
+        if (($plan -join ',') -ne 'ec,rsa') { throw "Expected ec,rsa fallback plan, got $($plan -join ',')" }
     }
 }
