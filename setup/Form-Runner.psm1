@@ -771,7 +771,7 @@ function Invoke-AcmeSettingsMenu {
                     continue
                 }
                 $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
-                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store certificatestore --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr ec"
+                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store certificatestore --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
                 [Console]::WriteLine($line)
@@ -1386,6 +1386,44 @@ function Invoke-AcmeForm {
         $values.ACME_REISSUE_STRATEGY = 'next-renewal'
     }
 
+    while ($true) {
+        Start-ConsoleSection -Title 'Certificate key type'
+        [Console]::WriteLine('[1] EC / ECDSA - recommended modern default')
+        [Console]::WriteLine('[2] RSA - maximum legacy compatibility')
+        [Console]::WriteLine('[0] Back')
+        $keyChoice = Read-SetupChoice -Prompt 'Certificate key type' -Options @{ '1'='ec'; '2'='rsa' } -DefaultKey '1' -AllowBack
+        if ($keyChoice -in @('__CANCEL__','__BACK__')) { return $null }
+        if ($keyChoice -eq 'ec') {
+            Start-ConsoleSection -Title 'EC curve'
+            [Console]::WriteLine('[1] P-256 - recommended default')
+            [Console]::WriteLine('[2] P-384 - stronger, less widely needed')
+            [Console]::WriteLine('[0] Back')
+            $curveChoice = Read-SetupChoice -Prompt 'EC curve' -Options @{ '1'='P-256'; '2'='P-384' } -DefaultKey '1' -AllowBack
+            if ($curveChoice -eq '__BACK__') { continue }
+            if ($curveChoice -eq '__CANCEL__') { return $null }
+            $values.ACME_CSR_ALGORITHM = 'ec'
+            $values.ACME_KEY_TYPE = 'ec'
+            $values.ACME_EC_CURVE = $curveChoice
+            $values.ACME_RSA_KEY_SIZE = ''
+            break
+        }
+        if ($keyChoice -eq 'rsa') {
+            Start-ConsoleSection -Title 'RSA key size'
+            [Console]::WriteLine('[1] 2048 - compatible default')
+            [Console]::WriteLine('[2] 3072 - stronger')
+            [Console]::WriteLine('[3] 4096 - strongest, slower')
+            [Console]::WriteLine('[0] Back')
+            $rsaChoice = Read-SetupChoice -Prompt 'RSA key size' -Options @{ '1'='2048'; '2'='3072'; '3'='4096' } -DefaultKey '1' -AllowBack
+            if ($rsaChoice -eq '__BACK__') { continue }
+            if ($rsaChoice -eq '__CANCEL__') { return $null }
+            $values.ACME_CSR_ALGORITHM = 'rsa'
+            $values.ACME_KEY_TYPE = 'rsa'
+            $values.ACME_RSA_KEY_SIZE = $rsaChoice
+            $values.ACME_EC_CURVE = ''
+            break
+        }
+    }
+    if (-not $values.ContainsKey('ACME_ALLOW_CSR_FALLBACK') -or [string]::IsNullOrWhiteSpace([string]$values.ACME_ALLOW_CSR_FALLBACK)) { $values.ACME_ALLOW_CSR_FALLBACK = '0' }
     $values.TARGET_SYSTEM = $target
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
@@ -1400,13 +1438,17 @@ function Invoke-AcmeForm {
     [Console]::WriteLine("EAB HMAC secret: $(if ([string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { 'not set' } else { 'set' })")
     [Console]::WriteLine("Validation mode: $([string]$values.ACME_VALIDATION_MODE)")
     [Console]::WriteLine("Target system: $([string]$values.ACME_TARGET_SYSTEM)")
+    [Console]::WriteLine(("Certificate key type: " + ([string]$values.ACME_KEY_TYPE).ToUpperInvariant()))
+    if ([string]$values.ACME_KEY_TYPE -eq "ec") { [Console]::WriteLine("EC curve: $([string]$values.ACME_EC_CURVE)") }
+    if ([string]$values.ACME_KEY_TYPE -eq "rsa") { [Console]::WriteLine("RSA key size: $([string]$values.ACME_RSA_KEY_SIZE)") }
+    [Console]::WriteLine("CSR fallback: $(if ([string]$values.ACME_ALLOW_CSR_FALLBACK -eq "1") { "enabled" } else { "disabled" })")
     [Console]::WriteLine("Domains: $([string]$values.DOMAINS)")
     [Console]::WriteLine("Script: $([string]$values.ACME_SCRIPT_PATH)")
     [Console]::WriteLine("Script parameters: $([string]$values.ACME_SCRIPT_PARAMETERS)")
 
     Start-ConsoleSection -Title 'Effective wacs command preview'
     $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
-    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr ec"
+    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
     [Console]::WriteLine($line)
