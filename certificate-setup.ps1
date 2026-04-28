@@ -79,13 +79,13 @@ function Invoke-InitialAcmeReconcilePrompt {
         [Parameter(Mandatory)][string]$EnvFilePath
     )
 
-    $statusRow = [Math]::Max(0, [Console]::WindowHeight - 2)
     $envValues = Import-EnvFile -Path $EnvFilePath -Force
 
     try {
         Assert-ProviderDirectoryConsistency -Values $envValues
     } catch {
-        Show-TuiStatus -Message $_.Exception.Message -Type Error -Row $statusRow
+        [Console]::WriteLine('')
+        [Console]::WriteLine($_.Exception.Message)
         Wait-ForOperatorReturn
         return
     }
@@ -100,9 +100,11 @@ function Invoke-InitialAcmeReconcilePrompt {
     if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { [Console]::WriteLine('--eab-key <hidden>') }
     [Console]::WriteLine('')
 
+    [Console]::WriteLine('')
     $answer = [string](Read-Host 'Run initial ACME reconcile now? [Y/N]')
     if ($answer.Trim().ToLowerInvariant() -notin @('y','yes')) {
-        Show-TuiStatus -Message 'Skipped ACME reconcile. Run certificate-simple-acme-reconcile.ps1 later to bootstrap issuance.' -Type Warning -Row $statusRow
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Skipped ACME reconcile. Run certificate-simple-acme-reconcile.ps1 later to bootstrap issuance.')
         Wait-ForOperatorReturn
         return
     }
@@ -110,13 +112,13 @@ function Invoke-InitialAcmeReconcilePrompt {
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
-        Show-TuiStatus -Message "ACME reconcile completed successfully (action=$action)." -Type Success -Row $statusRow
+        [Console]::WriteLine('')
+        [Console]::WriteLine("ACME reconcile completed successfully (action=$action).")
         if ([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS') -eq '1') {
             Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         }
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
-        Show-TuiStatus -Message "ACME reconcile failed: $($_.Exception.Message)" -Type Error -Row $statusRow
         [Console]::WriteLine('')
         [Console]::WriteLine("ACME reconcile failed: $($_.Exception.Message)")
         Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
