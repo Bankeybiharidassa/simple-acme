@@ -20,6 +20,18 @@ Describe 'Form runner deployment script wiring' {
             { Get-ConnectorScriptByIntent -TargetIntent 'mail' } | Should -Throw '*This target type is not implemented yet.*'
         }
 
+        It 'Manage existing certificates menu does not expose placeholder or stub wording' {
+            $modulePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'setup/Form-Runner.psm1'
+            $raw = Get-Content -LiteralPath $modulePath -Raw -Encoding UTF8
+            $manageBlock = [regex]::Match($raw, "function Invoke-ManageCertificatesMenu \{[\s\S]*?\n\}\n\nfunction Get-PolicyFilePathLegacy")
+            $manageBlock.Success | Should -BeTrue
+            $menuText = [string]$manageBlock.Value
+            $menuText | Should -Not -Match '(?i)placeholder'
+            $menuText | Should -Not -Match '(?i)not implemented yet'
+            $menuText | Should -Not -Match '(?i)\bstub\b'
+            $menuText | Should -Not -Match '(?i)remove certificate mapping'
+        }
+
         It 'Invoke-AcmeForm keeps existing valid ACME_SCRIPT_PATH for unchanged target' {
             $envPath = 'TestDrive:\certificate.env'
             Set-Content -Path $envPath -Value '# test' -Encoding UTF8

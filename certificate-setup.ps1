@@ -111,11 +111,15 @@ function Invoke-InitialAcmeReconcilePrompt {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
         Show-TuiStatus -Message "ACME reconcile completed successfully (action=$action)." -Type Success -Row $statusRow
-        Show-SimpleAcmeDiagnosticSummary -ProjectRoot $RootDir -ShowNoobAdvice
+        if ([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS') -eq '1') {
+            Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        }
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
         Show-TuiStatus -Message "ACME reconcile failed: $($_.Exception.Message)" -Type Error -Row $statusRow
-        Show-SimpleAcmeDiagnosticSummary -ProjectRoot $RootDir -ShowNoobAdvice
+        [Console]::WriteLine('')
+        [Console]::WriteLine("ACME reconcile failed: $($_.Exception.Message)")
+        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
     }
 }
@@ -198,6 +202,15 @@ while ($menuStack.Count -gt 0) {
     if ($null -eq $menuItem) { continue }
 
     if ($menuItem.Type -eq 'submenu') {
+        if ($selected -eq 'advanced') {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('These features are experimental phase-2 deployment/orchestrator functions.')
+            [Console]::WriteLine('They are not required for normal local simple-acme certificate setup.')
+            $phase2Confirm = [string](Read-Host 'Continue? [Y/N]')
+            if ($phase2Confirm.Trim().ToLowerInvariant() -notin @('y','yes')) {
+                continue
+            }
+        }
         $menuStack += ,@{ Title = $menuItem.Label; Items = @($menuItem.Items) }
         continue
     }
