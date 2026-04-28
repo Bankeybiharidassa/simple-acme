@@ -202,6 +202,15 @@ while ($menuStack.Count -gt 0) {
     if ($null -eq $menuItem) { continue }
 
     if ($menuItem.Type -eq 'submenu') {
+        if ($selected -eq 'advanced') {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('These features are experimental phase-2 deployment/orchestrator functions.')
+            [Console]::WriteLine('They are not required for normal local simple-acme certificate setup.')
+            $phase2Confirm = [string](Read-Host 'Continue? [Y/N]')
+            if ($phase2Confirm.Trim().ToLowerInvariant() -notin @('y','yes')) {
+                continue
+            }
+        }
         $menuStack += ,@{ Title = $menuItem.Label; Items = @($menuItem.Items) }
         continue
     }

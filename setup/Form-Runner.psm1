@@ -6,6 +6,8 @@ Set-StrictMode -Version Latest
 Import-Module "$PSScriptRoot/../core/Tui-Engine.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Config-Store.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
+Import-Module "$PSScriptRoot/../core/Native-Process.psm1" -Force -Global
+Import-Module "$PSScriptRoot/../core/Simple-Acme-Reconciler.psm1" -Force -Global
 . "$PSScriptRoot/Device-Schemas.ps1"
 . "$PSScriptRoot/Menu-Tree.ps1"
 
@@ -1392,94 +1394,257 @@ function Invoke-AcmeForm {
 function Invoke-ManageCertificatesMenu {
     param([Parameter(Mandatory)][string]$ConfigDir)
 
+    function Get-SimpleAcmeRenewalFiles {
+        $simpleAcmeDir = Get-SimpleAcmeDataRoot
+        if (-not (Test-Path -LiteralPath $simpleAcmeDir -PathType Container)) {
+            return @()
+        }
+        return @(Get-ChildItem -LiteralPath $simpleAcmeDir -Filter '*.renewal.json' -File -Recurse -ErrorAction SilentlyContinue)
+    }
+
+    function Get-RenewalJsonStringValues {
+        param(
+            [Parameter(Mandatory)]$Node,
+            [Parameter(Mandatory)][string[]]$Names
+        )
+
+        $results = New-Object System.Collections.Generic.List[string]
+        function Visit-NodeForStrings {
+            param($CurrentNode)
+            if ($null -eq $CurrentNode) { return }
+
+            if ($CurrentNode -is [System.Collections.IDictionary]) {
+                foreach ($key in $CurrentNode.Keys) {
+                    if ($Names -contains [string]$key) {
+                        $value = $CurrentNode[$key]
+                        if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+                            $results.Add(([string]$value).Trim())
+                        } elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                            foreach ($item in $value) {
+                                if ($item -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$item)) {
+                                    $results.Add(([string]$item).Trim())
+                                }
+                            }
+                        }
+                    }
+                    Visit-NodeForStrings -CurrentNode $CurrentNode[$key]
+                }
+                return
+            }
+
+            if ($CurrentNode -is [System.Management.Automation.PSCustomObject]) {
+                foreach ($prop in $CurrentNode.PSObject.Properties) {
+                    if ($Names -contains [string]$prop.Name) {
+                        if ($prop.Value -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$prop.Value)) {
+                            $results.Add(([string]$prop.Value).Trim())
+                        } elseif ($prop.Value -is [System.Collections.IEnumerable] -and -not ($prop.Value -is [string])) {
+                            foreach ($item in $prop.Value) {
+                                if ($item -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$item)) {
+                                    $results.Add(([string]$item).Trim())
+                                }
+                            }
+                        }
+                    }
+                    Visit-NodeForStrings -CurrentNode $prop.Value
+                }
+                return
+            }
+
+            if ($CurrentNode -is [System.Collections.IEnumerable] -and -not ($CurrentNode -is [string])) {
+                foreach ($item in $CurrentNode) {
+                    Visit-NodeForStrings -CurrentNode $item
+                }
+            }
+        }
+
+        Visit-NodeForStrings -CurrentNode $Node
+        return @($results | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    }
+
+    function Get-SimpleAcmeRenewalSummaries {
+        $summaries = New-Object System.Collections.Generic.List[object]
+        foreach ($file in @(Get-SimpleAcmeRenewalFiles)) {
+            try {
+                $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $domains = @(
+                    (Get-RenewalJsonStringValues -Node $raw -Names @('Host','Hosts','Identifier','Identifiers')) |
+                        ForEach-Object { [string]$_ -split ',' } |
+                        ForEach-Object { $_.Trim() } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                        Select-Object -Unique
+                )
+                $summary = [pscustomobject]@{
+                    FilePath = $file.FullName
+                    Domains = $domains
+                    BaseUri = ((Get-RenewalJsonStringValues -Node $raw -Names @('BaseUri') | Select-Object -First 1))
+                    Source = ((Get-RenewalJsonStringValues -Node $raw -Names @('SourcePlugin','Source') | Select-Object -First 1))
+                    Validation = ((Get-RenewalJsonStringValues -Node $raw -Names @('ValidationPlugin','Validation') | Select-Object -First 1))
+                    Store = ((Get-RenewalJsonStringValues -Node $raw -Names @('StorePlugin','StoreType','Store') | Select-Object -First 1))
+                    Installation = ((Get-RenewalJsonStringValues -Node $raw -Names @('InstallationPlugin','Installation') | Select-Object -First 1))
+                    Script = ((Get-RenewalJsonStringValues -Node $raw -Names @('Script','ScriptFileName') | Select-Object -First 1))
+                    ScriptParameters = ((Get-RenewalJsonStringValues -Node $raw -Names @('ScriptParameters','Parameters') | Select-Object -First 1))
+                    ParseWarning = ''
+                }
+                $summaries.Add($summary)
+            } catch {
+                $summaries.Add([pscustomobject]@{
+                    FilePath = $file.FullName
+                    Domains = @()
+                    BaseUri = ''
+                    Source = ''
+                    Validation = ''
+                    Store = ''
+                    Installation = ''
+                    Script = ''
+                    ScriptParameters = ''
+                    ParseWarning = $_.Exception.Message
+                })
+            }
+        }
+        return @($summaries)
+    }
+
+    function Show-SimpleAcmeRenewals {
+        $summaries = @(Get-SimpleAcmeRenewalSummaries)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Simple-acme renewals')
+        [Console]::WriteLine('--------------------')
+        if ($summaries.Count -eq 0) {
+            [Console]::WriteLine('No simple-acme renewal files found yet.')
+            [Console]::WriteLine('Run setup and initial issuance first.')
+            Wait-ForOperatorReturn
+            return
+        }
+
+        foreach ($summary in $summaries) {
+            [Console]::WriteLine('File:')
+            [Console]::WriteLine($summary.FilePath)
+            if (-not [string]::IsNullOrWhiteSpace([string]$summary.ParseWarning)) {
+                [Console]::WriteLine('')
+                [Console]::WriteLine("Warning: failed to parse renewal JSON. $([string]$summary.ParseWarning)")
+                [Console]::WriteLine('')
+                continue
+            }
+
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Domains:')
+            [Console]::WriteLine($(if (@($summary.Domains).Count -gt 0) { @($summary.Domains) -join ', ' } else { '(not found)' }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('BaseUri:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.BaseUri)) { '(not found)' } else { [string]$summary.BaseUri }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Source:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.Source)) { '(not found)' } else { [string]$summary.Source }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Validation:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.Validation)) { '(not found)' } else { [string]$summary.Validation }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Store:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.Store)) { '(not found)' } else { [string]$summary.Store }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Installation:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.Installation)) { '(not found)' } else { [string]$summary.Installation }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Script:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.Script)) { '(not found)' } else { [string]$summary.Script }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Script parameters:')
+            [Console]::WriteLine($(if ([string]::IsNullOrWhiteSpace([string]$summary.ScriptParameters)) { '(not found)' } else { [string]$summary.ScriptParameters }))
+            [Console]::WriteLine('')
+            [Console]::WriteLine('--------------------')
+        }
+        Wait-ForOperatorReturn
+    }
+
+    function Show-RenewalCommandPreview {
+        $wacsPath = Resolve-WacsExecutable -EnvValues @{}
+        $files = @(Get-SimpleAcmeRenewalFiles)
+        $simpleAcmeDir = Get-SimpleAcmeDataRoot
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Renewal command preview')
+        [Console]::WriteLine('-----------------------')
+        [Console]::WriteLine("$wacsPath --renew")
+        [Console]::WriteLine("$wacsPath --renew --force")
+        [Console]::WriteLine('')
+        [Console]::WriteLine('simple-acme data root:')
+        [Console]::WriteLine($simpleAcmeDir)
+        [Console]::WriteLine("Renewal files discovered: $($files.Count)")
+        Wait-ForOperatorReturn
+    }
+
+    function Invoke-RunRenewalsNow {
+        $files = @(Get-SimpleAcmeRenewalFiles)
+        if ($files.Count -eq 0) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('No simple-acme renewals found. Create a certificate first.')
+            $continueWithoutRenewals = Read-SetupChoice -Prompt 'Run renewal command anyway? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+            if ($continueWithoutRenewals -in @('__CANCEL__','__BACK__','no')) {
+                Wait-ForOperatorReturn
+                return
+            }
+        }
+
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Run renewals')
+        [Console]::WriteLine('[1] Check and renew only due certificates')
+        [Console]::WriteLine('[2] Force renewal')
+        [Console]::WriteLine('[0] Back')
+        $renewChoice = Read-SetupChoice -Prompt 'Renewals' -Options @{ '0'='back'; '1'='renew-due'; '2'='renew-force' } -DefaultKey '0' -AllowBack
+        if ($renewChoice -in @('back','__CANCEL__','__BACK__')) { return }
+
+        $args = @('--renew')
+        if ($renewChoice -eq 'renew-force') {
+            $args += '--force'
+        }
+
+        $wacsPath = Resolve-WacsExecutable -EnvValues @{}
+        $result = Invoke-NativeProcess -FilePath $wacsPath -ArgumentList $args -TimeoutSeconds 600
+        [Console]::WriteLine('')
+        [Console]::WriteLine("Command: $wacsPath $($args -join ' ')")
+        [Console]::WriteLine("Exit code: $($result.ExitCode)")
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Process output:')
+        [Console]::WriteLine('---------------')
+        foreach ($line in @($result.OutputLines)) {
+            [Console]::WriteLine([string]$line)
+        }
+        if (@($result.OutputLines).Count -eq 0) {
+            [Console]::WriteLine('(no output)')
+        }
+
+        $latest = Get-LatestSimpleAcmeLogFile
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Latest simple-acme log:')
+        [Console]::WriteLine($(if ($null -eq $latest) { '(not found)' } else { [string]$latest.FullName }))
+
+        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        Wait-ForOperatorReturn
+    }
+
     while ($true) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Manage existing certificates')
+        [Console]::WriteLine('')
+        [Console]::WriteLine('[1] View simple-acme renewals')
+        [Console]::WriteLine('[2] Run renewals now')
+        [Console]::WriteLine('[3] Show renewal command preview')
+        [Console]::WriteLine('[4] View logs / diagnostics')
         [Console]::WriteLine('[0] Back')
-        [Console]::WriteLine('[1] View configured certificates')
-        [Console]::WriteLine('[2] Reissue certificate (placeholder)')
-        [Console]::WriteLine('[3] Change targets (placeholder)')
-        [Console]::WriteLine('[4] Test deployment (placeholder)')
-        [Console]::WriteLine('[5] Remove certificate mapping')
         $choice = Read-SetupChoice -Prompt 'Manage' -Options @{
             '0'='back'
-            '1'='view'
-            '2'='reissue'
-            '3'='targets'
-            '4'='test'
-            '5'='remove'
+            '1'='view-renewals'
+            '2'='run-renewals'
+            '3'='preview-renewals'
+            '4'='logs'
         } -DefaultKey '0'
 
         if ($choice -in @('back','__CANCEL__','__BACK__')) { return }
 
-        $simpleAcmeDir = Get-SimpleAcmeDataRoot
-        $mappings = @()
-        if (Test-Path -LiteralPath $simpleAcmeDir) {
-            $mappings = @(Get-ChildItem -LiteralPath $simpleAcmeDir -Filter '*.renewal.json' -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                $domains = @()
-                $installPlugin = ''
-                $scriptPath = ''
-                $nextInfo = ''
-                try {
-                    $obj = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-                    if ($obj.PSObject.Properties['Host']) { $domains += @([string]$obj.Host -split ',') }
-                    if ($obj.PSObject.Properties['Hosts']) { $domains += @($obj.Hosts) }
-                    if ($obj.PSObject.Properties['Installation'] -and $obj.Installation.PSObject.Properties['Plugin']) { $installPlugin = [string]$obj.Installation.Plugin }
-                    if ($obj.PSObject.Properties['Installation'] -and $obj.Installation.PSObject.Properties['PluginOptions'] -and $obj.Installation.PluginOptions.PSObject.Properties['Script']) { $scriptPath = [string]$obj.Installation.PluginOptions.Script }
-                    if ($obj.PSObject.Properties['History'] -and $obj.History.PSObject.Properties['LastRenewal']) { $nextInfo = [string]$obj.History.LastRenewal }
-                } catch {}
-                [pscustomobject]@{
-                    renewalFile = $_.FullName
-                    renewalId = $_.BaseName
-                    domains = @($domains | ForEach-Object { [string]$_ } | Where-Object { $_ } | Sort-Object -Unique)
-                    scriptPath = $scriptPath
-                    installationPlugin = $installPlugin
-                    nextRenewalInfo = $nextInfo
-                }
-            })
-        }
-
         switch ($choice) {
-            'view' {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Configured certificates')
-                [Console]::WriteLine('-----------------------')
-
-                if (@($mappings).Count -eq 0) {
-                    [Console]::WriteLine('No simple-acme renewals found yet.')
-                    [Console]::WriteLine('Run setup and initial issuance first.')
-                } else {
-                    foreach ($m in $mappings) {
-                        [Console]::WriteLine("renewal=$($m.renewalFile)")
-                        [Console]::WriteLine(" - domains=$($(if (@($m.domains).Count -gt 0) { @($m.domains) -join ',' } else { '(unknown)' }))")
-                        [Console]::WriteLine(" - script=$($m.scriptPath)")
-                        [Console]::WriteLine(" - installation=$($m.installationPlugin)")
-                        [Console]::WriteLine(" - next renewal info=$($m.nextRenewalInfo)")
-                    }
-                }
-
-                Wait-ForOperatorReturn
-            }
-            'reissue' {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Reissue is not implemented yet.')
-                Wait-ForOperatorReturn
-            }
-            'targets' {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Change targets is not implemented yet.')
-                Wait-ForOperatorReturn
-            }
-            'test' {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Test deployment is not implemented yet.')
-                Wait-ForOperatorReturn
-            }
-            'remove' {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Remove mapping is not implemented yet.')
-                Wait-ForOperatorReturn
-            }
+            'view-renewals' { Show-SimpleAcmeRenewals }
+            'run-renewals' { Invoke-RunRenewalsNow }
+            'preview-renewals' { Show-RenewalCommandPreview }
+            'logs' { Invoke-ViewLogsDiagnostics -ProjectRoot (Split-Path $PSScriptRoot -Parent) }
         }
     }
 }
