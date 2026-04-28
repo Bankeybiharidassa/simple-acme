@@ -828,29 +828,39 @@ Fix the wrapper command generation.
 '@
     }
 
+    $versionText = $null
     $version = $null
+
     foreach ($line in $lines) {
         $m = [regex]::Match([string]$line, 'Software version\s+(\d+\.\d+(?:\.\d+){0,2})')
         if ($m.Success) {
-            $version = [version]$m.Groups[1].Value
+            $versionText = [string]$m.Groups[1].Value
             break
         }
     }
-    if ($RequireVersion -and [string]::IsNullOrWhiteSpace($versionText)) {
-        throw 'Unable to parse simple-acme/wacs version from output.'
+
+    if ([string]::IsNullOrWhiteSpace($versionText)) {
+        foreach ($line in $lines) {
+            $m = [regex]::Match([string]$line, '\b\d+\.\d+(?:\.\d+){0,2}\b')
+            if ($m.Success) {
+                $versionText = [string]$m.Value
+                break
+            }
+        }
     }
 
-    $parsedVersion = $null
     if (-not [string]::IsNullOrWhiteSpace($versionText)) {
-        $parsedVersion = [version]$versionText
+        $version = [version]$versionText
+    }
+
+    if ($RequireVersion -and $null -eq $version) {
+        throw ('Unable to parse simple-acme/wacs version from output. Output was:' + [Environment]::NewLine + ($lines -join [Environment]::NewLine))
     }
 
     return [pscustomobject]@{
-        Version = $parsedVersion
-        Diagnostics = $diagnostics
-        AssemblyDiagnosticCount = (Get-SafeCount $assemblyDiagnostics)
-        ScheduledTaskDiagnosticCount = (Get-SafeCount $scheduledTaskDiagnostics)
-        EnteredInteractiveMenu = ((Get-SafeCount $interactiveHits) -gt 0)
+        Version = $version
+        VersionText = $versionText
+        EnteredInteractiveMode = $enteredInteractiveMode
         OutputLines = $lines
     }
 }
@@ -891,6 +901,7 @@ function Invoke-WacsIssue {
         } catch {
             $lastError = $_
             Write-Warning "wacs issuance with CSR '$algorithm' failed: $($_.Exception.Message)"
+            [Console]::WriteLine('')
         }
     }
 
