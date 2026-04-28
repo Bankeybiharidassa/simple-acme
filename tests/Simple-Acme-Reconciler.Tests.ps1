@@ -179,6 +179,9 @@ Authorization pending
         if ($null -ne $analysis.Version) {
             throw "Expected Version to be null for issuance output, got '$($analysis.Version)'."
         }
+        if ($null -ne $analysis.VersionText) {
+            throw "Expected VersionText to be null for issuance output, got '$($analysis.VersionText)'."
+        }
     }
 
     & $Assert 'Get-WacsOutputAnalysis does not throw version errors for issuance failures' {
@@ -190,6 +193,9 @@ Error creating order
         $analysis = Get-WacsOutputAnalysis -OutputLines $lines -RequireNonInteractiveMode
         if ($null -ne $analysis.Version) {
             throw "Expected Version to be null for issuance failure output, got '$($analysis.Version)'."
+        }
+        if ($null -ne $analysis.VersionText) {
+            throw "Expected VersionText to be null for issuance failure output, got '$($analysis.VersionText)'."
         }
     }
 

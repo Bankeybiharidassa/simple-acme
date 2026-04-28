@@ -176,6 +176,21 @@ function Wait-ForOperatorReturn {
     }
 }
 
+function Start-ConsoleSection {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [switch]$Clear
+    )
+
+    if ($Clear) {
+        Clear-Host
+    }
+
+    [Console]::WriteLine('')
+    [Console]::WriteLine($Title)
+    [Console]::WriteLine(('-' * $Title.Length))
+}
+
 function Test-RoleAvailable {
     param([Parameter(Mandatory)][string]$Role)
     $command = Get-Command -Name Get-WindowsFeature -ErrorAction SilentlyContinue
@@ -1004,7 +1019,7 @@ function Get-ConnectorScriptByIntent {
 function Read-AcmeProviderSelection {
     param([hashtable]$CurrentValues = @{})
 
-    [Console]::WriteLine('')
+    Start-ConsoleSection -Title 'Provider selection'
     [Console]::WriteLine('Select ACME provider')
     [Console]::WriteLine('[1] Let''s Encrypt - public ACME, no EAB')
     [Console]::WriteLine('[2] Networking4All - commercial ACME, EAB required')
@@ -1030,7 +1045,7 @@ function Read-AcmeProviderSelection {
     }
 
     if ($providerChoice -eq 'networking4all') {
-        [Console]::WriteLine('')
+        Start-ConsoleSection -Title 'Networking4All environment selection'
         [Console]::WriteLine('Networking4All environment')
         [Console]::WriteLine('[1] Test')
         [Console]::WriteLine('[2] Production')
@@ -1038,7 +1053,7 @@ function Read-AcmeProviderSelection {
         $envChoice = Read-SetupChoice -Prompt 'Environment' -Options @{ '1'='test'; '2'='production'; '0'='back' } -DefaultKey '2' -AllowBack
         if ($envChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
-        [Console]::WriteLine('')
+        Start-ConsoleSection -Title 'Networking4All product selection'
         [Console]::WriteLine('Networking4All certificate product')
         [Console]::WriteLine('[1] dv')
         [Console]::WriteLine('[2] dv-san')
@@ -1099,6 +1114,7 @@ function Read-AcmeProviderSelection {
         return $values
     }
 
+    [Console]::WriteLine('')
     $directory = [string](Read-Host 'Custom ACME directory URL (https://...)')
     if ([string]::IsNullOrWhiteSpace($directory) -or $directory -notmatch '^https://') {
         throw 'Custom ACME directory must be an absolute HTTPS URL.'
@@ -1132,7 +1148,7 @@ function Resolve-EabCredentialsForSetup {
     $hasSecret = -not [string]::IsNullOrWhiteSpace($existingSecret)
 
     if ($hasKid -and $hasSecret) {
-        [Console]::WriteLine('')
+        Start-ConsoleSection -Title 'EAB credentials'
         [Console]::WriteLine('Existing EAB credentials found:')
         [Console]::WriteLine('- KID: set')
         [Console]::WriteLine('- HMAC secret: set')
@@ -1148,6 +1164,7 @@ function Resolve-EabCredentialsForSetup {
             return 'ok'
         }
     } elseif ($hasKid -or $hasSecret) {
+        Start-ConsoleSection -Title 'EAB credentials'
         $kidState = 'not set'
         $secretState = 'not set'
         if ($hasKid) { $kidState = 'set' }
@@ -1159,8 +1176,10 @@ function Resolve-EabCredentialsForSetup {
         [Console]::WriteLine('Networking4All requires both values.')
     }
 
+    [Console]::WriteLine('')
     $kid = [string](Read-Host 'ACME_KID')
     if ([string]::IsNullOrWhiteSpace($kid)) { return '__BACK__' }
+    [Console]::WriteLine('')
     $secret = [string](Read-Host 'ACME_HMAC_SECRET')
     if ([string]::IsNullOrWhiteSpace($secret)) { return '__BACK__' }
     $TargetValues.ACME_KID = $kid
@@ -1221,7 +1240,7 @@ function Invoke-AcmeForm {
     $curr = @{}
     if (Test-Path -LiteralPath $resolvedEnvFilePath) { $curr = Read-EnvFile -Path $resolvedEnvFilePath }
 
-    [Console]::WriteLine('')
+    Start-ConsoleSection -Title 'Target selection' -Clear
     [Console]::WriteLine('What do you want to secure?')
     [Console]::WriteLine('[1] Remote Desktop Gateway (RDS)')
     [Console]::WriteLine('[2] Website (IIS)')
@@ -1231,28 +1250,31 @@ function Invoke-AcmeForm {
     [Console]::WriteLine('[6] Custom system')
     $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='iis'; '3'='mail'; '4'='firewall'; '5'='waf'; '6'='custom' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
 
-    [Console]::WriteLine('')
+    Start-ConsoleSection -Title 'Target location selection'
     [Console]::WriteLine('Where is this system located?')
     [Console]::WriteLine('[1] This server')
     [Console]::WriteLine('[2] Another server / device')
     [Console]::WriteLine('[3] Multiple systems (cluster / farm)')
     $location = Read-SetupChoice -Prompt 'Location' -Options @{ '1'='this-server'; '2'='another-server'; '3'='cluster-farm' } -DefaultKey '1' -AllowBack
     if ($location -in @('__CANCEL__','__BACK__')) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
 
-    [Console]::WriteLine('')
+    Start-ConsoleSection -Title 'Certificate distribution selection'
     [Console]::WriteLine('Will this certificate be used on more than one system?')
     [Console]::WriteLine('[1] No - only this system (recommended, most secure)')
     [Console]::WriteLine('[2] Yes - multiple systems (RDS farm, firewall, etc.)')
     $distributionMode = Read-SetupChoice -Prompt 'Distribution' -Options @{ '1'='single'; '2'='multi' } -DefaultKey '1' -AllowBack
     if ($distributionMode -in @('__CANCEL__','__BACK__')) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
 
@@ -1260,12 +1282,14 @@ function Invoke-AcmeForm {
     foreach ($k in $curr.Keys) { $values[$k] = [string]$curr[$k] }
     $domains = Read-DomainsInput
     if ($domains -in @('__CANCEL__','__BACK__')) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
     $providerResult = Read-AcmeProviderSelection -CurrentValues $curr
     if ($providerResult -in @('__BACK__','__CANCEL__') -or $null -eq $providerResult) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
     $values.DOMAINS = $domains
@@ -1320,13 +1344,15 @@ function Invoke-AcmeForm {
         [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
         $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
         if ($multiChoice -in @('__CANCEL__','__BACK__')) {
-            Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
             return $null
         }
         [Console]::WriteLine('Enabling exportable keys reduces security because private keys can be transferred.')
         $continue = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
         if ($continue -in @('__CANCEL__','__BACK__','no')) {
-            Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
             return $null
         }
 
@@ -1347,7 +1373,8 @@ function Invoke-AcmeForm {
         [Console]::WriteLine('This setting only applies to new certificates.')
         $reissueChoice = Read-SetupChoice -Prompt '[1] Apply on next renewal [2] Re-issue certificate now' -Options @{ '1'='next-renewal'; '2'='force-reissue' } -DefaultKey '1' -AllowBack
         if ($reissueChoice -in @('__CANCEL__','__BACK__')) {
-            Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
             return $null
         }
         $values.ACME_REISSUE_STRATEGY = $reissueChoice
@@ -1363,17 +1390,35 @@ function Invoke-AcmeForm {
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
     $values.ACME_TARGET_LOCATION = $location
-    [Console]::WriteLine('')
+    Start-ConsoleSection -Title 'Review selected settings'
     [Console]::WriteLine("Selected ACME provider: $([string]$values.ACME_PROVIDER)")
     [Console]::WriteLine("Selected ACME environment: $([string]$values.ACME_NETWORKING4ALL_ENVIRONMENT)")
     [Console]::WriteLine("Selected ACME product: $([string]$values.ACME_NETWORKING4ALL_PRODUCT)")
     [Console]::WriteLine("Effective ACME directory: $([string]$values.ACME_DIRECTORY)")
     [Console]::WriteLine("EAB required: $(if ([string]$values.ACME_REQUIRES_EAB -eq '1') { 'yes' } else { 'no' })")
+    [Console]::WriteLine("EAB KID: $(if ([string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { 'not set' } else { 'set' })")
+    [Console]::WriteLine("EAB HMAC secret: $(if ([string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { 'not set' } else { 'set' })")
     [Console]::WriteLine("Validation mode: $([string]$values.ACME_VALIDATION_MODE)")
-    [Console]::WriteLine('')
+    [Console]::WriteLine("Target system: $([string]$values.ACME_TARGET_SYSTEM)")
+    [Console]::WriteLine("Domains: $([string]$values.DOMAINS)")
+    [Console]::WriteLine("Script: $([string]$values.ACME_SCRIPT_PATH)")
+    [Console]::WriteLine("Script parameters: $([string]$values.ACME_SCRIPT_PARAMETERS)")
+
+    Start-ConsoleSection -Title 'Effective wacs command preview'
+    $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
+    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr ec"
+    if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
+    [Console]::WriteLine($line)
+
+    Start-ConsoleSection -Title 'Save these settings?'
+    [Console]::WriteLine('[1] Yes')
+    [Console]::WriteLine('[2] No')
+    [Console]::WriteLine('[0] Back')
     $confirmSave = Read-SetupChoice -Prompt 'Save these settings? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
     if ($confirmSave -in @('__CANCEL__','__BACK__','no')) {
-        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
         return $null
     }
 
@@ -1387,7 +1432,8 @@ function Invoke-AcmeForm {
     if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
         throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
     }
-    Show-TuiStatus -Message 'Saved bootstrap certificate.env for initial simple-acme setup.' -Type Success -Row ([Console]::WindowHeight-2)
+    [Console]::WriteLine('')
+    [Console]::WriteLine('Saved bootstrap certificate.env for initial simple-acme setup.')
     return $reloaded
 }
 
