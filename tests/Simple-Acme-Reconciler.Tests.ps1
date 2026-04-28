@@ -335,6 +335,22 @@ No version here
         if (($plan -join ',') -ne 'ec') { throw "Expected ec only, got $($plan -join ',')" }
     }
 
+
+    & $Assert 'csr plan no fallback returns ec only and count one' {
+        $envValues = @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' }
+        $plan = @(Get-CsrExecutionPlan -EnvValues $envValues)
+        if (($plan -join ',') -ne 'ec') { throw "Expected ec, got $($plan -join ',')" }
+        if (@($plan).Count -ne 1) { throw "Expected count 1, got $(@($plan).Count)" }
+    }
+
+    & $Assert 'masked args handles scalar and masks secret under strict mode' {
+        Set-StrictMode -Version Latest
+        $single = @(Get-MaskedWacsArgumentsText -Args '--csr')
+        if (($single -join ',') -ne '--csr') { throw 'Expected scalar arg to be preserved.' }
+        $masked = @(Get-MaskedWacsArgumentsText -Args @('--eab-key','secret'))
+        if (($masked -join ',') -ne '--eab-key,<hidden>') { throw "Expected masked secret, got $($masked -join ',')" }
+    }
+
     & $Assert 'csr plan supports explicit rsa' {
         $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM = 'rsa'; ACME_ALLOW_CSR_FALLBACK = '0' }
         if (($plan -join ',') -ne 'rsa') { throw "Expected rsa only, got $($plan -join ',')" }
