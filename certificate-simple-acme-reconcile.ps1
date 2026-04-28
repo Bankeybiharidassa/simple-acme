@@ -47,7 +47,14 @@ try {
         Write-Host ('Command: ' + $_.InvocationInfo.Line)
     }
 
+    if ($_.ScriptStackTrace) {
+        Write-Host 'Stack trace:'
+        Write-Host $_.ScriptStackTrace
+    }
+
     Write-Host ''
+    Write-Host 'See wrapper log:'
+    Write-Host 'C:\certificaat\logs\reconcile-YYYYMMDD-HHMMSS.log'
     Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
     Write-Error $_
     exit 1

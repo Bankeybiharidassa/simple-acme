@@ -466,7 +466,7 @@ function Compare-RenewalWithEnv {
         $mismatches.Add('Script parameters')
     }
 
-    $requestedCsr = (Get-CsrAlgorithms -EnvValues $EnvValues | Select-Object -First 1)
+    $requestedCsr = [string](Get-CsrExecutionPlan -EnvValues $EnvValues | Select-Object -First 1)
     if (-not [string]::IsNullOrWhiteSpace($requestedCsr) -and -not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.CsrPlugin)) {
         if ([string]$RenewalSummary.CsrPlugin -ne $requestedCsr) {
             $mismatches.Add('CSR plugin')
@@ -625,23 +625,6 @@ function Get-InstallationPlugins {
     return $plugins
 }
 
-function Get-CsrAlgorithms {
-    param([Parameter(Mandatory)][hashtable]$EnvValues)
-
-    $preferred = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM')
-    if ([string]::IsNullOrWhiteSpace($preferred)) {
-        return @('ec','rsa')
-    }
-
-    $normalized = $preferred.Trim().ToLowerInvariant()
-    switch ($normalized) {
-        'ec' { return @('ec','rsa') }
-        'rsa' { return @('rsa') }
-        default { throw "Unsupported ACME_CSR_ALGORITHM value '$preferred'. Supported values: ec, rsa." }
-    }
-}
-
-
 function Get-CsrExecutionPlan {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
@@ -653,19 +636,25 @@ function Get-CsrExecutionPlan {
 }
 
 function Get-MaskedWacsArgumentsText {
-    param([Parameter(Mandatory)][string[]]$Args)
+    param([AllowNull()][string[]]$Args)
+
+    $argList = @($Args | ForEach-Object { [string]$_ })
     $masked = New-Object System.Collections.Generic.List[string]
-    for ($i = 0; $i -lt $Args.Count; $i++) {
-        $arg = [string]$Args[$i]
-        if ($arg -eq '--eab-key' -and $i -lt ($Args.Count - 1)) {
+
+    for ($i = 0; $i -lt (Get-SafeCount $argList); $i++) {
+        $arg = [string]$argList[$i]
+
+        if ($arg -eq '--eab-key' -and $i -lt ((Get-SafeCount $argList) - 1)) {
             $masked.Add('--eab-key')
             $masked.Add('<hidden>')
             $i++
             continue
         }
+
         $masked.Add($arg)
     }
-    return $masked
+
+    return @($masked)
 }
 
 function Invoke-WacsWithRetry {
@@ -845,7 +834,7 @@ function Get-WacsOutputAnalysis {
     )
 
     $lines = @($OutputLines | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    $enteredInteractiveMode = ((@($lines | Where-Object { $_ -match 'Please choose from the menu:' }).Count) -gt 0)
+    $enteredInteractiveMode = ((Get-SafeCount (@($lines | Where-Object { $_ -match 'Please choose from the menu:' }))) -gt 0)
 
     if ($RequireNonInteractiveMode -and $enteredInteractiveMode) {
         throw @'
@@ -914,12 +903,21 @@ function Invoke-WacsIssue {
     [Console]::WriteLine('Wrapper log:')
     [Console]::WriteLine($wrapperLog)
 
+    Add-Content -LiteralPath $wrapperLog -Value ('timestamp=' + (Get-Date).ToString('o')) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('env_path=' + [string]([Environment]::GetEnvironmentVariable('CERTIFICATE_ENV_FILE'))) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('wacs_path=' + [string](Resolve-WacsExecutable -EnvValues $EnvValues)) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('csr_selected=' + [string](Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec')) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + (if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
+
     $lastError = $null
-    for ($idx = 0; $idx -lt $csrAlgorithms.Count; $idx++) {
+    for ($idx = 0; $idx -lt (Get-SafeCount $csrAlgorithms); $idx++) {
         $algorithm = [string]$csrAlgorithms[$idx]
         $commandArgs = $args + @('--csr', $algorithm)
         $maskedArgs = Get-MaskedWacsArgumentsText -Args $commandArgs
-        Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' command=' + ($maskedArgs -join ' ')) -Encoding UTF8
+        $attemptNumber = $idx + 1
+        Add-Content -LiteralPath $wrapperLog -Value ('attempt=' + $attemptNumber) -Encoding UTF8
+        Add-Content -LiteralPath $wrapperLog -Value ('timeout_seconds=' + $timeoutSeconds) -Encoding UTF8
+        Add-Content -LiteralPath $wrapperLog -Value ('masked_command=' + ($maskedArgs -join ' ')) -Encoding UTF8
         [Console]::WriteLine('Executing WACS command')
         [Console]::WriteLine('----------------------')
         [Console]::WriteLine('Arguments:')
@@ -927,14 +925,25 @@ function Invoke-WacsIssue {
         [Console]::WriteLine('')
         [Console]::WriteLine("Timeout seconds:`n$timeoutSeconds")
         try {
-            Invoke-WacsWithRetry -Args $commandArgs -EnvValues $EnvValues -TimeoutSeconds $timeoutSeconds | Out-Null
+            $result = Invoke-WacsWithRetry -Args $commandArgs -EnvValues $EnvValues -TimeoutSeconds $timeoutSeconds
+            Add-Content -LiteralPath $wrapperLog -Value ('stdout=' + (@($result.OutputLines) -join ' | ')) -Encoding UTF8
+            Add-Content -LiteralPath $wrapperLog -Value ('stderr=' + [string]$result.StdErr) -Encoding UTF8
+            Add-Content -LiteralPath $wrapperLog -Value ('exit_code=' + [string]$result.ExitCode) -Encoding UTF8
+            Add-Content -LiteralPath $wrapperLog -Value ('timed_out=' + [string]$result.TimedOut) -Encoding UTF8
             Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' result=success csr=' + $algorithm) -Encoding UTF8
             return
         } catch {
             $lastError = $_
             Add-Content -LiteralPath $wrapperLog -Value ((Get-Date).ToString('s') + ' result=failure csr=' + $algorithm + ' message=' + $_.Exception.Message) -Encoding UTF8
-            if ($idx -lt ($csrAlgorithms.Count - 1)) { Write-Warning "WACS issuance failed using selected CSR algorithm: $algorithm. Fallback enabled; trying rsa." }
-            else { if ($csrAlgorithms.Count -eq 1 -and $algorithm -eq 'ec') { Write-Warning 'WACS issuance failed using selected CSR algorithm: ec'; Write-Warning 'Fallback to RSA is disabled.' } }
+            if ($_.InvocationInfo) {
+                Add-Content -LiteralPath $wrapperLog -Value ('ps_exception_script=' + [string]$_.InvocationInfo.ScriptName) -Encoding UTF8
+                Add-Content -LiteralPath $wrapperLog -Value ('ps_exception_line=' + [string]$_.InvocationInfo.ScriptLineNumber) -Encoding UTF8
+                Add-Content -LiteralPath $wrapperLog -Value ('ps_exception_command=' + [string]$_.InvocationInfo.Line) -Encoding UTF8
+            }
+            Add-Content -LiteralPath $wrapperLog -Value ('ps_exception_message=' + [string]$_.Exception.Message) -Encoding UTF8
+            Add-Content -LiteralPath $wrapperLog -Value ('ps_script_stack=' + [string]$_.ScriptStackTrace) -Encoding UTF8
+            if ($idx -lt ((Get-SafeCount $csrAlgorithms) - 1)) { Write-Warning "WACS issuance failed using selected CSR algorithm: $algorithm. Fallback enabled; trying rsa." }
+            else { if ((Get-SafeCount $csrAlgorithms) -eq 1 -and $algorithm -eq 'ec') { Write-Warning 'WACS issuance failed using selected CSR algorithm: ec'; Write-Warning 'Fallback to RSA is disabled.' } }
         }
     }
     if ($null -ne $lastError) { throw $lastError }

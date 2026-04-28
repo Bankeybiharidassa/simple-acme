@@ -120,7 +120,18 @@ function Invoke-InitialAcmeReconcilePrompt {
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
         [Console]::WriteLine('')
-        [Console]::WriteLine("ACME reconcile failed: $($_.Exception.Message)")
+        [Console]::WriteLine('ACME reconcile failed: ' + $_.Exception.Message)
+        if ($_.InvocationInfo) {
+            [Console]::WriteLine('Script: ' + $_.InvocationInfo.ScriptName)
+            [Console]::WriteLine('Line: ' + $_.InvocationInfo.ScriptLineNumber)
+            [Console]::WriteLine('Command: ' + $_.InvocationInfo.Line)
+        }
+        if ($_.ScriptStackTrace) {
+            [Console]::WriteLine('Stack trace:')
+            [Console]::WriteLine($_.ScriptStackTrace)
+        }
+        [Console]::WriteLine('See wrapper log:')
+        [Console]::WriteLine('C:\certificaat\logs\reconcile-YYYYMMDD-HHMMSS.log')
         Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
     }

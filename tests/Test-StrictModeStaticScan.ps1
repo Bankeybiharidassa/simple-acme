@@ -16,3 +16,13 @@ foreach ($file in $files) {
 }
 
 Write-Host 'StrictMode static scan passed.'
+
+$issuanceFiles = @('core/Simple-Acme-Reconciler.psm1','certificate-simple-acme-reconcile.ps1','certificate-setup.ps1')
+foreach ($relative in $issuanceFiles) {
+    $full = Join-Path $root $relative
+    if (-not (Test-Path -LiteralPath $full)) { continue }
+    $raw = [System.IO.File]::ReadAllText($full)
+    if ($raw -match '(?<!function\s)Get-CsrAlgorithms') {
+        throw "Legacy CSR execution path detected in $relative"
+    }
+}
