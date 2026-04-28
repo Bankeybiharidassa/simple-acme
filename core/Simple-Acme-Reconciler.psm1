@@ -492,8 +492,12 @@ function Test-ReconcilePreflight {
     $detectedVersion = Get-WacsVersion -EnvValues $EnvValues
     $minimumVersion = [version]'2.2'
     $testedRangeNote = 'Tested with simple-acme/wacs 2.2.x through 2.4.x.'
-    if ($detectedVersion -lt $minimumVersion) {
-        throw "Unsupported simple-acme/wacs version '$detectedVersion'. Minimum supported version is '$minimumVersion'. $testedRangeNote"
+    if ($null -ne $detectedVersion) {
+        if ($detectedVersion -lt $minimumVersion) {
+            throw "Unsupported simple-acme/wacs version '$detectedVersion'. Minimum supported version is '$minimumVersion'. $testedRangeNote"
+        }
+    } else {
+        Write-Warning 'simple-acme/wacs version could not be detected. Continuing because hard version check is disabled.'
     }
 
     $missing = @()
@@ -544,7 +548,7 @@ function Test-ReconcilePreflight {
 
     return [pscustomobject]@{
         WacsPath = [string]$wacsPath
-        WacsVersion = [string]$detectedVersion
+        WacsVersion = if ($null -eq $detectedVersion) { '(unknown)' } else { [string]$detectedVersion }
         DomainCount = (Get-SafeCount $domains)
         ScriptPath = $scriptPath
         InstallationPlugins = @('script')
@@ -743,27 +747,68 @@ function New-ReconcileConfigHash {
     }
 }
 
+function Get-WacsFileVersion {
+    param([Parameter(Mandatory)][string]$WacsPath)
+
+    try {
+        $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($WacsPath)
+
+        foreach ($candidate in @($info.ProductVersion, $info.FileVersion)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$candidate)) {
+                $m = [regex]::Match([string]$candidate, '\d+\.\d+(?:\.\d+){0,2}')
+                if ($m.Success) {
+                    return [version]$m.Value
+                }
+            }
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
 function Get-WacsVersion {
     param([hashtable]$EnvValues)
 
-    $fromEnv = ''
-    $outputLines = @()
-    if ($null -ne $EnvValues -and $EnvValues.ContainsKey('ACME_WACS_VERSION')) {
-        $fromEnv = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_VERSION')
-    }
-    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
-        $outputLines = @($fromEnv -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    } else {
-        $result = Invoke-NativeProcess -FilePath (Resolve-WacsExecutable -EnvValues $EnvValues) -ArgumentList @('--version') -TimeoutSeconds 30
-        $outputLines = @($result.OutputLines)
-        if (-not $result.Succeeded) {
-            if ($result.TimedOut) { throw 'wacs --version timed out.' }
-            throw "wacs --version failed with exit code $($result.ExitCode)."
-        }
+    $configured = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_VERSION')
+    if (-not [string]::IsNullOrWhiteSpace($configured)) {
+        $analysis = Get-WacsOutputAnalysis -OutputLines @($configured) -RequireVersion
+        return $analysis.Version
     }
 
-    $analysis = Get-WacsOutputAnalysis -OutputLines $outputLines -RequireVersion -RequireNonInteractiveMode
-    return $analysis.Version
+    $wacsPath = Resolve-WacsExecutable -EnvValues $EnvValues
+
+    $fileVersion = Get-WacsFileVersion -WacsPath $wacsPath
+    if ($null -ne $fileVersion) {
+        return $fileVersion
+    }
+
+    $timeout = 90
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_VERSION_TIMEOUT_SECONDS' -Default '90'), [ref]$timeout)
+    if ($timeout -lt 10) { $timeout = 10 }
+
+    $requireVersion = Test-EnvFlag -EnvValues $EnvValues -Key 'ACME_REQUIRE_WACS_VERSION_CHECK'
+
+    try {
+        $result = Invoke-NativeProcess -FilePath $wacsPath -ArgumentList @('--version') -TimeoutSeconds $timeout
+        if ($result.TimedOut) {
+            if ($requireVersion) { throw 'wacs --version timed out.' }
+            Write-Warning "wacs --version timed out after $timeout seconds. Continuing because ACME_REQUIRE_WACS_VERSION_CHECK is not enabled."
+            return $null
+        }
+        if (-not $result.Succeeded) {
+            throw "wacs --version failed with exit code $($result.ExitCode)."
+        }
+
+        $outputLines = @($result.OutputLines)
+        $analysis = Get-WacsOutputAnalysis -OutputLines $outputLines -RequireVersion -RequireNonInteractiveMode
+        return $analysis.Version
+    } catch {
+        if ($requireVersion) { throw }
+        Write-Warning ("Unable to detect simple-acme/wacs version: " + $_.Exception.Message + ". Continuing because ACME_REQUIRE_WACS_VERSION_CHECK is not enabled.")
+        return $null
+    }
 }
 
 function Get-WacsOutputAnalysis {
@@ -791,24 +836,21 @@ Fix the wrapper command generation.
             break
         }
     }
-
-    if ($null -eq $version) {
-        foreach ($line in $lines) {
-            $m = [regex]::Match([string]$line, '\b\d+\.\d+(?:\.\d+){0,2}\b')
-            if ($m.Success) {
-                $version = [version]$m.Value
-                break
-            }
-        }
+    if ($RequireVersion -and [string]::IsNullOrWhiteSpace($versionText)) {
+        throw 'Unable to parse simple-acme/wacs version from output.'
     }
 
-    if ($RequireVersion -and $null -eq $version) {
-        throw ('Unable to parse simple-acme/wacs version from output. Output was:' + [Environment]::NewLine + ($lines -join [Environment]::NewLine))
+    $parsedVersion = $null
+    if (-not [string]::IsNullOrWhiteSpace($versionText)) {
+        $parsedVersion = [version]$versionText
     }
 
     return [pscustomobject]@{
-        Version = $version
-        EnteredInteractiveMode = $enteredInteractiveMode
+        Version = $parsedVersion
+        Diagnostics = $diagnostics
+        AssemblyDiagnosticCount = (Get-SafeCount $assemblyDiagnostics)
+        ScheduledTaskDiagnosticCount = (Get-SafeCount $scheduledTaskDiagnostics)
+        EnteredInteractiveMenu = ((Get-SafeCount $interactiveHits) -gt 0)
         OutputLines = $lines
     }
 }
@@ -1040,6 +1082,7 @@ $FunctionsToExport.Add('Get-RenewalSummarySafe')
 $FunctionsToExport.Add('Get-InstallationPlugins')
 $FunctionsToExport.Add('Get-RenewalIdForCancel')
 $FunctionsToExport.Add('Invoke-SimpleAcmeReconcile')
+$FunctionsToExport.Add('Get-WacsFileVersion')
 $FunctionsToExport.Add('Get-WacsVersion')
 $FunctionsToExport.Add('Get-WacsOutputAnalysis')
 $FunctionsToExport.Add('Invoke-WacsWithRetry')
