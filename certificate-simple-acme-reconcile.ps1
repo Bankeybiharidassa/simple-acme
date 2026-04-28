@@ -22,7 +22,7 @@ try {
     }
     $envFilePath = Resolve-BootstrapEnvPath -ProjectRoot $PSScriptRoot
     $envValues = Import-EnvFile -Path $envFilePath -Force
-    $preflight = Assert-ReconcilePreflight -EnvValues $envValues
+    $preflight = Test-ReconcilePreflight -EnvValues $envValues
     Write-Output "preflight ok: wacs=$($preflight.WacsPath) domains=$($preflight.DomainCount) script=$($preflight.ScriptPath)"
     if ($showDiagnostics) {
         Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'

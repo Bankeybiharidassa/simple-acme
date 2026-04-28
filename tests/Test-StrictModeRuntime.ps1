@@ -18,6 +18,6 @@ $envValues = @{
     ACME_STORE_PLUGIN='certificatestore'
 }
 
-Assert-ReconcilePreflight -EnvValues $envValues | Out-Null
+Test-ReconcilePreflight -EnvValues $envValues | Out-Null
 
 Write-Host 'StrictMode runtime test passed.'
