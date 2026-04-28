@@ -25,7 +25,7 @@ try {
     $preflight = Assert-ReconcilePreflight -EnvValues $envValues
     Write-Output "preflight ok: wacs=$($preflight.WacsPath) domains=$($preflight.DomainCount) script=$($preflight.ScriptPath)"
     if ($showDiagnostics) {
-        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
     }
     if ($PreflightOnly) {
         Write-Output 'preflight only mode: reconcile skipped.'
@@ -34,13 +34,21 @@ try {
     $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
     Write-Output "simple-acme reconcile complete: $action"
     if ($showDiagnostics) {
-        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
     }
     exit 0
 } catch {
     Write-Host ''
-    Write-Host ("ACME reconcile failed: " + $_.Exception.Message) -ForegroundColor Red
-    Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+    Write-Host ('ACME reconcile failed: ' + $_.Exception.Message) -ForegroundColor Red
+
+    if ($_.InvocationInfo) {
+        Write-Host ('Script: ' + $_.InvocationInfo.ScriptName)
+        Write-Host ('Line: ' + $_.InvocationInfo.ScriptLineNumber)
+        Write-Host ('Command: ' + $_.InvocationInfo.Line)
+    }
+
+    Write-Host ''
+    Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
     Write-Error $_
     exit 1
 } finally {

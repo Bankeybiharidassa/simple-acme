@@ -1574,7 +1574,7 @@ function Invoke-ManageCertificatesMenu {
         [Console]::WriteLine('Latest simple-acme log:')
         [Console]::WriteLine($(if ($null -eq $latest) { '(not found)' } else { [string]$latest.FullName }))
 
-        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
     }
 
