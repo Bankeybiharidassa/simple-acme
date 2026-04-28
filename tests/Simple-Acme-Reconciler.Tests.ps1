@@ -16,7 +16,7 @@ function Invoke-TestSimpleAcmeReconciler {
         try {
             $path = Join-Path $root 'settings.json'
             @{ Existing = @{ Keep = 'yes' } } | ConvertTo-Json -Depth 5 | Set-Content -Path $path -Encoding UTF8
-            Ensure-SimpleAcmeSettings -SimpleAcmeDir $root
+            Set-SimpleAcmeSettings -SimpleAcmeDir $root
             $jsonObject = Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
             $json = ConvertTo-HashtableRecursive -InputObject $jsonObject
             if ($json.Existing.Keep -ne 'yes') { throw 'Existing key not preserved.' }
@@ -273,7 +273,7 @@ Please choose from the menu:
                 Write-Host ''
                 Write-Host ('ACME reconcile failed: ' + $_.Exception.Message) -ForegroundColor Red
                 Write-Host ''
-                Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+                Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
             }
             Stop-Transcript | Out-Null
             $transcriptText = Get-Content -LiteralPath $transcriptPath -Raw -Encoding UTF8

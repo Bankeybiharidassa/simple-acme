@@ -40,6 +40,27 @@ function Get-NormalizedDomains {
 
 
 
+
+function Get-SafeCount {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) {
+        return 0
+    }
+
+    return @($Value).Count
+}
+
+function As-Array {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) {
+        return @()
+    }
+
+    return @($Value)
+}
+
 function Get-EnvValue {
     param(
         [Parameter(Mandatory)]
@@ -166,7 +187,7 @@ function Get-LatestSimpleAcmeLogFile {
             $files += @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue)
         }
     }
-    if ($files.Count -eq 0) { return $null }
+    if ((Get-SafeCount $files) -eq 0) { return $null }
     return ($files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
 }
 
@@ -186,9 +207,9 @@ function Get-SimpleAcmeLogDiagnosticSummary {
     $assembly = @($errors | Where-Object { $_ -match 'Error loading assembly' })
     return [pscustomobject]@{
         LogPath = $LogPath
-        WarningCount = $warnings.Count
-        ErrorCount = $errors.Count
-        HasAssemblyLoadErrors = ($assembly.Count -gt 0)
+        WarningCount = (Get-SafeCount $warnings)
+        ErrorCount = (Get-SafeCount $errors)
+        HasAssemblyLoadErrors = ((Get-SafeCount $assembly) -gt 0)
     }
 }
 
@@ -214,7 +235,7 @@ function Write-SimpleAcmeLogDiagnosticSummary {
 }
 
 
-function Show-ReconcileDiagnostics {
+function Write-ReconcileDiagnostics {
     param(
         [string]$Context = 'simple-acme diagnostics'
     )
@@ -369,8 +390,8 @@ function Get-RenewalSummary {
         StorePlugins     = $normalizedStoreCandidates
         InstallationPlugins = $normalizedInstallCandidates
         AccountName      = ($accountCandidates | Where-Object { $_ -is [string] } | Select-Object -First 1)
-        HasValidationNone = @($normalizedValidationCandidates | Where-Object { $_ -eq 'none' }).Count -gt 0
-        HasScriptInstallation = @($normalizedInstallCandidates | Where-Object { $_ -eq 'script' }).Count -gt 0
+        HasValidationNone = ((Get-SafeCount (@($normalizedValidationCandidates | Where-Object { $_ -eq 'none' }))) -gt 0)
+        HasScriptInstallation = ((Get-SafeCount (@($normalizedInstallCandidates | Where-Object { $_ -eq 'script' }))) -gt 0)
         ScriptPaths      = @($scriptCandidates | Where-Object { $_ -is [string] })
         ScriptParameters = @($scriptParameterCandidates | Where-Object { $_ -is [string] })
         CsrPlugin        = ($csrCandidates | Where-Object { $_ -is [string] } | Select-Object -First 1)
@@ -459,7 +480,7 @@ function Compare-RenewalWithEnv {
     }
 
     return [pscustomobject]@{
-        Matches    = ($mismatches.Count -eq 0)
+        Matches    = ((Get-SafeCount $mismatches) -eq 0)
         Mismatches = @($mismatches)
     }
 }
@@ -481,7 +502,7 @@ function Assert-ReconcilePreflight {
             $missing += $key
         }
     }
-    if ($missing.Count -gt 0) {
+    if ((Get-SafeCount $missing) -gt 0) {
         throw "Missing required environment values for reconcile: $($missing -join ', ')"
     }
 
@@ -512,7 +533,7 @@ function Assert-ReconcilePreflight {
     }
 
     $domains = Get-NormalizedDomains -Domains ([string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))
-    if ($domains.Count -eq 0) {
+    if ((Get-SafeCount $domains) -eq 0) {
         throw "DOMAINS did not contain any valid hostnames. Current value: '$((Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))'"
     }
     foreach ($domain in $domains) {
@@ -524,13 +545,13 @@ function Assert-ReconcilePreflight {
     return [pscustomobject]@{
         WacsPath = [string]$wacsPath
         WacsVersion = [string]$detectedVersion
-        DomainCount = $domains.Count
+        DomainCount = (Get-SafeCount $domains)
         ScriptPath = $scriptPath
         InstallationPlugins = @('script')
     }
 }
 
-function Ensure-SimpleAcmeSettings {
+function Set-SimpleAcmeSettings {
     param(
         [string]$SimpleAcmeDir = (Join-Path $env:ProgramData 'simple-acme'),
         [hashtable]$EnvValues
@@ -588,12 +609,12 @@ function Get-InstallationPlugins {
 
     $valid = @('script','iis')
     $plugins = Get-NormalizedCsvValues -InputText $raw
-    if ($plugins.Count -eq 0) {
+    if ((Get-SafeCount $plugins) -eq 0) {
         throw 'ACME_INSTALLATION_PLUGINS does not contain any valid values.'
     }
 
     $unknown = @($plugins | Where-Object { $valid -notcontains $_ })
-    if ($unknown.Count -gt 0) {
+    if ((Get-SafeCount $unknown) -gt 0) {
         throw "ACME_INSTALLATION_PLUGINS contains unsupported values: $($unknown -join ', ')"
     }
 
@@ -622,7 +643,7 @@ function Invoke-WacsWithRetry {
         [Parameter(Mandatory)][hashtable]$EnvValues,
         [int]$TimeoutSeconds = 300
     )
-    if ($null -eq $Args -or $Args.Count -eq 0) {
+    if ((Get-SafeCount $Args) -eq 0) {
         throw @'
 wacs was launched without non-interactive arguments and entered interactive mode.
 Fix the wrapper command generation.
@@ -734,7 +755,7 @@ function Get-WacsOutputAnalysis {
     $interactiveHits = @($lines | Where-Object { $_ -match '^Please choose from the menu:' })
     $diagnostics = @($assemblyDiagnostics + $scheduledTaskDiagnostics)
 
-    if ($RequireNonInteractiveMode -and $interactiveHits.Count -gt 0) {
+    if ($RequireNonInteractiveMode -and (Get-SafeCount $interactiveHits) -gt 0) {
         throw @'
 wacs was launched without non-interactive arguments and entered interactive mode.
 Fix the wrapper command generation.
@@ -757,9 +778,9 @@ Fix the wrapper command generation.
     return [pscustomobject]@{
         Version = [version]$versionText
         Diagnostics = $diagnostics
-        AssemblyDiagnosticCount = $assemblyDiagnostics.Count
-        ScheduledTaskDiagnosticCount = $scheduledTaskDiagnostics.Count
-        EnteredInteractiveMenu = ($interactiveHits.Count -gt 0)
+        AssemblyDiagnosticCount = (Get-SafeCount $assemblyDiagnostics)
+        ScheduledTaskDiagnosticCount = (Get-SafeCount $scheduledTaskDiagnostics)
+        EnteredInteractiveMenu = ((Get-SafeCount $interactiveHits) -gt 0)
         OutputLines = $lines
     }
 }
@@ -882,11 +903,11 @@ function Invoke-SimpleAcmeReconcile {
     }
 
     $domains = Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
-    if ($domains.Count -eq 0) {
+    if ((Get-SafeCount $domains) -eq 0) {
         throw 'DOMAINS did not contain any valid host names.'
     }
 
-    Ensure-SimpleAcmeSettings -EnvValues $EnvValues
+    Set-SimpleAcmeSettings -EnvValues $EnvValues
 
     $allRenewalFiles = Get-RenewalFiles
     $matching = @()
@@ -898,7 +919,7 @@ function Invoke-SimpleAcmeReconcile {
         }
     }
 
-    if ($matching.Count -eq 0) {
+    if ((Get-SafeCount $matching) -eq 0) {
         if (-not $SkipWacs) {
             Invoke-WacsIssue -EnvValues $EnvValues
             $allRenewalFiles = Get-RenewalFiles
@@ -911,9 +932,9 @@ function Invoke-SimpleAcmeReconcile {
             if (Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) { $postMatch += ,$summary }
         }
 
-        if ($postMatch.Count -eq 0) {
+        if ((Get-SafeCount $postMatch) -eq 0) {
             Write-ReconcileLog -Action 'create' -Domains $domains -Result 'failure' -Message 'No matching renewal file found after issuance.'
-            if ($allRenewalFiles.Count -gt 0) { throw 'No matching renewal file found after issuance; at least one renewal file may be malformed.' }
+            if ((Get-SafeCount $allRenewalFiles) -gt 0) { throw 'No matching renewal file found after issuance; at least one renewal file may be malformed.' }
             throw 'No matching renewal file found after issuance.'
         }
 
@@ -927,7 +948,7 @@ function Invoke-SimpleAcmeReconcile {
         return 'create'
     }
 
-    if ($matching.Count -gt 1) {
+    if ((Get-SafeCount $matching) -gt 1) {
         throw "Multiple renewal entries match requested domains: $($domains -join ', ')"
     }
 
@@ -956,7 +977,7 @@ function Invoke-SimpleAcmeReconcile {
         if (Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) { $postUpdate += ,$summary }
     }
 
-    if ($postUpdate.Count -ne 1) {
+    if ((Get-SafeCount $postUpdate) -ne 1) {
         Write-ReconcileLog -Action 'update' -Domains $domains -Result 'failure' -Message 'Expected exactly one renewal after update.'
         throw 'Expected exactly one renewal after update.'
     }
@@ -982,8 +1003,10 @@ $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('Resolve-WacsExecutable')
 $FunctionsToExport.Add('Compare-RenewalWithEnv')
 $FunctionsToExport.Add('Assert-ReconcilePreflight')
-$FunctionsToExport.Add('Ensure-SimpleAcmeSettings')
+$FunctionsToExport.Add('Set-SimpleAcmeSettings')
 $FunctionsToExport.Add('Get-NormalizedDomains')
+$FunctionsToExport.Add('Get-SafeCount')
+$FunctionsToExport.Add('As-Array')
 $FunctionsToExport.Add('Get-RenewalFiles')
 $FunctionsToExport.Add('Get-RenewalSummary')
 $FunctionsToExport.Add('Get-RenewalSummarySafe')
@@ -999,7 +1022,7 @@ $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
-$FunctionsToExport.Add('Show-ReconcileDiagnostics')
+$FunctionsToExport.Add('Write-ReconcileDiagnostics')
 $FunctionsToExport.Add('Write-SimpleAcmeLogDiagnosticSummary')
 $FunctionsToExport.Add('Get-SimpleAcmeLogDiagnosticSummary')
 
@@ -1010,7 +1033,7 @@ foreach ($fn in $FunctionsToExport) {
     }
 }
 
-if ($MissingExports.Count -gt 0) {
+if ((Get-SafeCount $MissingExports) -gt 0) {
     throw ('Export list contains missing function(s): ' + ($MissingExports -join ', '))
 }
 
