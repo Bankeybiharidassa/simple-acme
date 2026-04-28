@@ -13,7 +13,7 @@ Describe 'Simple ACME reconcile preflight' {
         'stub' | Set-Content -Path $rootWacs -Encoding UTF8
 
         try {
-            $result = Assert-ReconcilePreflight -EnvValues @{
+            $result = Test-ReconcilePreflight -EnvValues @{
                 ACME_DIRECTORY = 'https://acme.example.com/directory'
                 ACME_KID = 'kid'
                 ACME_HMAC_SECRET = 'secret'
@@ -46,7 +46,7 @@ Describe 'Simple ACME reconcile preflight' {
         Mock Get-Command { $null } -ParameterFilter { $Name -in @('wacs','wacs.exe') }
 
         {
-            Assert-ReconcilePreflight -EnvValues @{
+            Test-ReconcilePreflight -EnvValues @{
                 ACME_DIRECTORY = 'https://acme.example.com/directory'
                 ACME_KID = 'kid'
                 ACME_HMAC_SECRET = 'secret'
@@ -73,7 +73,7 @@ Describe 'Simple ACME reconcile preflight' {
         'stub' | Set-Content -Path $rootWacs -Encoding UTF8
         try {
         {
-            Assert-ReconcilePreflight -EnvValues @{
+            Test-ReconcilePreflight -EnvValues @{
                 ACME_DIRECTORY = 'https://acme.example.com/directory'
                 ACME_KID = 'kid'
                 ACME_HMAC_SECRET = 'secret'

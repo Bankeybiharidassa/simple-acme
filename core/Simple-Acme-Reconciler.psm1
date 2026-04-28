@@ -485,7 +485,7 @@ function Compare-RenewalWithEnv {
     }
 }
 
-function Assert-ReconcilePreflight {
+function Test-ReconcilePreflight {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
     $wacsPath = Resolve-WacsExecutable -EnvValues $EnvValues
@@ -679,7 +679,30 @@ Fix the wrapper command generation.
     }
 
     if ($last.TimedOut) { throw "wacs timed out after $attempts attempt(s)." }
-    throw "wacs failed with exit code $($last.ExitCode) after $attempts attempt(s)."
+    $lastOutput = @($last.OutputLines | Select-Object -Last 30)
+    $latestLog = Get-LatestSimpleAcmeLogFile
+    $stderr = [string]$last.StdErr
+    $messageParts = New-Object System.Collections.Generic.List[string]
+    $messageParts.Add("wacs issuance failed with exit code $($last.ExitCode).")
+    $messageParts.Add('')
+    if ((Get-SafeCount $lastOutput) -gt 0) {
+        $messageParts.Add('Last output:')
+        foreach ($line in $lastOutput) { $messageParts.Add([string]$line) }
+        $messageParts.Add('')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+        $messageParts.Add('stderr:')
+        $messageParts.Add($stderr.Trim())
+        $messageParts.Add('')
+    }
+    if ($null -ne $latestLog) {
+        $messageParts.Add('Latest log:')
+        $messageParts.Add([string]$latestLog.FullName)
+    } else {
+        $messageParts.Add('Latest log:')
+        $messageParts.Add('Not found under ProgramData\\simple-acme.')
+    }
+    throw ($messageParts -join [Environment]::NewLine)
 }
 
 function Wait-RenewalFileRemoval {
@@ -796,26 +819,22 @@ function Get-WacsOutputAnalysis {
     )
 
     $lines = @($OutputLines | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    $assemblyDiagnostics = @($lines | Where-Object { $_ -match '^Error loading assembly ' -or $_ -match '^Error loading some types from ' })
-    $scheduledTaskDiagnostics = @($lines | Where-Object { $_ -match '^Scheduled task not configured yet$' })
-    $interactiveHits = @($lines | Where-Object { $_ -match '^Please choose from the menu:' })
-    $diagnostics = @($assemblyDiagnostics + $scheduledTaskDiagnostics)
+    $enteredInteractiveMode = ((@($lines | Where-Object { $_ -match 'Please choose from the menu:' }).Count) -gt 0)
 
-    if ($RequireNonInteractiveMode -and (Get-SafeCount $interactiveHits) -gt 0) {
+    if ($RequireNonInteractiveMode -and $enteredInteractiveMode) {
         throw @'
 wacs was launched without non-interactive arguments and entered interactive mode.
 Fix the wrapper command generation.
 '@
     }
 
-    $joined = $lines -join "`n"
-    $versionText = ''
-    $versionMatch = [regex]::Match($joined, 'Software version\s+(\d+\.\d+(?:\.\d+){0,2})')
-    if ($versionMatch.Success) {
-        $versionText = $versionMatch.Groups[1].Value
-    } else {
-        $fallback = [regex]::Match($joined, '\b\d+\.\d+(?:\.\d+){0,2}\b')
-        if ($fallback.Success) { $versionText = $fallback.Value }
+    $version = $null
+    foreach ($line in $lines) {
+        $m = [regex]::Match([string]$line, 'Software version\s+(\d+\.\d+(?:\.\d+){0,2})')
+        if ($m.Success) {
+            $version = [version]$m.Groups[1].Value
+            break
+        }
     }
     if ($RequireVersion -and [string]::IsNullOrWhiteSpace($versionText)) {
         throw 'Unable to parse simple-acme/wacs version from output.'
@@ -926,7 +945,7 @@ function Invoke-SimpleAcmeReconcile {
         [switch]$DryRun
     )
 
-    Assert-ReconcilePreflight -EnvValues $EnvValues | Out-Null
+    Test-ReconcilePreflight -EnvValues $EnvValues | Out-Null
     $simpleAcmeDir = Join-Path $env:ProgramData 'simple-acme'
     if (-not (Test-Path -LiteralPath $simpleAcmeDir)) {
         New-Item -ItemType Directory -Path $simpleAcmeDir -Force | Out-Null
@@ -1053,11 +1072,10 @@ function Invoke-SimpleAcmeReconcile {
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('Resolve-WacsExecutable')
 $FunctionsToExport.Add('Compare-RenewalWithEnv')
-$FunctionsToExport.Add('Assert-ReconcilePreflight')
+$FunctionsToExport.Add('Test-ReconcilePreflight')
 $FunctionsToExport.Add('Set-SimpleAcmeSettings')
 $FunctionsToExport.Add('Get-NormalizedDomains')
 $FunctionsToExport.Add('Get-SafeCount')
-$FunctionsToExport.Add('As-Array')
 $FunctionsToExport.Add('Get-RenewalFiles')
 $FunctionsToExport.Add('Get-RenewalSummary')
 $FunctionsToExport.Add('Get-RenewalSummarySafe')

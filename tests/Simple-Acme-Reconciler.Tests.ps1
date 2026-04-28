@@ -151,47 +151,54 @@ function Invoke-TestSimpleAcmeReconciler {
         }
     }
 
-    & $Assert 'wacs version parser handles noisy output and interactive menu detection' {
+    & $Assert 'Get-WacsOutputAnalysis parses version output when required' {
         $sample = @'
-Error loading assembly C:\certificaat\Microsoft.Extensions.FileProviders.Abstractions.dll
-Error loading assembly C:\certificaat\System.Diagnostics.EventLog.dll
-Error loading assembly C:\certificaat\System.Net.Http.WinHttpHandler.dll
-Error loading assembly C:\certificaat\System.Security.Cryptography.Pkcs.dll
-Error loading some types from DigitalOcean.API, Version=5.2.0.0, Culture=neutral, PublicKeyToken=null (C:\certificaat\DigitalOcean.API.dll)
-
-A simple cross platform ACME client (WACS)
+Error loading assembly C:\certificaat\Some.dll
 Software version 2.3.0.0 (release, pluggable, standalone, 64-bit)
-Connecting to https://acme-v02.api.letsencrypt.org/...
-Scheduled task not configured yet
-Check the manual at https://simple-acme.com
-Please leave a star at https://github.com/simple-acme/simple-acme
-
-N: Create certificate (default settings)
-M: Create certificate (full options)
-R: Run renewals (0 currently due)
-A: Manage renewals (0 total)
-O: More options...
-Q: Quit
-
-Please choose from the menu:
 '@
         $lines = @($sample -split "`r?`n")
-        $analysis = Get-WacsOutputAnalysis -OutputLines $lines
+        $analysis = Get-WacsOutputAnalysis -OutputLines $lines -RequireVersion -RequireNonInteractiveMode
         if ($analysis.Version.ToString() -ne '2.3.0.0') {
             throw "Expected parsed version 2.3.0.0, got '$($analysis.Version)'."
-        }
-        if ($analysis.AssemblyDiagnosticCount -lt 1) {
-            throw 'Expected assembly diagnostics to be detected.'
-        }
-        if (-not $analysis.EnteredInteractiveMenu) {
-            throw 'Expected interactive menu marker to be detected from sample output.'
         }
 
         $detectedVersion = Get-WacsVersion -EnvValues @{ ACME_WACS_VERSION = $sample }
         if ($detectedVersion.ToString() -ne '2.3.0.0') {
             throw "Expected Get-WacsVersion to return 2.3.0.0, got '$detectedVersion'."
         }
+    }
 
+    & $Assert 'Get-WacsOutputAnalysis allows issuance output without version' {
+        $sample = @'
+Connecting to https://test-acme.networking4all.com/dv
+Creating order
+Authorization pending
+'@
+        $lines = @($sample -split "`r?`n")
+        $analysis = Get-WacsOutputAnalysis -OutputLines $lines -RequireNonInteractiveMode
+        if ($null -ne $analysis.Version) {
+            throw "Expected Version to be null for issuance output, got '$($analysis.Version)'."
+        }
+    }
+
+    & $Assert 'Get-WacsOutputAnalysis does not throw version errors for issuance failures' {
+        $sample = @'
+Connecting to https://test-acme.networking4all.com/dv
+Error creating order
+'@
+        $lines = @($sample -split "`r?`n")
+        $analysis = Get-WacsOutputAnalysis -OutputLines $lines -RequireNonInteractiveMode
+        if ($null -ne $analysis.Version) {
+            throw "Expected Version to be null for issuance failure output, got '$($analysis.Version)'."
+        }
+    }
+
+    & $Assert 'Get-WacsOutputAnalysis detects accidental interactive mode' {
+        $sample = @'
+N: Create certificate
+Please choose from the menu:
+'@
+        $lines = @($sample -split "`r?`n")
         $threw = $false
         try {
             $null = Get-WacsOutputAnalysis -OutputLines $lines -RequireNonInteractiveMode
@@ -203,6 +210,26 @@ Please choose from the menu:
         }
         if (-not $threw) {
             throw 'Expected RequireNonInteractiveMode to fail for interactive menu output.'
+        }
+    }
+
+    & $Assert 'Get-WacsOutputAnalysis throws when version is required but missing' {
+        $sample = @'
+Connecting to server
+No version here
+'@
+        $lines = @($sample -split "`r?`n")
+        $threw = $false
+        try {
+            $null = Get-WacsOutputAnalysis -OutputLines $lines -RequireVersion
+        } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch 'Unable to parse simple-acme/wacs version from output') {
+                throw "Expected version parse failure, got '$($_.Exception.Message)'."
+            }
+        }
+        if (-not $threw) {
+            throw 'Expected missing version to throw when -RequireVersion is used.'
         }
     }
 
@@ -222,7 +249,7 @@ Please choose from the menu:
                 ACME_WACS_PATH = $wacsPath
                 ACME_WACS_VERSION = 'Software version 2.3.0.0 (release)'
             }
-            $null = Assert-ReconcilePreflight -EnvValues $envValues
+            $null = Test-ReconcilePreflight -EnvValues $envValues
         } finally {
             Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
         }
