@@ -103,15 +103,40 @@ function Get-ProviderDefaults {
 
     switch ($Provider) {
         'networking4all' {
-            $envValue = $Networking4AllEnvironment.ToLowerInvariant()
-            $product = $Networking4AllProduct.ToLowerInvariant()
-            $prefix = if ($envValue -eq 'test') { 'https://test-acme.networking4all.com' } else { 'https://acme.networking4all.com' }
-            return @{ ACME_DIRECTORY=($prefix + '/' + $product); RequiresEab=$true; ForceValidation='none' }
+            $directory = Get-Networking4AllAcmeDirectory -Environment $Networking4AllEnvironment -Product $Networking4AllProduct
+            return @{ ACME_DIRECTORY=$directory; RequiresEab=$true; ForceValidation='none' }
         }
         'letsencrypt'    { return @{ ACME_DIRECTORY='https://acme-v02.api.letsencrypt.org/directory'; RequiresEab=$false; ForceValidation='' } }
         'custom'         { return @{ ACME_DIRECTORY=''; RequiresEab=$false; ForceValidation='' } }
         default { throw "Unsupported provider '$Provider'." }
     }
+}
+
+function Get-Networking4AllAcmeDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('test','production')]
+        [string]$Environment,
+
+        [Parameter(Mandatory)]
+        [ValidateSet(
+            'dv',
+            'dv-san',
+            'dv-wildcard',
+            'dv-wildcard-san',
+            'ov',
+            'ov-san',
+            'ov-wildcard',
+            'ov-wildcard-san'
+        )]
+        [string]$Product
+    )
+
+    if ($Environment -eq 'test') {
+        return "https://test-acme.networking4all.com/$Product"
+    }
+
+    return "https://acme.networking4all.com/$Product"
 }
 
 function Read-DomainsInput {
@@ -721,15 +746,10 @@ function Invoke-AcmeSettingsMenu {
             'preview' {
                 $envValues = @{}
                 if (Test-Path -LiteralPath $resolvedEnvFilePath -PathType Leaf) { $envValues = Read-EnvFile -Path $resolvedEnvFilePath }
-                if ([string]$envValues.ACME_PROVIDER -eq 'networking4all' -and [string]$envValues.ACME_DIRECTORY -match 'letsencrypt') {
-                    [Console]::WriteLine('Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is Let''s Encrypt.')
-                    [Console]::WriteLine('Setup was not saved or reconcile is reading the wrong env file.')
-                    Wait-ForOperatorReturn
-                    continue
-                }
-                if ([string]$envValues.ACME_PROVIDER -eq 'networking4all' -and [string]$envValues.ACME_DIRECTORY -notmatch 'networking4all\.com') {
-                    [Console]::WriteLine('Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is not Networking4All.')
-                    [Console]::WriteLine('Setup was not saved or reconcile is reading the wrong env file.')
+                try {
+                    Assert-ProviderDirectoryConsistency -Values $envValues
+                } catch {
+                    [Console]::WriteLine($_.Exception.Message)
                     Wait-ForOperatorReturn
                     continue
                 }
@@ -979,7 +999,7 @@ function Get-ConnectorScriptByIntent {
     }
 }
 
-function Select-AcmeProviderValues {
+function Read-AcmeProviderSelection {
     param([hashtable]$CurrentValues = @{})
 
     [Console]::WriteLine('')
@@ -989,7 +1009,7 @@ function Select-AcmeProviderValues {
     [Console]::WriteLine('[3] Custom ACME server')
     [Console]::WriteLine('[0] Back')
     $providerChoice = Read-SetupChoice -Prompt 'Provider' -Options @{ '1'='letsencrypt'; '2'='networking4all'; '3'='custom'; '0'='back' } -DefaultKey '1' -AllowBack
-    if ($providerChoice -in @('__CANCEL__','__BACK__','back')) { return $null }
+    if ($providerChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
     $values = @{
         ACME_PROVIDER = [string]$providerChoice
@@ -1014,7 +1034,7 @@ function Select-AcmeProviderValues {
         [Console]::WriteLine('[2] Production')
         [Console]::WriteLine('[0] Back')
         $envChoice = Read-SetupChoice -Prompt 'Environment' -Options @{ '1'='test'; '2'='production'; '0'='back' } -DefaultKey '2' -AllowBack
-        if ($envChoice -in @('__CANCEL__','__BACK__','back')) { return $null }
+        if ($envChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
         [Console]::WriteLine('')
         [Console]::WriteLine('Networking4All certificate product')
@@ -1031,15 +1051,13 @@ function Select-AcmeProviderValues {
             '1'='dv'; '2'='dv-san'; '3'='dv-wildcard'; '4'='dv-wildcard-san';
             '5'='ov'; '6'='ov-san'; '7'='ov-wildcard'; '8'='ov-wildcard-san'; '0'='back'
         } -DefaultKey '1' -AllowBack
-        if ($productChoice -in @('__CANCEL__','__BACK__','back')) { return $null }
+        if ($productChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
-        $defaults = Get-ProviderDefaults -Provider 'networking4all' -Networking4AllEnvironment $envChoice -Networking4AllProduct $productChoice
+        $directory = Get-Networking4AllAcmeDirectory -Environment $envChoice -Product $productChoice
         $values.ACME_NETWORKING4ALL_ENVIRONMENT = [string]$envChoice
         $values.ACME_NETWORKING4ALL_PRODUCT = [string]$productChoice
-        $values.ACME_DIRECTORY = [string]$defaults.ACME_DIRECTORY
+        $values.ACME_DIRECTORY = [string]$directory
         $values.ACME_REQUIRES_EAB = '1'
-        $eabState = Resolve-EabCredentialsForSetup -CurrentValues $CurrentValues -TargetValues $values
-        if ($eabState -in @('__BACK__','__CANCEL__')) { return $null }
         $warnings = New-Object System.Collections.Generic.List[string]
         $domains = @()
         if ($null -ne $CurrentValues -and $CurrentValues.ContainsKey('DOMAINS')) {
@@ -1074,7 +1092,7 @@ function Select-AcmeProviderValues {
                 [Console]::WriteLine(" - $warning")
             }
             $confirm = Read-SetupChoice -Prompt 'Continue and save these provider settings? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
-            if ($confirm -in @('__CANCEL__','__BACK__','no')) { return $null }
+            if ($confirm -in @('__CANCEL__','__BACK__','no')) { return '__BACK__' }
         }
         return $values
     }
@@ -1084,14 +1102,17 @@ function Select-AcmeProviderValues {
         throw 'Custom ACME directory must be an absolute HTTPS URL.'
     }
     $requiresEab = Read-SetupChoice -Prompt 'Requires EAB? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
-    if ($requiresEab -in @('__CANCEL__','__BACK__')) { return $null }
+    if ($requiresEab -in @('__CANCEL__','__BACK__')) { return '__BACK__' }
     $values.ACME_DIRECTORY = $directory
     if ($requiresEab -eq 'yes') {
         $values.ACME_REQUIRES_EAB = '1'
-        $eabState = Resolve-EabCredentialsForSetup -CurrentValues $CurrentValues -TargetValues $values
-        if ($eabState -in @('__BACK__','__CANCEL__')) { return $null }
     }
     return $values
+}
+
+function Select-AcmeProviderValues {
+    param([hashtable]$CurrentValues = @{})
+    return Read-AcmeProviderSelection -CurrentValues $CurrentValues
 }
 
 function Resolve-EabCredentialsForSetup {
@@ -1161,6 +1182,31 @@ function Assert-SavedEnvMatchesSetup {
     }
 }
 
+function Assert-ProviderDirectoryConsistency {
+    param([Parameter(Mandatory)][hashtable]$Values)
+
+    $provider = [string]$Values['ACME_PROVIDER']
+    $directory = [string]$Values['ACME_DIRECTORY']
+
+    if ($provider -eq 'networking4all') {
+        if ($directory -notmatch '^https://(test-)?acme\.networking4all\.com/') {
+            throw "Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is '$directory'. Setup was not saved. This indicates stale defaults or wrong env propagation."
+        }
+    }
+
+    if ($provider -eq 'letsencrypt') {
+        if ($directory -notmatch '^https://acme-v02\.api\.letsencrypt\.org/') {
+            throw "Internal state mismatch: selected provider is Let's Encrypt but ACME_DIRECTORY is '$directory'. Setup was not saved."
+        }
+    }
+
+    if ($provider -eq 'custom') {
+        if ($directory -notmatch '^https://') {
+            throw 'Custom ACME provider requires an HTTPS ACME_DIRECTORY.'
+        }
+    }
+}
+
 function Invoke-AcmeForm {
     param([string]$EnvFilePath)
 
@@ -1209,26 +1255,49 @@ function Invoke-AcmeForm {
     }
 
     $values = @{}
+    foreach ($k in $curr.Keys) { $values[$k] = [string]$curr[$k] }
     $domains = Read-DomainsInput
     if ($domains -in @('__CANCEL__','__BACK__')) {
         Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
         return $null
     }
-    $providerValues = Select-AcmeProviderValues -CurrentValues $curr
-    if ($null -eq $providerValues) {
+    $providerResult = Read-AcmeProviderSelection -CurrentValues $curr
+    if ($providerResult -in @('__BACK__','__CANCEL__') -or $null -eq $providerResult) {
         Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
         return $null
     }
     $values.DOMAINS = $domains
-    foreach ($k in $providerValues.Keys) { $values[$k] = $providerValues[$k] }
-    $values.ACME_SOURCE_PLUGIN = 'manual'
-    $values.ACME_ORDER_PLUGIN = 'single'
-    $values.ACME_INSTALLATION_PLUGINS = 'script'
-    $values.ACME_VALIDATION_MODE = 'none'
+    foreach ($key in $providerResult.Keys) {
+        $values[$key] = [string]$providerResult[$key]
+    }
+    if ($values['ACME_PROVIDER'] -eq 'networking4all') {
+        if ($values['ACME_DIRECTORY'] -notmatch '^https://(test-)?acme\.networking4all\.com/') {
+            throw "Provider selection failed: Networking4All selected but ACME_DIRECTORY is '$($values['ACME_DIRECTORY'])'."
+        }
+    }
+    $pipelineTemplate = Get-GuidedPipelineTemplate -TargetSystem $target -ValidationMode 'none'
+    foreach ($pipelineKey in @(
+        'ACME_SOURCE_PLUGIN',
+        'ACME_ORDER_PLUGIN',
+        'ACME_STORE_PLUGIN',
+        'ACME_INSTALLATION_PLUGINS',
+        'ACME_SCRIPT_PATH',
+        'ACME_SCRIPT_PARAMETERS',
+        'ACME_VALIDATION_MODE',
+        'ACME_WACS_RETRY_ATTEMPTS',
+        'ACME_WACS_RETRY_DELAY_SECONDS'
+    )) {
+        if ($pipelineTemplate.ContainsKey($pipelineKey)) {
+            $values[$pipelineKey] = [string]$pipelineTemplate[$pipelineKey]
+        }
+    }
+    if ($values['ACME_REQUIRES_EAB'] -eq '1') {
+        $eabResult = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $values
+        if ($eabResult -in @('__BACK__','__CANCEL__')) {
+            return $null
+        }
+    }
     $values.ACME_ACCOUNT_NAME = ''
-    $values.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
-    $selectedScriptPath = Resolve-DeploymentScriptPath -ScriptFileName (Get-ConnectorScriptByIntent -TargetIntent $target)
-    $values.ACME_SCRIPT_PATH = $selectedScriptPath
     if ($curr.ContainsKey('ACME_SCRIPT_PATH')) {
         $existingScriptPath = Resolve-AbsoluteSetupPath -PathValue ([string]$curr.ACME_SCRIPT_PATH)
         $sameTarget = $curr.ContainsKey('ACME_TARGET_SYSTEM') -and ([string]$curr.ACME_TARGET_SYSTEM).ToLowerInvariant() -eq $target
@@ -1292,20 +1361,27 @@ function Invoke-AcmeForm {
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
     $values.ACME_TARGET_LOCATION = $location
-    $values.ACME_WACS_RETRY_ATTEMPTS = '3'
-    $values.ACME_WACS_RETRY_DELAY_SECONDS = '2'
+    [Console]::WriteLine('')
+    [Console]::WriteLine("Selected ACME provider: $([string]$values.ACME_PROVIDER)")
+    [Console]::WriteLine("Selected ACME environment: $([string]$values.ACME_NETWORKING4ALL_ENVIRONMENT)")
+    [Console]::WriteLine("Selected ACME product: $([string]$values.ACME_NETWORKING4ALL_PRODUCT)")
+    [Console]::WriteLine("Effective ACME directory: $([string]$values.ACME_DIRECTORY)")
+    [Console]::WriteLine("EAB required: $(if ([string]$values.ACME_REQUIRES_EAB -eq '1') { 'yes' } else { 'no' })")
+    [Console]::WriteLine("Validation mode: $([string]$values.ACME_VALIDATION_MODE)")
+    [Console]::WriteLine('')
+    $confirmSave = Read-SetupChoice -Prompt 'Save these settings? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
+    if ($confirmSave -in @('__CANCEL__','__BACK__','no')) {
+        Show-TuiStatus -Message 'Setup cancelled.' -Type Warning -Row ([Console]::WindowHeight-2)
+        return $null
+    }
 
+    Assert-ProviderDirectoryConsistency -Values $values
     Assert-AcmeSetupValues -Values $values
 
     Write-EnvFile -Values $values -Path $resolvedEnvFilePath
     $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
+    Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
-    if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and [string]$reloaded.ACME_DIRECTORY -match 'letsencrypt') {
-        throw @'
-Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is Let's Encrypt.
-Setup was not saved or reconcile is reading the wrong env file.
-'@
-    }
     if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
         throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
     }
@@ -1666,7 +1742,10 @@ $FunctionsToExport.Add('Test-FanoutPolicyValue')
 $FunctionsToExport.Add('Test-QuorumThreshold')
 $FunctionsToExport.Add('Resolve-DeploymentScriptPath')
 $FunctionsToExport.Add('Get-ProviderDefaults')
+$FunctionsToExport.Add('Get-Networking4AllAcmeDirectory')
+$FunctionsToExport.Add('Read-AcmeProviderSelection')
 $FunctionsToExport.Add('Resolve-EabCredentialsForSetup')
+$FunctionsToExport.Add('Assert-ProviderDirectoryConsistency')
 $FunctionsToExport.Add('Assert-SavedEnvMatchesSetup')
 $FunctionsToExport.Add('Wait-ForOperatorReturn')
 $FunctionsToExport.Add('Get-SimpleAcmeLogLocations')

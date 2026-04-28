@@ -54,3 +54,51 @@ Describe 'Form runner deployment script wiring' {
         }
     }
 }
+
+Describe 'ACME provider state handling' {
+    InModuleScope Form-Runner {
+        It 'Get-Networking4AllAcmeDirectory builds test DV endpoint' {
+            $url = Get-Networking4AllAcmeDirectory -Environment test -Product dv
+            $url | Should -Be 'https://test-acme.networking4all.com/dv'
+        }
+
+        It 'Provider result overwrites stale letsencrypt ACME_DIRECTORY' {
+            $values = @{
+                ACME_PROVIDER = 'letsencrypt'
+                ACME_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory'
+            }
+            $providerResult = @{
+                ACME_PROVIDER = 'networking4all'
+                ACME_NETWORKING4ALL_ENVIRONMENT = 'test'
+                ACME_NETWORKING4ALL_PRODUCT = 'dv'
+                ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv'
+                ACME_REQUIRES_EAB = '1'
+                ACME_VALIDATION_MODE = 'none'
+            }
+            foreach ($key in $providerResult.Keys) { $values[$key] = [string]$providerResult[$key] }
+            $values['ACME_DIRECTORY'] | Should -Be 'https://test-acme.networking4all.com/dv'
+        }
+
+        It 'Assert-ProviderDirectoryConsistency rejects Networking4All provider with LetsEncrypt directory' {
+            $invalid = @{
+                ACME_PROVIDER = 'networking4all'
+                ACME_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory'
+            }
+            { Assert-ProviderDirectoryConsistency -Values $invalid } | Should -Throw '*Internal state mismatch: selected provider is Networking4All*'
+        }
+
+        It 'Resolve-EabCredentialsForSetup offers reuse when both existing credentials are present' {
+            Mock -CommandName Read-SetupChoice -MockWith { 'reuse' }
+            Mock -CommandName Read-Host -MockWith { throw 'Read-Host should not be called when reusing complete existing EAB credentials.' }
+            $curr = @{
+                ACME_KID = 'kid123'
+                ACME_HMAC_SECRET = 'secret123'
+            }
+            $target = @{}
+            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
+            $state | Should -Be 'ok'
+            $target.ACME_KID | Should -Be 'kid123'
+            $target.ACME_HMAC_SECRET | Should -Be 'secret123'
+        }
+    }
+}

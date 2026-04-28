@@ -64,6 +64,7 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-ManageCertificatesMenu' -Expec
 Assert-SetupCommandAvailable -CommandName 'Invoke-ViewLogsDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
 if ($null -eq $schedulerModule) {
     throw "Unable to import required scheduler module from path: $schedulerModulePath"
@@ -81,13 +82,10 @@ function Invoke-InitialAcmeReconcilePrompt {
     $statusRow = [Math]::Max(0, [Console]::WindowHeight - 2)
     $envValues = Import-EnvFile -Path $EnvFilePath -Force
 
-    if ([string]$envValues.ACME_PROVIDER -eq 'networking4all' -and [string]$envValues.ACME_DIRECTORY -match 'letsencrypt') {
-        Show-TuiStatus -Message "Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is Let's Encrypt. Setup was not saved or reconcile is reading the wrong env file." -Type Error -Row $statusRow
-        Wait-ForOperatorReturn
-        return
-    }
-    if ([string]$envValues.ACME_PROVIDER -eq 'networking4all' -and [string]$envValues.ACME_DIRECTORY -notmatch 'networking4all\.com') {
-        Show-TuiStatus -Message 'Internal state mismatch: selected provider is Networking4All but ACME_DIRECTORY is not Networking4All. Setup was not saved or reconcile is reading the wrong env file.' -Type Error -Row $statusRow
+    try {
+        Assert-ProviderDirectoryConsistency -Values $envValues
+    } catch {
+        Show-TuiStatus -Message $_.Exception.Message -Type Error -Row $statusRow
         Wait-ForOperatorReturn
         return
     }
