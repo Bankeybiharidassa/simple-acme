@@ -39,12 +39,49 @@ function Get-NormalizedDomains {
 }
 
 
+
+function Get-EnvValue {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$EnvValues,
+
+        [Parameter(Mandatory)]
+        [string]$Key,
+
+        [string]$Default = ''
+    )
+
+    if ($null -eq $EnvValues) {
+        return $Default
+    }
+
+    if ($EnvValues.ContainsKey($Key)) {
+        $value = $EnvValues[$Key]
+        if ($null -eq $value) {
+            return $Default
+        }
+        return [string]$value
+    }
+
+    return $Default
+}
+
+function Test-EnvFlag {
+    param(
+        [Parameter(Mandatory)][hashtable]$EnvValues,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    $value = (Get-EnvValue -EnvValues $EnvValues -Key $Key -Default '').Trim().ToLowerInvariant()
+    return ($value -in @('1','true','yes','y','on'))
+}
+
 function Resolve-WacsExecutable {
     param([hashtable]$EnvValues = @{})
 
     $candidates = New-Object System.Collections.Generic.List[string]
     if ($null -ne $EnvValues -and $EnvValues.ContainsKey('ACME_WACS_PATH')) {
-        $configured = [string]$EnvValues.ACME_WACS_PATH
+        $configured = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_PATH')
         if (-not [string]::IsNullOrWhiteSpace($configured)) {
             $candidates.Add($configured)
         }
@@ -158,14 +195,10 @@ function Get-SimpleAcmeLogDiagnosticSummary {
 function Write-SimpleAcmeLogDiagnosticSummary {
     $latest = Get-LatestSimpleAcmeLogFile
     if ($null -eq $latest) {
-        Write-Host 'simple-acme diagnostics'
-        Write-Host '-----------------------'
         Write-Host 'No log files discovered under ProgramData\simple-acme.'
         return
     }
     $summary = Get-SimpleAcmeLogDiagnosticSummary -LogPath $latest.FullName
-    Write-Host 'simple-acme diagnostics'
-    Write-Host '-----------------------'
     Write-Host "Errors: $($summary.ErrorCount)"
     Write-Host "Warnings: $($summary.WarningCount)"
     Write-Host 'Latest log:'
@@ -178,6 +211,19 @@ function Write-SimpleAcmeLogDiagnosticSummary {
         Write-Host 'Optional manual repair:'
         Write-Host 'Get-ChildItem C:\certificaat -Recurse | Unblock-File'
     }
+}
+
+
+function Show-ReconcileDiagnostics {
+    param(
+        [string]$Context = 'simple-acme diagnostics'
+    )
+
+    Write-Host ''
+    Write-Host $Context
+    Write-Host '-----------------------'
+    Write-SimpleAcmeLogDiagnosticSummary
+    Write-Host ''
 }
 
 function Find-PropertyValues {
@@ -349,13 +395,13 @@ function Compare-RenewalWithEnv {
         [Parameter(Mandatory)][hashtable]$EnvValues
     )
 
-    $expectedHosts = Get-NormalizedDomains -Domains $EnvValues.DOMAINS
+    $expectedHosts = Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     $actualHosts = @($RenewalSummary.Hosts | Sort-Object -Unique)
-    $expectedScriptPath = [string]$EnvValues.ACME_SCRIPT_PATH
+    $expectedScriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
 
     $mismatches = New-Object System.Collections.Generic.List[string]
 
-    if ([string]$RenewalSummary.BaseUri -ne [string]$EnvValues.ACME_DIRECTORY) {
+    if ([string]$RenewalSummary.BaseUri -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY')) {
         $mismatches.Add('BaseUri')
     }
 
@@ -363,13 +409,13 @@ function Compare-RenewalWithEnv {
         $mismatches.Add('Domains')
     }
 
-    if ([string]$RenewalSummary.EabKid -ne [string]$EnvValues.ACME_KID) {
+    if ([string]$RenewalSummary.EabKid -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) {
         $mismatches.Add('EAB kid')
     }
     if ([string]$RenewalSummary.SourcePlugin -ne 'manual') {
         $mismatches.Add('Source plugin')
     }
-    if ([string]$RenewalSummary.OrderPlugin -ne [string]$EnvValues.ACME_ORDER_PLUGIN) {
+    if ([string]$RenewalSummary.OrderPlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN')) {
         $mismatches.Add('Order plugin')
     }
     $expectedStores = @('certificatestore')
@@ -377,7 +423,7 @@ function Compare-RenewalWithEnv {
     if (($expectedStores -join ',') -ne ($actualStores -join ',')) {
         $mismatches.Add('Store plugin')
     }
-    if ([string]$RenewalSummary.AccountName -ne [string]$EnvValues.ACME_ACCOUNT_NAME) {
+    if ([string]$RenewalSummary.AccountName -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) {
         $mismatches.Add('Account name')
     }
 
@@ -406,8 +452,8 @@ function Compare-RenewalWithEnv {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace([string]$EnvValues.ACME_KEY_TYPE) -and -not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.KeyType)) {
-        if ([string]$RenewalSummary.KeyType -ne [string]$EnvValues.ACME_KEY_TYPE) {
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) -and -not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.KeyType)) {
+        if ([string]$RenewalSummary.KeyType -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) {
             $mismatches.Add('Key type')
         }
     }
@@ -440,16 +486,17 @@ function Assert-ReconcilePreflight {
     }
 
     $defaultScriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts/cert2rds.ps1'
-    $scriptPath = if ($EnvValues.ContainsKey('ACME_SCRIPT_PATH') -and -not [string]::IsNullOrWhiteSpace([string]$EnvValues.ACME_SCRIPT_PATH)) { [string]$EnvValues.ACME_SCRIPT_PATH } else { $defaultScriptPath }
+    $scriptPathValue = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'
+    $scriptPath = if (-not [string]::IsNullOrWhiteSpace($scriptPathValue)) { $scriptPathValue } else { $defaultScriptPath }
     if (-not [System.IO.Path]::IsPathRooted($scriptPath)) {
         $scriptPath = [System.IO.Path]::GetFullPath((Join-Path (Split-Path $PSScriptRoot -Parent) $scriptPath))
     }
     if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
         throw "Script installation path does not exist: '$scriptPath'"
     }
-    $EnvValues.ACME_SCRIPT_PATH = $scriptPath
-    $EnvValues.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
-    $requiredRolesRaw = [string]$EnvValues.CERTIFICATE_REQUIRED_WINDOWS_ROLES
+    $EnvValues['ACME_SCRIPT_PATH'] = $scriptPath
+    $EnvValues['ACME_SCRIPT_PARAMETERS'] = '{CertThumbprint}'
+    $requiredRolesRaw = (Get-EnvValue -EnvValues $EnvValues -Key 'CERTIFICATE_REQUIRED_WINDOWS_ROLES')
     if (-not [string]::IsNullOrWhiteSpace($requiredRolesRaw) -and (Get-Command -Name Get-WindowsFeature -ErrorAction SilentlyContinue)) {
         $requiredRoles = @(
             $requiredRolesRaw -split ',' |
@@ -464,9 +511,9 @@ function Assert-ReconcilePreflight {
         }
     }
 
-    $domains = Get-NormalizedDomains -Domains ([string]$EnvValues.DOMAINS)
+    $domains = Get-NormalizedDomains -Domains ([string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))
     if ($domains.Count -eq 0) {
-        throw "DOMAINS did not contain any valid hostnames. Current value: '$($EnvValues.DOMAINS)'"
+        throw "DOMAINS did not contain any valid hostnames. Current value: '$((Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))'"
     }
     foreach ($domain in $domains) {
         if (-not (Test-ValidDomainName -Domain $domain)) {
@@ -518,9 +565,9 @@ function Ensure-SimpleAcmeSettings {
     }
     $requiresExportable = $false
     if ($null -ne $EnvValues) {
-        $targetSystem = [string]$EnvValues.TARGET_SYSTEM
-        $targetLocation = [string]$EnvValues.TARGET_LOCATION
-        $explicitExportable = [string]$EnvValues.ACME_PRIVATEKEY_EXPORTABLE
+        $targetSystem = (Get-EnvValue -EnvValues $EnvValues -Key 'TARGET_SYSTEM')
+        $targetLocation = (Get-EnvValue -EnvValues $EnvValues -Key 'TARGET_LOCATION')
+        $explicitExportable = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PRIVATEKEY_EXPORTABLE')
         if ($targetSystem -eq 'rds' -or $targetLocation -eq 'cluster-farm' -or $targetLocation -eq 'another-server' -or $explicitExportable -eq 'true') {
             $requiresExportable = $true
         }
@@ -534,7 +581,7 @@ function Ensure-SimpleAcmeSettings {
 function Get-InstallationPlugins {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
-    $raw = [string]$EnvValues.ACME_INSTALLATION_PLUGINS
+    $raw = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_INSTALLATION_PLUGINS')
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return @('script')
     }
@@ -556,7 +603,7 @@ function Get-InstallationPlugins {
 function Get-CsrAlgorithms {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
-    $preferred = [string]$EnvValues.ACME_CSR_ALGORITHM
+    $preferred = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM')
     if ([string]::IsNullOrWhiteSpace($preferred)) {
         return @('ec','rsa')
     }
@@ -583,10 +630,10 @@ Fix the wrapper command generation.
     }
 
     $attempts = 3
-    [void][int]::TryParse([string]$EnvValues.ACME_WACS_RETRY_ATTEMPTS, [ref]$attempts)
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_ATTEMPTS' -Default '3'), [ref]$attempts)
     if ($attempts -lt 1) { $attempts = 1 }
     $delaySeconds = 2
-    [void][int]::TryParse([string]$EnvValues.ACME_WACS_RETRY_DELAY_SECONDS, [ref]$delaySeconds)
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_DELAY_SECONDS' -Default '2'), [ref]$delaySeconds)
     if ($delaySeconds -lt 0) { $delaySeconds = 0 }
 
     $wacsPath = Resolve-WacsExecutable -EnvValues $EnvValues
@@ -629,15 +676,15 @@ function Wait-RenewalFileRemoval {
 function New-ReconcileConfigHash {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
-    $domains = Get-NormalizedDomains -Domains ([string]$EnvValues.DOMAINS)
+    $domains = Get-NormalizedDomains -Domains ([string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))
     $installers = Get-InstallationPlugins -EnvValues $EnvValues
-    $stores = Get-NormalizedCsvValues -InputText ([string]$EnvValues.ACME_STORE_PLUGIN)
+    $stores = Get-NormalizedCsvValues -InputText ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN'))
     $hashInput = @(
         "domains=$($domains -join ',')"
-        "validation=$([string]$EnvValues.ACME_VALIDATION_MODE)"
-        "csr=$([string]$EnvValues.ACME_CSR_ALGORITHM)"
-        "keytype=$([string]$EnvValues.ACME_KEY_TYPE)"
-        "script=$([string]$EnvValues.ACME_SCRIPT_PATH)"
+        "validation=$((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_VALIDATION_MODE'))"
+        "csr=$((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM'))"
+        "keytype=$((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE'))"
+        "script=$((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'))"
         "installation=$($installers -join ',')"
         "store=$($stores -join ',')"
     ) -join '|'
@@ -658,7 +705,7 @@ function Get-WacsVersion {
     $fromEnv = ''
     $outputLines = @()
     if ($null -ne $EnvValues -and $EnvValues.ContainsKey('ACME_WACS_VERSION')) {
-        $fromEnv = [string]$EnvValues.ACME_WACS_VERSION
+        $fromEnv = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_VERSION')
     }
     if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
         $outputLines = @($fromEnv -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
@@ -672,8 +719,6 @@ function Get-WacsVersion {
     }
 
     $analysis = Get-WacsOutputAnalysis -OutputLines $outputLines -RequireNonInteractiveMode
-    Write-SimpleAcmeLogDiagnosticSummary
-
     return $analysis.Version
 }
 
@@ -728,24 +773,24 @@ function Invoke-WacsIssue {
         '--accepttos',
         '--source', 'manual',
         '--order', 'single',
-        '--baseuri', [string]$EnvValues.ACME_DIRECTORY,
+        '--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
         '--validation', 'none',
         '--globalvalidation', 'none',
-        '--host', [string]$EnvValues.DOMAINS
+        '--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     )
     $args += @('--store', ($storePlugins -join ','))
-    if ([string]$EnvValues.ACME_REQUIRES_EAB -eq '1' -and -not [string]::IsNullOrWhiteSpace([string]$EnvValues.ACME_KID)) {
-        $args += @('--eab-key-identifier', [string]$EnvValues.ACME_KID)
+    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) {
+        $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))
     }
-    if ([string]$EnvValues.ACME_REQUIRES_EAB -eq '1' -and -not [string]::IsNullOrWhiteSpace([string]$EnvValues.ACME_HMAC_SECRET)) {
-        $args += @('--eab-key', [string]$EnvValues.ACME_HMAC_SECRET)
+    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) {
+        $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))
     }
-    if (-not [string]::IsNullOrWhiteSpace([string]$EnvValues.ACME_ACCOUNT_NAME)) {
-        $args += @('--account', [string]$EnvValues.ACME_ACCOUNT_NAME)
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) {
+        $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))
     }
 
     $args += @('--installation', 'script')
-    $args += @('--script', [string]$EnvValues.ACME_SCRIPT_PATH, '--scriptparameters', '{CertThumbprint}')
+    $args += @('--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', '{CertThumbprint}')
 
     $lastError = $null
     foreach ($algorithm in $csrAlgorithms) {
@@ -832,11 +877,11 @@ function Invoke-SimpleAcmeReconcile {
         }
 
     if ($DryRun) {
-        Write-ReconcileLog -Action 'no-op' -Domains (Get-NormalizedDomains -Domains $EnvValues.DOMAINS) -Result 'success' -Message 'Dry-run preflight passed; no wacs actions executed.'
+        Write-ReconcileLog -Action 'no-op' -Domains (Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')) -Result 'success' -Message 'Dry-run preflight passed; no wacs actions executed.'
         return 'dry-run'
     }
 
-    $domains = Get-NormalizedDomains -Domains $EnvValues.DOMAINS
+    $domains = Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     if ($domains.Count -eq 0) {
         throw 'DOMAINS did not contain any valid host names.'
     }
@@ -925,7 +970,6 @@ function Invoke-SimpleAcmeReconcile {
     Write-ReconcileLog -Action 'update' -Domains $domains -Result 'success' -Message 'Renewal was recreated safely.'
     return 'update'
     } catch {
-        Write-SimpleAcmeLogDiagnosticSummary
         throw
     } finally {
         if ($null -ne $lockFileStream) {
@@ -955,6 +999,7 @@ $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
+$FunctionsToExport.Add('Show-ReconcileDiagnostics')
 $FunctionsToExport.Add('Write-SimpleAcmeLogDiagnosticSummary')
 $FunctionsToExport.Add('Get-SimpleAcmeLogDiagnosticSummary')
 

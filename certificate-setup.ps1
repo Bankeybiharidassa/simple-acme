@@ -111,11 +111,15 @@ function Invoke-InitialAcmeReconcilePrompt {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
         Show-TuiStatus -Message "ACME reconcile completed successfully (action=$action)." -Type Success -Row $statusRow
-        Show-SimpleAcmeDiagnosticSummary -ProjectRoot $RootDir -ShowNoobAdvice
+        if ([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS') -eq '1') {
+            Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+        }
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
         Show-TuiStatus -Message "ACME reconcile failed: $($_.Exception.Message)" -Type Error -Row $statusRow
-        Show-SimpleAcmeDiagnosticSummary -ProjectRoot $RootDir -ShowNoobAdvice
+        [Console]::WriteLine('')
+        [Console]::WriteLine("ACME reconcile failed: $($_.Exception.Message)")
+        Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
     }
 }

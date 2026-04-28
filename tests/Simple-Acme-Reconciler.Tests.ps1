@@ -205,4 +205,94 @@ Please choose from the menu:
             throw 'Expected RequireNonInteractiveMode to fail for interactive menu output.'
         }
     }
+
+    & $Assert 'preflight skips optional windows role validation when key is missing' {
+        $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        try {
+            $wacsPath = Join-Path $root 'wacs.exe'
+            $scriptPath = Join-Path $root 'cert2rds.ps1'
+            [System.IO.File]::WriteAllText($wacsPath, 'placeholder', [System.Text.Encoding]::UTF8)
+            [System.IO.File]::WriteAllText($scriptPath, 'param([string]$CertThumbprint)', [System.Text.Encoding]::UTF8)
+            $envValues = @{
+                ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv'
+                DOMAINS = 'remote4.itsecured.nl'
+                ACME_SCRIPT_PATH = $scriptPath
+                ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+                ACME_WACS_PATH = $wacsPath
+                ACME_WACS_VERSION = 'Software version 2.3.0.0 (release)'
+            }
+            $null = Assert-ReconcilePreflight -EnvValues $envValues
+        } finally {
+            Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    & $Assert 'strictmode guard rejects direct dot access on EnvValues hashtable' {
+        $modulePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'core/Simple-Acme-Reconciler.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw -Encoding UTF8
+        $matches = [regex]::Matches($raw, '\$EnvValues\.[A-Za-z0-9_]+')
+        if ($matches.Count -gt 0) {
+            $bad = @($matches | ForEach-Object { $_.Value } | Select-Object -Unique)
+            throw "Found strictmode-unsafe EnvValues property access: $($bad -join ', ')"
+        }
+    }
+
+    & $Assert 'Get-WacsVersion remains pure and emits no diagnostics to host' {
+        $transcriptDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $transcriptDir -Force | Out-Null
+        $transcriptPath = Join-Path $transcriptDir 'pure-version.log'
+        try {
+            Start-Transcript -Path $transcriptPath -Force | Out-Null
+            $detectedVersion = Get-WacsVersion -EnvValues @{ ACME_WACS_VERSION = 'Software version 2.3.0.0 (release)' }
+            Stop-Transcript | Out-Null
+            if ($detectedVersion.ToString() -ne '2.3.0.0') {
+                throw "Expected Get-WacsVersion to return 2.3.0.0, got '$detectedVersion'."
+            }
+            $transcriptText = Get-Content -LiteralPath $transcriptPath -Raw -Encoding UTF8
+            if ($transcriptText -match 'simple-acme diagnostics') {
+                throw 'Expected Get-WacsVersion to avoid printing diagnostics.'
+            }
+        } finally {
+            if ((Get-Variable -Name transcriptPath -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $transcriptPath)) {
+                Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -Path $transcriptDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    & $Assert 'reconcile failure formatting keeps diagnostics on separate lines' {
+        $transcriptDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $transcriptDir -Force | Out-Null
+        $transcriptPath = Join-Path $transcriptDir 'diagnostics-format.log'
+        try {
+            Start-Transcript -Path $transcriptPath -Force | Out-Null
+            try {
+                throw 'simulated failure'
+            } catch {
+                Write-Host ''
+                Write-Host ('ACME reconcile failed: ' + $_.Exception.Message) -ForegroundColor Red
+                Write-Host ''
+                Show-ReconcileDiagnostics -Context 'simple-acme diagnostics'
+            }
+            Stop-Transcript | Out-Null
+            $transcriptText = Get-Content -LiteralPath $transcriptPath -Raw -Encoding UTF8
+            if ($transcriptText -notmatch 'ACME reconcile failed: simulated failure') {
+                throw 'Expected reconcile failure line in transcript output.'
+            }
+            if ($transcriptText -notmatch '\r?\n\r?\nsimple-acme diagnostics\r?\n') {
+                throw 'Expected diagnostics section to start on a new line after a blank line.'
+            }
+            foreach ($badToken in @('thesimple-acme', 'txttest-acme', 'Inspect: preview:')) {
+                if ($transcriptText -match [regex]::Escape($badToken)) {
+                    throw "Detected corrupted concatenated output token '$badToken'."
+                }
+            }
+        } finally {
+            if ((Get-Variable -Name transcriptPath -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $transcriptPath)) {
+                Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -Path $transcriptDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
