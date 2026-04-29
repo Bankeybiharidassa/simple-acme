@@ -7,16 +7,30 @@ RELEASE_DIR="${OUT_DIR}/release"
 
 mkdir -p "${RELEASE_DIR}"
 
-# Copy the full repository layout (files + directories, including empty ones)
-# while preventing recursive self-copy and excluding git metadata.
+# Copy repository layout while preventing recursive self-copy and excluding git metadata.
 rsync -a --delete \
   --exclude='.git/' \
+  --exclude='.git*' \
+  --exclude='.github/' \
+  --exclude='.editorconfig' \
+  --exclude='.eslintrc.cjs' \
   --exclude='out/' \
   --exclude='create-release-bundle.sh' \
   "${ROOT_DIR}/" "${RELEASE_DIR}/"
 
-# Remove files intentionally excluded from release payload.
+# Remove development-only assets from release payload.
 rm -f "${RELEASE_DIR}/create-release-bundle.sh"
+rm -rf "${RELEASE_DIR}/tests"
+rm -rf "${RELEASE_DIR}/.github"
+rm -f "${RELEASE_DIR}/.editorconfig" "${RELEASE_DIR}/.eslintrc.cjs"
+rm -f "${RELEASE_DIR}/.gitignore" "${RELEASE_DIR}/.gitmodules"
+
+# Promote deploy scripts into the top-level Scripts folder for release consumers.
+mkdir -p "${RELEASE_DIR}/Scripts"
+if [[ -d "${RELEASE_DIR}/dist/Scripts" ]]; then
+  rsync -a "${RELEASE_DIR}/dist/Scripts/" "${RELEASE_DIR}/Scripts/"
+  rm -rf "${RELEASE_DIR}/dist/Scripts"
+fi
 
 # Normalize release docs that downstream consumers usually expect.
 if [[ -f "${RELEASE_DIR}/install.md" && ! -f "${RELEASE_DIR}/instructions.md" ]]; then
