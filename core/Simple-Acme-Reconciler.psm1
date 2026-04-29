@@ -110,7 +110,6 @@ function Resolve-WacsExecutable {
 
     $projectRoot = Split-Path $PSScriptRoot -Parent
     $candidates.Add((Join-Path $projectRoot 'wacs.exe'))
-    $candidates.Add((Join-Path $projectRoot 'simple-acme.exe'))
 
     foreach ($cmdName in @('wacs.exe','wacs')) {
         $cmd = Get-Command $cmdName -ErrorAction SilentlyContinue
@@ -134,13 +133,12 @@ function Resolve-WacsExecutable {
 simple-acme executable not found.
 
 Expected one of:
-- .\wacs.exe
-- .\simple-acme.exe
+- <install-root>\wacs.exe
 - configured ACME_WACS_PATH
 - wacs.exe on PATH
 
 Fix:
-Place wacs.exe in the project root or set ACME_WACS_PATH in certificate.env.
+Install official simple-acme release directly into the install root and set ACME_WACS_PATH to <install-root>\wacs.exe.
 "@
 }
 
