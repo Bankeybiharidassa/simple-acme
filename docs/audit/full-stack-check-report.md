@@ -55,3 +55,9 @@
 
 18. Exact files changed
 - `docs/audit/*.md`, `docs/audit/full-stack-findings.json`.
+
+
+19. Repository root cleanup update
+- Moved `deploy-paloalto.ps1` and `deploy-sophos.ps1` from repository root to `Scripts/`.
+- Updated inventory/audit references to the new `Scripts/` paths.
+- Added `tests/Test-RepositoryLayout.ps1` and wired it through `tests/Run-Tests.ps1` discovery.
