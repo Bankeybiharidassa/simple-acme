@@ -1,0 +1,172 @@
+{
+  "critical": [],
+  "high": [
+    {
+      "type": "ps7-runtime-risk",
+      "file": "build/compile-local.ps1",
+      "pattern": "\\bpwsh\\b",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "build/compile-local.ps1",
+      "pattern": "\\bpwsh\\b",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "build/compile-local.ps1",
+      "pattern": "\\bpwsh\\b",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "build/compile-local.ps1",
+      "pattern": "\\bpwsh\\b",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "certificate-orchestrator.ps1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "certificate-orchestrator.ps1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "secret-leak-risk",
+      "file": "certificate-setup.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "core/Simple-Acme-Reconciler.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "core/Simple-Acme-Reconciler.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "core/Simple-Acme-Reconciler.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "core/Simple-Acme-Reconciler.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "core/Simple-Acme-Reconciler.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "setup/Form-Runner.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "setup/Form-Runner.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "setup/Form-Runner.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "setup/Form-Runner.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "setup/Form-Runner.psm1",
+      "pattern": "\\?\\s*:",
+      "fixStatus": "open"
+    },
+    {
+      "type": "secret-leak-risk",
+      "file": "setup/Form-Runner.psm1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "ps7-runtime-risk",
+      "file": "tests/Simple-Acme-Preflight.Tests.ps1",
+      "pattern": "\\bpwsh\\b",
+      "fixStatus": "open"
+    }
+  ],
+  "medium": [
+    {
+      "type": "placeholder-marker",
+      "file": "Scripts/connectors/cert2kemp.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "build/release.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "core/Tui-Engine.psm1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "setup/Device-Schemas.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "setup/Form-Runner.psm1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "tests/Form-Runner.Tests.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "tests/Setup-TuiPolicy.Tests.ps1",
+      "fixStatus": "open"
+    },
+    {
+      "type": "placeholder-marker",
+      "file": "tests/Simple-Acme-Reconciler.Tests.ps1",
+      "fixStatus": "open"
+    }
+  ],
+  "low": [],
+  "tests": [
+    {
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\Run-Tests.ps1",
+      "result": "failed",
+      "reason": "powershell.exe not available in this Linux CI environment"
+    }
+  ],
+  "filesChanged": [],
+  "remainingRisks": [
+    "Windows PowerShell 5.1 parser/import execution could not be run in this environment.",
+    "End-to-end WACS runtime verification requires Windows host with wacs.exe."
+  ]
+}
