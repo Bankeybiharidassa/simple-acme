@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess=$true)]
+[CmdletBinding()]
 param(
     [string]$RootPath = $PSScriptRoot,
     [string]$ReleaseZipPath,
@@ -42,6 +42,24 @@ function Get-FileSha256([string]$Path) {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Backup-IfExists {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$BackupRoot,
+        [Parameter(Mandatory)][System.Collections.Generic.List[string]]$BackupLog,
+        [Parameter(Mandatory)][System.Collections.Generic.List[string]]$LogLines,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $relativePath = [IO.Path]::GetRelativePath($Root, $Path)
+    $backupPath = Join-Path $BackupRoot $relativePath
+    New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($backupPath)) -Force | Out-Null
+    Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+    $BackupLog.Add($relativePath) | Out-Null
+    $LogLines.Add("BACKUP $relativePath -> $backupPath") | Out-Null
+}
+
 $root = [System.IO.Path]::GetFullPath($RootPath)
 $envPath = Join-Path $root 'certificate.env'
 $manifestPath = Join-Path $root 'simple-acme-release-manifest.json'
@@ -77,88 +95,121 @@ Write-Host 'Files that would be updated:'
 Write-Host 'Custom files that will be preserved:'
 @('certificate-setup.ps1','certificate-simple-acme-reconcile.ps1','certificate-backup.ps1','certificate-restore.ps1','certificate-update-simple-acme.ps1','core\','setup\','logs\','certificate.env','simple-acme-release-manifest.json','simple-acme-helper-renewals.json','Scripts\cert2rds.ps1') | ForEach-Object { Write-Host " - $_" }
 
-if ($DryRun) { return }
+
+if ($DryRun) {
+    Write-Host 'DryRun enabled: no files or configuration were changed.'
+    return
+}
 
 $staging = Join-Path $env:TEMP ('simple-acme-stage-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
-Expand-Archive -Path $zipPath -DestinationPath $staging -Force
-
 $backupRoot = Join-Path $root ("backup-update-$ts")
-$backups = New-Object System.Collections.Generic.List[string]
+$backedUpRelativePaths = New-Object System.Collections.Generic.List[string]
 $logLines = New-Object System.Collections.Generic.List[string]
-
 $knownOfficialPatterns = @('wacs.exe','settings_default.json','*.dll','Scripts/*')
-$stageFiles = @(Get-ChildItem -Path $staging -Recurse -File)
-foreach ($file in $stageFiles) {
-    $relPath = $file.FullName.Substring($staging.Length).TrimStart('\\','/')
-    $dest = Join-Path $root $relPath
-    $overwrite = $true
-    if (Test-Path -LiteralPath $dest) {
-        $srcHash = Get-FileSha256 -Path $file.FullName
-        $dstHash = Get-FileSha256 -Path $dest
-        if ($srcHash -eq $dstHash) {
-            $overwrite = $true
-            $logLines.Add("UNCHANGED $relPath") | Out-Null
+$createdRelativePaths = New-Object System.Collections.Generic.List[string]
+try {
+    # phase: validate
+    if (-not (Test-Path -LiteralPath $root)) { throw "Root path not found: $root" }
+
+    # phase: stage
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    Expand-Archive -Path $zipPath -DestinationPath $staging -Force
+
+    # phase: swap
+    $stageFiles = @(Get-ChildItem -Path $staging -Recurse -File)
+    foreach ($file in $stageFiles) {
+        $relPath = $file.FullName.Substring($staging.Length).TrimStart('\','/')
+        $dest = Join-Path $root $relPath
+        $overwrite = $true
+
+        if (Test-Path -LiteralPath $dest) {
+            $srcHash = Get-FileSha256 -Path $file.FullName
+            $dstHash = Get-FileSha256 -Path $dest
+            if ($srcHash -eq $dstHash) {
+                $logLines.Add("UNCHANGED $relPath") | Out-Null
+            } else {
+                $isKnownOfficial = $false
+                foreach ($pattern in $knownOfficialPatterns) {
+                    if ($relPath -like $pattern) { $isKnownOfficial = $true; break }
+                }
+                if (-not $isKnownOfficial -and -not $ForceOfficialUpdate) {
+                    $answer = Read-Host "Conflict for $relPath (custom/unknown). Overwrite? (y/N)"
+                    if ($answer -notin @('y','Y','yes','YES')) { $overwrite = $false }
+                }
+                if ($overwrite) {
+                    Backup-IfExists -Path $dest -BackupRoot $backupRoot -BackupLog $backedUpRelativePaths -LogLines $logLines -Root $root
+                }
+            }
+        }
+
+        if ($overwrite) {
+            $destExisted = Test-Path -LiteralPath $dest
+            New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($dest)) -Force | Out-Null
+            Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
+            if (-not $destExisted) { $createdRelativePaths.Add($relPath) | Out-Null }
+            $logLines.Add("UPDATED $relPath") | Out-Null
         } else {
-            $isKnownOfficial = $false
-            foreach ($pattern in $knownOfficialPatterns) {
-                if ($relPath -like $pattern) { $isKnownOfficial = $true; break }
-            }
-            if (-not $isKnownOfficial -and -not $ForceOfficialUpdate) {
-                $answer = Read-Host "Conflict for $relPath (custom/unknown). Overwrite? (y/N)"
-                if ($answer -notin @('y','Y','yes','YES')) { $overwrite = $false }
-            }
-            if ($overwrite) {
-                $backupPath = Join-Path $backupRoot $relPath
-                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($backupPath)) -Force | Out-Null
-                Copy-Item -LiteralPath $dest -Destination $backupPath -Force
-                $backups.Add($backupPath) | Out-Null
-                $logLines.Add("BACKUP $relPath -> $backupPath") | Out-Null
-            }
+            $logLines.Add("SKIPPED $relPath") | Out-Null
         }
     }
 
-    if ($overwrite) {
-        New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($dest)) -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
-        $logLines.Add("UPDATED $relPath") | Out-Null
-    } else {
-        $logLines.Add("SKIPPED $relPath") | Out-Null
+    # phase: persist metadata
+    Backup-IfExists -Path $manifestPath -BackupRoot $backupRoot -BackupLog $backedUpRelativePaths -LogLines $logLines -Root $root
+    Backup-IfExists -Path $envPath -BackupRoot $backupRoot -BackupLog $backedUpRelativePaths -LogLines $logLines -Root $root
+
+    $manifest = [ordered]@{
+        source = 'official-release'
+        releaseUrl = $rel.ReleaseUrl
+        assetUrl = $rel.AssetUrl
+        version = $rel.Version
+        sha256 = $checksum
+        officialChecksumVerified = $officialChecksumVerified
+        installedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        wacsPath = (Join-Path $root 'wacs.exe')
+        warning = $checksumWarning
     }
+    $manifest | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+    Update-CertificateEnv -EnvPath $envPath -Values @{
+        ACME_WACS_PATH = (Join-Path $root 'wacs.exe')
+        ACME_WACS_SOURCE = 'official-release'
+        ACME_WACS_VERSION = $rel.Version
+        ACME_WACS_AUTO_UPDATE = '0'
+        ACME_WACS_RELEASE_ZIP = $rel.AssetUrl
+        ACME_WACS_RELEASE_SHA256 = $checksum
+    }
+
+    @(
+        "timestamp=$((Get-Date).ToUniversalTime().ToString('o'))",
+        "root=$root",
+        "release=$($rel.Version)",
+        "asset=$($rel.AssetUrl)",
+        "sha256=$checksum",
+        "officialChecksumVerified=$officialChecksumVerified",
+        "backupRoot=$backupRoot"
+    ) + $logLines | Set-Content -LiteralPath $updateLog -Encoding UTF8
+
+    Write-Host "Update complete."
+    Write-Host "Update log: $updateLog"
 }
-
-$manifest = [ordered]@{
-    source = 'official-release'
-    releaseUrl = $rel.ReleaseUrl
-    assetUrl = $rel.AssetUrl
-    version = $rel.Version
-    sha256 = $checksum
-    officialChecksumVerified = $officialChecksumVerified
-    installedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    wacsPath = (Join-Path $root 'wacs.exe')
-    warning = $checksumWarning
+catch {
+    Write-Warning ("Update failed, attempting rollback: " + $_.Exception.Message)
+    foreach ($relativePath in ($createdRelativePaths | Sort-Object -Descending)) {
+        $destPath = Join-Path $root $relativePath
+        if (Test-Path -LiteralPath $destPath) {
+            Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($relativePath in ($backedUpRelativePaths | Sort-Object -Descending)) {
+        $backupPath = Join-Path $backupRoot $relativePath
+        $destPath = Join-Path $root $relativePath
+        if (Test-Path -LiteralPath $backupPath) {
+            New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destPath)) -Force | Out-Null
+            Copy-Item -LiteralPath $backupPath -Destination $destPath -Force
+        }
+    }
+    throw
 }
-$manifest | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-
-Update-CertificateEnv -EnvPath $envPath -Values @{
-    ACME_WACS_PATH = (Join-Path $root 'wacs.exe')
-    ACME_WACS_SOURCE = 'official-release'
-    ACME_WACS_VERSION = $rel.Version
-    ACME_WACS_AUTO_UPDATE = '0'
-    ACME_WACS_RELEASE_ZIP = $rel.AssetUrl
-    ACME_WACS_RELEASE_SHA256 = $checksum
+finally {
+    Remove-Item -Path $staging -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-@(
-    "timestamp=$((Get-Date).ToUniversalTime().ToString('o'))",
-    "root=$root",
-    "release=$($rel.Version)",
-    "asset=$($rel.AssetUrl)",
-    "sha256=$checksum",
-    "officialChecksumVerified=$officialChecksumVerified",
-    "backupRoot=$backupRoot"
-) + $logLines | Set-Content -LiteralPath $updateLog -Encoding UTF8
-
-Remove-Item -Path $staging -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "Update complete."
-Write-Host "Update log: $updateLog"

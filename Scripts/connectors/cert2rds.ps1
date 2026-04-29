@@ -36,5 +36,6 @@ $verify = {
     return (($localThumb -replace '\s','').ToUpperInvariant() -eq $cert.Thumbprint)
 }
 
-Invoke-ConnectorPipeline -CertThumbprint $CertThumbprint -Apply $apply -Verify $verify -Endpoints $endpoints
+$normalizedThumbprint = Assert-CertThumbprint -CertThumbprint $CertThumbprint
+Invoke-ConnectorPipeline -CertThumbprint $normalizedThumbprint -Apply $apply -Verify $verify -Endpoints $endpoints
 exit 0
