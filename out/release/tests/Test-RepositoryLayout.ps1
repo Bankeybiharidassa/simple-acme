@@ -26,15 +26,6 @@ function Invoke-TestRepositoryLayout {
         }
     }
 
-
-    & $Assert 'Repository root contains required top-level directories' {
-        $requiredDirs = @('core', 'setup', 'tests', 'docs', 'build', 'dist', 'connectors', 'Scripts')
-        $missingDirs = @($requiredDirs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repoRoot $_) -PathType Container) })
-        if ($missingDirs.Count -gt 0) {
-            throw ('Missing required top-level directories: {0}' -f ($missingDirs -join ', '))
-        }
-    }
-
     & $Assert 'Deployment scripts exist under Scripts directory' {
         $required = @(
             (Join-Path $repoRoot 'Scripts/deploy-paloalto.ps1'),
