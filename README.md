@@ -1,314 +1,153 @@
-# Certificate Helper for Official simple-acme Releases
+# simple-acme helper/wrapper for Windows PowerShell 5.1
 
-Certificate adds policy-based connector orchestration around `simple-acme` certificate issuance.
+This project is a Windows PowerShell helper/wrapper around official simple-acme/WACS releases.
 
-- `simple-acme` obtains/renews certificates.
-- A script bridge drops certificate event JSON files.
-- `certificate-orchestrator.ps1` fans out connector steps (`probe -> deploy -> bind -> activate -> verify`, with rollback support).
+It provides:
+- noob/supportdesk-friendly bootstrap;
+- provider-specific ACME configuration;
+- Networking4All test/production/product endpoint selection;
+- EAB handling;
+- RDS/script deployment integration;
+- backup/restore;
+- diagnostics and command preview.
 
----
+simple-acme/WACS remains the ACME engine. simple-acme renewal JSON remains the runtime certificate source of truth.
+
+## Runtime model
+
+Install root is the WACS runtime directory.
+
+Example:
+- `<root> = C:\certificaat`
+- official executable: `<root>\wacs.exe`
+- official scripts: `<root>\Scripts\`
+
+Runtime installs at `<root>` and not in nested `tools\simple-acme` or `vendor\simple-acme` folders unless explicitly overridden.
 
 ## Prerequisites
 
-### Runtime (orchestrator)
-- Windows Server 2019 or newer.
-- Windows PowerShell 5.1.
-- Required Windows roles/features depend on configured connectors (IIS, ADFS, RD Gateway, etc.).
+- Windows PowerShell 5.1
+- Administrator rights for certificate store/RDS/IIS operations
+- Internet access for official simple-acme ZIP download, unless `wacs.exe` is already installed in `<root>`
+- Required Windows roles depend on chosen target, for example RDS or IIS
 
-### Build/development
-- No local C# simple-acme source build is required; this helper consumes official simple-acme releases.
-- Windows PowerShell 5.1 is sufficient for wrapper setup/orchestration scripts.
+## First-time setup
 
----
+1. Extract/copy this helper into an install root, for example `C:\certificaat`.
+2. Run `certificate-setup.ps1` as Administrator.
+3. The setup wizard creates or updates `<root>\certificate.env`.
+4. The installer/updater downloads or verifies official simple-acme/WACS into `<root>\wacs.exe`.
+5. The wizard guides provider, endpoint, EAB, target, domains and CSR selection.
+6. Reconcile runs official `wacs.exe` non-interactively.
 
-## Build and compile
+If an existing `certificate.env` exists, the wizard reads and reuses values where possible.
 
-This repository no longer builds a local `src/` simple-acme fork. Install official simple-acme ZIP releases into your install root and use the wrapper scripts from this repo.
+## Environment variables
 
----
-
-## Test workflow
-
-Run lint + tests:
-
-```powershell
-# ScriptAnalyzer (same settings CI uses)
-Invoke-ScriptAnalyzer -Path .\*.ps1,.\build\*.ps1,.\core\*.psm1,.\setup\*.ps1,.\setup\*.psm1,.\tests\*.ps1 -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
-
-# full QA test runner
-powershell.exe -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
-```
-
-Expected behavior of `tests/Run-Tests.ps1`:
-- Performs a compile check when `dotnet` is available.
-- Skips compile check when `dotnet` is missing.
-- Skips Pester-style files when Pester is unavailable.
-- Emits `[PASS]`, `[SKIP]`, `[FAIL]`, then `Summary: pass=<n> fail=<n> skip=<n>`.
-
-Interpretation:
-- `fail > 0` => non-zero exit code.
-- `skip > 0` with `fail = 0` => successful run with environment-based skips.
-
----
-
-## Runtime environment variables (source of truth: `core/Env-Loader.psm1`)
-
-### Required keys
-
-| Name | Required | Description |
-|---|---|---|
-| `ACME_DIRECTORY` | Yes | ACME directory URL used by reconcile/bootstrap paths. |
-| `ACME_KID` | Yes | ACME EAB key identifier. |
-| `ACME_HMAC_SECRET` | Yes | ACME EAB HMAC secret. |
-| `DOMAINS` | Yes | Comma-separated domain list. |
-| `ACME_SCRIPT_PATH` | Yes | Script path passed to `wacs --installation script`. |
-| `ACME_SOURCE_PLUGIN` | No | Kept for compatibility; reconcile always issues with `--source manual`. |
-| `ACME_ORDER_PLUGIN` | No | Order plugin (default `single`). |
-| `ACME_STORE_PLUGIN` | No | Store plugin (default `certificatestore`). |
-| `ACME_ACCOUNT_NAME` | No | Optional account profile passed to `--account`. |
-| `ACME_INSTALLATION_PLUGINS` | No | Kept for compatibility; reconcile always issues with `--installation script`. |
-| `ACME_CSR_ALGORITHM` | No | CSR algorithm preference (`ec` default, with automatic RSA fallback). |
-| `ACME_SCRIPT_PARAMETERS` | No | Script parameter template. |
-| `ACME_VALIDATION_MODE` | No | Global validation mode (default `none`). |
-| `ACME_WACS_RETRY_ATTEMPTS` | No | WACS retry attempts (default `3`). |
-| `ACME_WACS_RETRY_DELAY_SECONDS` | No | Delay between retries (default `2`). |
-| `CERTIFICATE_CONFIG_DIR` | Yes | Directory for `certificate.env`, device configs, and policies. |
-| `CERTIFICATE_DROP_DIR` | Yes | Watched folder for inbound certificate event JSON. |
-| `CERTIFICATE_STATE_DIR` | Yes | Job state storage directory. |
-| `CERTIFICATE_LOG_DIR` | Yes | Log output directory. |
-| `CERTIFICATE_API_KEY` | Yes | API key used by HTTP listener auth (`X-API-Key` or Bearer). |
-
-### Optional keys and defaults
-
-| Name | Default | Behavior |
-|---|---|---|
-| `CERTIFICATE_VERIFY_MAX_ATTEMPTS` | `3` | Max verify retries. |
-| `CERTIFICATE_ACTIVATE_TIMEOUT_MS` | `120000` | Activation timeout hint (ms). |
-| `CERTIFICATE_DEFAULT_FANOUT` | `fail-fast` | Default policy fanout behavior. |
-| `CERTIFICATE_SKIP_TLS_CHECK` | `0` | Set `1` to disable TLS certificate validation for connector API calls. |
-| `CERTIFICATE_RETRY_MAX_ATTEMPTS` | `3` | Max connector operation retries. |
-| `CERTIFICATE_RETRY_BACKOFF_MS` | `1000` | Initial backoff (ms). |
-| `CERTIFICATE_HTTP_ENABLED` | `0` | Set `1` to enable native HttpListener input path. |
-| `CERTIFICATE_HTTP_PREFIX` | `http://localhost:8443/` | HttpListener prefix actually consumed by `core/Http-Listener.psm1`. |
-| `CERTIFICATE_DISABLE_ROLLBACK` | `0` | Set `1` to disable rollback execution. |
-| `CERTIFICATE_HTTP_HOST` | `127.0.0.1` | Compatibility key; not currently used by listener startup path. |
-| `CERTIFICATE_HTTP_PORT` | `8088` | Compatibility key; not currently used by listener startup path. |
-
-### Env file resolution order
-
-`Import-EnvFile` resolves `certificate.env` in this order:
-1. explicit `-Path`
-2. `CERTIFICATE_ENV_FILE`
-3. `./certificate.env` (current working directory)
-4. `$CERTIFICATE_CONFIG_DIR/certificate.env`
-
----
-
-## First-time setup (bootstrap sequence)
-
-`certificate-setup.ps1` calls `Initialize-CertificateConfig` immediately, so a valid env file must already exist before running setup.
-
-1. Create `certificate.env` with all required keys.
-2. Ensure `CERTIFICATE_CONFIG_DIR`, `CERTIFICATE_DROP_DIR`, `CERTIFICATE_STATE_DIR`, and `CERTIFICATE_LOG_DIR` directories exist.
-3. Run once as administrator to register event source:
-
-   ```powershell
-   New-EventLog -LogName Application -Source Certificate
-   ```
-
-4. Run setup UI:
-
-   ```powershell
-   .\certificate-setup.ps1
-   ```
-
-5. Configure ACME values, devices, and deployment policies.
-   - After saving ACME settings, setup now prompts: **Run initial ACME reconcile now? [Y/N]**.
-   - Setup also includes **Register/Repair orchestrator task** for idempotent scheduled task registration.
-
-Minimal env example:
+### Phase 1 bootstrap/runtime
 
 ```dotenv
-ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
-ACME_KID=<kid>
-ACME_HMAC_SECRET=<hmac>
-DOMAINS=example.com,www.example.com
-ACME_SCRIPT_PATH=dist\Scripts\New-CertificateDropFile.ps1
-CERTIFICATE_CONFIG_DIR=C:\certificate\config
-CERTIFICATE_DROP_DIR=C:\certificate\drop
-CERTIFICATE_STATE_DIR=C:\certificate\state
-CERTIFICATE_LOG_DIR=C:\certificate\logs
-CERTIFICATE_API_KEY=<strong-random-token>
+ACME_DIRECTORY=
+DOMAINS=
+ACME_SCRIPT_PATH=
+ACME_SCRIPT_PARAMETERS={CertThumbprint}
+ACME_PROVIDER=
+ACME_REQUIRES_EAB=0/1
+ACME_KID=
+ACME_HMAC_SECRET=
+ACME_VALIDATION_MODE=none
+ACME_CSR_ALGORITHM=ec|rsa
+ACME_ALLOW_CSR_FALLBACK=0/1
+ACME_WACS_PATH=<root>\wacs.exe
+ACME_WACS_SOURCE=official-release
+ACME_WACS_VERSION=
+ACME_WACS_AUTO_UPDATE=0/1
+ACME_WACS_RELEASE_ZIP=
+ACME_WACS_RELEASE_SHA256=
 ```
 
----
+### Phase 2 / advanced orchestrator only
 
-## Run as scheduled task
-
-```cmd
-schtasks /Create /SC MINUTE /MO 5 /TN "Certificate-Orchestrator" /TR "powershell.exe -ExecutionPolicy Bypass -File C:\certificate\certificate-orchestrator.ps1" /RU "SYSTEM"
+```dotenv
+CERTIFICATE_CONFIG_DIR=
+CERTIFICATE_DROP_DIR=
+CERTIFICATE_STATE_DIR=
+CERTIFICATE_LOG_DIR=
+CERTIFICATE_API_KEY=
+CERTIFICATE_HTTP_ENABLED=
+CERTIFICATE_HTTP_PREFIX=
 ```
 
----
+Phase-2 variables are not required for normal local/RDS phase-1 setup.
 
-## HTTP listener behavior
+## certificate.env resolution
 
-When `CERTIFICATE_HTTP_ENABLED=1`, orchestrator starts a background HttpListener job.
+Resolution order:
+1. explicit `-Path` when a script supports it
+2. `CERTIFICATE_ENV_FILE` override
+3. `<root>\certificate.env`
 
-- Prefix: `CERTIFICATE_HTTP_PREFIX`
-- Health endpoint: `GET /health` (no auth)
-- Event endpoint: `POST /events` (auth required)
-- Job endpoints: `GET /jobs/<renewal_id>` and `GET /jobs/status/<job_id>` (auth required)
+Canonical default is `<root>\certificate.env`.
 
-Auth accepted:
-- `X-API-Key: <CERTIFICATE_API_KEY>`
-- `Authorization: Bearer <CERTIFICATE_API_KEY>`
+## CSR and fallback policy
 
----
+`ACME_CSR_ALGORITHM` defaults to `ec`.
+`ACME_ALLOW_CSR_FALLBACK` defaults to `0`.
+RSA fallback is disabled unless explicitly enabled.
 
-## Drop directory file format
-
-Each file should contain a certificate event matching `Assert-CertificateEvent` schema:
-
-```json
-{
-  "event": "certificate.renewed",
-  "renewal_id": "renewal-123",
-  "deployment_policy_id": "prod-edge",
-  "domain": "example.com",
-  "cert_path": "C:\\certificate\\out\\cert.pem",
-  "key_path": "C:\\certificate\\out\\key.pem",
-  "fullchain_path": "C:\\certificate\\out\\fullchain.pem",
-  "thumbprint": "ABC123",
-  "issuer": "Let's Encrypt",
-  "not_before": "2026-04-21T00:00:00Z",
-  "not_after": "2026-07-20T23:59:59Z"
-}
+EC example:
+```dotenv
+ACME_CSR_ALGORITHM=ec
+ACME_KEY_TYPE=ec
+ACME_EC_CURVE=P-256
+ACME_RSA_KEY_SIZE=
+ACME_ALLOW_CSR_FALLBACK=0
 ```
 
----
-
-## Official release install-root architecture
-
-This repository is now positioned as a **helper/wrapper** project. It does not maintain a long-lived fork as the primary ACME engine.
-
-Expected runtime layout (example):
-
-```text
-Install root: C:\certificaat
-Official simple-acme executable: C:\certificaat\wacs.exe
-Official simple-acme scripts: C:\certificaat\Scripts\
+RSA example:
+```dotenv
+ACME_CSR_ALGORITHM=rsa
+ACME_KEY_TYPE=rsa
+ACME_RSA_KEY_SIZE=2048
+ACME_EC_CURVE=
+ACME_ALLOW_CSR_FALLBACK=0
 ```
 
-The helper must resolve WACS as `<root>\wacs.exe` (or `ACME_WACS_PATH`) and should not require a nested `tools\simple-acme` or `vendor` subdirectory.
+## WACS path troubleshooting
 
-Updater rules:
-- Download official simple-acme ZIP releases.
-- Verify SHA256/checksum when official checksum data is available.
-- Extract/update official files directly into install root.
-- Update official `<root>\Scripts` content while preserving custom connector scripts that are not in the official ZIP.
-- Detect conflicts for custom-modified files and ask before overwrite.
-- Record version/checksum/source in `certificate.env` (`ACME_WACS_*`).
-- Never silently replace ACME engine unless `ACME_WACS_AUTO_UPDATE=1`.
+Ensure `<root>\wacs.exe` exists, or set `ACME_WACS_PATH` explicitly. `PATH` is fallback only.
 
-## Integration with simple-acme
+## Official release updater
 
-Use Script Installation Plugin to emit Certificate drop files.
+Use `certificate-update-simple-acme.ps1` to download/refresh official simple-acme files in the install root.
 
-```text
---installation Script
---script "dist\Scripts\New-CertificateDropFile.ps1"
---scriptparameters "'<POLICY-ID>' {RenewalId} '{CertCommonName}' {CertThumbprint} {OldCertThumbprint} '{CacheFile}' '{CachePassword}' '{StorePath}' {StoreType}"
---source manual
---order single
---globalvalidation none
-```
-
-### Reconcile existing simple-acme state to `.env`
-
+Dry run:
 ```powershell
-.\certificate-simple-acme-reconcile.ps1
+.\certificate-update-simple-acme.ps1 -DryRun
 ```
 
-Preflight-only validation (no issuance/change):
+Update writes `<root>\simple-acme-release-manifest.json` and updates `ACME_WACS_*` keys in `<root>\certificate.env`.
 
-```powershell
-.\certificate-simple-acme-reconcile.ps1 -PreflightOnly
-```
+Do not silently replace WACS unless `ACME_WACS_AUTO_UPDATE=1` or the operator confirms.
 
-Outcomes:
-- `create`: no matching renewal; creates one.
-- `no-op`: renewal already matches `.env`.
-- `update`: drift detected; runs cancel + reissue.
+## Startup/update check policy
 
-Reconciler also enforces in `%PROGRAMDATA%\simple-acme\settings.json`:
-- `ScheduledTask.RenewalDays = 199`
-- `ScheduledTask.RenewalMinimumValidDays = 16`
+At setup start:
+1. resolve `<root>\wacs.exe`
+2. read `simple-acme-release-manifest.json` when present
+3. if `ACME_WACS_AUTO_UPDATE=1`, check latest release and prompt:
+   - `[1] Update now`
+   - `[2] Skip this time`
+   - `[3] Disable auto-update checks`
+4. if `ACME_WACS_AUTO_UPDATE=0`, no automatic check unless operator selects check explicitly.
 
-### Store plugin compatibility
+## PR #538 awareness
 
-| simple-acme StoreType | Typical StorePath value | Notes |
-|---|---|---|
-| `PfxFile` | Full path to `.pfx` | Required by connectors that import PFX artifacts directly. |
-| `CertificateStore` | Certificate store location | Preferred for thumbprint-first Windows connector flows. |
-| `PemFiles` | Folder with PEM artifacts | Used by file-based/reverse-proxy workflows. |
-| `CentralSsl` | CCS directory path | Useful for centralized file drop workflows. |
+Upstream PR `simple-acme/simple-acme#538` (Multiserver, open) is relevant for per-renewal endpoint metadata.
 
----
+When official simple-acme includes PR #538 (or equivalent endpoint-per-renewal support), the helper should rely on native renewal endpoint metadata where possible.
+Until then, the helper must always pass `--baseuri` explicitly during issuance/reconcile.
 
-## Connector reference
+## Advanced / Phase 2 orchestrator
 
-| Connector | Category | Requirements | Export style | Rollback |
-|---|---|---|---|---|
-| `iis` | A (Windows-native) | IIS role | legacy + connector aliases | Yes |
-| `adfs` | A (Windows-native) | ADFS role | legacy + connector aliases | Yes |
-| `rdp_listener` | A (Windows-native) | Remote Desktop Services | legacy + connector aliases | Yes |
-| `rd_gateway` | A (Windows-native) | RD Gateway role | legacy + connector aliases | Yes |
-| `rds_full` | A (Windows-native) | RDS deployment cmdlets | legacy + connector aliases | Yes |
-| `ntds` | A (Windows-native) | Active Directory Domain Services | legacy + connector aliases | Yes |
-| `sstp` | A (Windows-native) | RemoteAccess role (+ optional IIS binding path) | legacy + connector aliases | Yes |
-| `winrm` | A (Windows-native) | WinRM service | legacy + connector aliases | Yes |
-| `sql_server` | A (Windows-native) | SQL Server installed locally | legacy + connector aliases | Yes |
-| `windows_admin_center` | A (Windows-native) | Windows Admin Center installed | legacy + connector aliases | Yes |
-| `exchange` | C (local PSSession) | Exchange Management endpoint on localhost | legacy + connector aliases | Yes |
-| `f5_bigip` | B (REST) | F5 iControl REST access | connector-only exports | Yes |
-| `citrix_adc` | B (REST) | Citrix NITRO API access | connector-only exports | Yes |
-| `kemp` | B (REST/XML) | Kemp endpoint access | connector-only exports | Yes |
-| `java_keystore` | D (external dependency) | JDK/`keytool.exe` | not implemented in `connectors/` | Stub/disabled |
-| `kemp_module` | D (external dependency) | Kemp PowerShell module | not implemented in `connectors/` | Stub/disabled |
-| `vbr_cloud_gateway` | D (external dependency) | Veeam VBR module | not implemented in `connectors/` | Stub/disabled |
-| `azure_application_gateway` | D (external dependency) | AzureRM module | not implemented in `connectors/` | Stub/disabled |
-| `azure_ad_app_proxy` | D (external dependency) | AzureAD module | not implemented in `connectors/` | Stub/disabled |
-| `sparx_procloud` | D (external dependency) | PowerShell 7 + external tooling | not implemented in `connectors/` | Stub/disabled |
-
----
-
-## Backup and restore
-
-```powershell
-# Create backup (prompts for passphrase if omitted)
-.\certificate-backup.ps1 -OutputPath C:\secure\certificate-2026-04-21.certbak
-
-# Restore backup
-.\certificate-restore.ps1 -BackupPath \\fileserver\backups\certificate-2026-04-21.certbak
-
-# Validate backup readability without writing files
-.\certificate-restore.ps1 -BackupPath .\certificate-2026-04-21.certbak -DryRun
-```
-
----
-
-## Troubleshooting quick hits
-
-- `No certificate.env could be resolved`:
-  - set `CERTIFICATE_ENV_FILE`, or
-  - place `certificate.env` in current directory, or
-  - place it under `$CERTIFICATE_CONFIG_DIR`.
-- `Missing required environment keys`:
-  - ensure all required keys listed above are present and non-empty.
-- HTTP mode returns `401 unauthorized`:
-  - send `X-API-Key` or Bearer token matching `CERTIFICATE_API_KEY`.
-- Reconcile fails with missing `wacs`:
-  - ensure `wacs` is installed and available on `PATH` before running `certificate-simple-acme-reconcile.ps1`.
-- Reconcile fails with script path validation:
-  - ensure `ACME_SCRIPT_PATH` is absolute and points to an existing script file.
+`certificate-orchestrator.ps1`, drop directories, HTTP listener, API key auth, and state/event workflows are advanced features. They are optional and not required for phase-1 local bootstrap or standard RDS deployment.
