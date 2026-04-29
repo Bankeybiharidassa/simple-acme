@@ -1128,7 +1128,7 @@
     "category": "runtime"
   },
   {
-    "path": "deploy-paloalto.ps1",
+    "path": "Scripts/deploy-paloalto.ps1",
     "extension": ".ps1",
     "sizeBytes": 20596,
     "sha256": "65a5e01682668b5b2dfbc465a1ae0127d7d1c9d0b0e833292f488822ef92ec03",
@@ -1140,7 +1140,7 @@
     "category": "runtime"
   },
   {
-    "path": "deploy-sophos.ps1",
+    "path": "Scripts/deploy-sophos.ps1",
     "extension": ".ps1",
     "sizeBytes": 18400,
     "sha256": "43396c3be7df71b9a9d9b9f4ec08d622b4fd121eb4849a3ea0ec2d600195921e",
