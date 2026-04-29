@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess=$true)]
+[CmdletBinding()]
 param(
     [string]$RootPath = $PSScriptRoot,
     [string]$ReleaseZipPath,
@@ -106,9 +106,10 @@ $backupRoot = Join-Path $root ("backup-update-$ts")
 $backedUpRelativePaths = New-Object System.Collections.Generic.List[string]
 $logLines = New-Object System.Collections.Generic.List[string]
 $knownOfficialPatterns = @('wacs.exe','settings_default.json','*.dll','Scripts/*')
-$copiedPaths = New-Object System.Collections.Generic.List[string]
-
 try {
+    # phase: validate
+    if (-not (Test-Path -LiteralPath $root)) { throw "Root path not found: $root" }
+
     # phase: stage
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     Expand-Archive -Path $zipPath -DestinationPath $staging -Force
@@ -143,7 +144,6 @@ try {
         if ($overwrite) {
             New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($dest)) -Force | Out-Null
             Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
-            $copiedPaths.Add($dest) | Out-Null
             $logLines.Add("UPDATED $relPath") | Out-Null
         } else {
             $logLines.Add("SKIPPED $relPath") | Out-Null
