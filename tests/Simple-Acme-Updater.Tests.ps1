@@ -23,5 +23,10 @@ Describe 'Updater install-root extraction' {
         (Test-Path (Join-Path $root 'settings_default.json')) | Should -BeTrue
         (Get-Content -Raw -Path (Join-Path $root 'Scripts/Example.ps1')) | Should -Match 'official-script'
         (Get-Content -Raw -Path (Join-Path $root 'Scripts/cert2rds.ps1')) | Should -Match 'custom'
+
+        $manifest = Get-Content -Raw -Path (Join-Path $root 'simple-acme-release-manifest.json') | ConvertFrom-Json
+        $manifest.source | Should -Be 'official-release'
+        $manifest.officialChecksumVerified | Should -BeFalse
+        $manifest.warning | Should -Match 'Official checksum was not available'
     }
 }
