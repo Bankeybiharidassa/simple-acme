@@ -65,6 +65,7 @@ Describe 'Updater transactional behavior' {
         $fixture = Join-Path $TestDrive 'rollback-fixture'
         New-Item -ItemType Directory -Path $fixture -Force | Out-Null
         Set-Content -Path (Join-Path $fixture 'wacs.exe') -Value 'new-wacs'
+        Set-Content -Path (Join-Path $fixture 'settings_default.json') -Value '{"from":"fixture"}'
         $zip = Join-Path $TestDrive 'rollback-official.zip'
         Compress-Archive -Path (Join-Path $fixture '*') -DestinationPath $zip -Force
 
@@ -72,5 +73,6 @@ Describe 'Updater transactional behavior' {
         { & (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path 'certificate-update-simple-acme.ps1') -RootPath $root -ReleaseZipPath $zip } | Should -Throw
 
         (Get-Content -Raw -Path (Join-Path $root 'wacs.exe')) | Should -Be 'old-wacs'
+        (Test-Path (Join-Path $root 'settings_default.json')) | Should -BeFalse
     }
 }

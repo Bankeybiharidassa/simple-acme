@@ -106,6 +106,7 @@ $backupRoot = Join-Path $root ("backup-update-$ts")
 $backedUpRelativePaths = New-Object System.Collections.Generic.List[string]
 $logLines = New-Object System.Collections.Generic.List[string]
 $knownOfficialPatterns = @('wacs.exe','settings_default.json','*.dll','Scripts/*')
+$createdRelativePaths = New-Object System.Collections.Generic.List[string]
 try {
     # phase: validate
     if (-not (Test-Path -LiteralPath $root)) { throw "Root path not found: $root" }
@@ -142,8 +143,10 @@ try {
         }
 
         if ($overwrite) {
+            $destExisted = Test-Path -LiteralPath $dest
             New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($dest)) -Force | Out-Null
             Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
+            if (-not $destExisted) { $createdRelativePaths.Add($relPath) | Out-Null }
             $logLines.Add("UPDATED $relPath") | Out-Null
         } else {
             $logLines.Add("SKIPPED $relPath") | Out-Null
@@ -191,6 +194,12 @@ try {
 }
 catch {
     Write-Warning ("Update failed, attempting rollback: " + $_.Exception.Message)
+    foreach ($relativePath in ($createdRelativePaths | Sort-Object -Descending)) {
+        $destPath = Join-Path $root $relativePath
+        if (Test-Path -LiteralPath $destPath) {
+            Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
+        }
+    }
     foreach ($relativePath in ($backedUpRelativePaths | Sort-Object -Descending)) {
         $backupPath = Join-Path $backupRoot $relativePath
         $destPath = Join-Path $root $relativePath
