@@ -103,6 +103,7 @@ if ($DryRun) {
 
 $staging = Join-Path $env:TEMP ('simple-acme-stage-' + [guid]::NewGuid().ToString('N'))
 $backupRoot = Join-Path $root ("backup-update-$ts")
+$backupManifestPath = Join-Path $backupRoot '_backup-index.txt'
 $backedUpRelativePaths = New-Object System.Collections.Generic.List[string]
 $logLines = New-Object System.Collections.Generic.List[string]
 $knownOfficialPatterns = @('wacs.exe','settings_default.json','*.dll','Scripts/*')
@@ -169,6 +170,12 @@ try {
         warning = $checksumWarning
     }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+
+    if ($backedUpRelativePaths.Count -gt 0) {
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        ($backedUpRelativePaths | Sort-Object) | Set-Content -LiteralPath $backupManifestPath -Encoding UTF8
+    }
 
     Update-CertificateEnv -EnvPath $envPath -Values @{
         ACME_WACS_PATH = (Join-Path $root 'wacs.exe')

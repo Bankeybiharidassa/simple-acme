@@ -12,13 +12,24 @@ Describe 'Connector thumbprint contract and script signature drift' {
         $value | Should -Be 'AABBCCDDEEFF00112233445566778899AABBCCDD'
     }
 
-    It 'keeps CertThumbprint param signature aligned between duplicate cert2rds scripts' {
-        $rootScript = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../Scripts/cert2rds.ps1')
-        $connectorScript = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../Scripts/connectors/cert2rds.ps1')
+    It 'keeps CertThumbprint parameter attributes aligned between duplicate cert2rds scripts' {
+        $rootAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../Scripts/cert2rds.ps1'), [ref]$null, [ref]$null)
+        $connectorAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../Scripts/connectors/cert2rds.ps1'), [ref]$null, [ref]$null)
 
-        ($rootScript -match '\[string\]\$CertThumbprint') | Should -BeTrue
-        ($connectorScript -match '\[string\]\$CertThumbprint') | Should -BeTrue
-        ($rootScript -match '\[Parameter\(Mandatory=\$true') | Should -BeTrue
-        ($connectorScript -match '\[Parameter\(Mandatory') | Should -BeTrue
+        $rootParam = @($rootAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'CertThumbprint' })[0]
+        $connectorParam = @($connectorAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'CertThumbprint' })[0]
+
+        $rootParam.StaticType.Name | Should -Be 'String'
+        $connectorParam.StaticType.Name | Should -Be 'String'
+
+        $rootAttrs = @($rootParam.Attributes | ForEach-Object { $_.Extent.Text })
+        $connectorAttrs = @($connectorParam.Attributes | ForEach-Object { $_.Extent.Text })
+
+        ($rootAttrs -join ' ') | Should -Match 'Mandatory\s*=\s*\$true'
+        ($connectorAttrs -join ' ') | Should -Match 'Mandatory\s*=\s*\$true'
+        ($rootAttrs -join ' ') | Should -Match 'Position\s*=\s*0'
+        ($connectorAttrs -join ' ') | Should -Match 'Position\s*=\s*0'
+        ($rootAttrs -join ' ') | Should -Match 'ValidateNotNullOrEmpty'
+        ($connectorAttrs -join ' ') | Should -Match 'ValidateNotNullOrEmpty'
     }
 }

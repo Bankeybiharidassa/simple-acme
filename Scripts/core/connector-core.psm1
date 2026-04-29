@@ -10,13 +10,26 @@ function New-ConnectorError {
     return ('[{0}] {1}' -f $Code, $Message)
 }
 
+
+function Assert-RequiredString {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Code
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw (New-ConnectorError -Code $Code -Message ("{0} is required and cannot be empty." -f $Name))
+    }
+
+    return $Value
+}
+
 function Assert-CertThumbprint {
     param([Parameter(Mandatory)][string]$CertThumbprint)
 
-    $normalized = ($CertThumbprint -replace '\s','').ToUpperInvariant()
-    if ([string]::IsNullOrWhiteSpace($normalized)) {
-        throw (New-ConnectorError -Code 'CERT_THUMBPRINT_REQUIRED' -Message 'CertThumbprint is required and cannot be empty.')
-    }
+    $required = Assert-RequiredString -Value $CertThumbprint -Name 'CertThumbprint' -Code 'CERT_THUMBPRINT_REQUIRED'
+    $normalized = ($required -replace '\s','').ToUpperInvariant()
     if ($normalized -notmatch '^[A-F0-9]{40}$') {
         throw (New-ConnectorError -Code 'CERT_THUMBPRINT_INVALID' -Message "CertThumbprint '$CertThumbprint' is not a valid SHA-1 thumbprint.")
     }
@@ -165,6 +178,7 @@ function Invoke-ConnectorPipeline {
 
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('New-ConnectorError')
+$FunctionsToExport.Add('Assert-RequiredString')
 $FunctionsToExport.Add('Assert-CertThumbprint')
 $FunctionsToExport.Add('Get-CertificateByThumbprint')
 $FunctionsToExport.Add('Test-ThumbprintFormat')

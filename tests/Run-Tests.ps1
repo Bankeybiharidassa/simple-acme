@@ -2,11 +2,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 
-$skipExitCode = 3
+$skipExitCode = 42
 $requiresDesktop = $PSVersionTable.PSEdition -eq 'Desktop'
 $requiresMajor5 = $PSVersionTable.PSVersion.Major -eq 5
 if (-not ($requiresDesktop -and $requiresMajor5)) {
-    Write-Host ('[SKIP_ENV] requires Windows PowerShell 5.1 Desktop; detected edition={0} version={1}' -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion)
+    Write-Host ('[SKIP_ENV_PS51_REQUIRED] requires Windows PowerShell 5.1 Desktop; detected edition={0} version={1}' -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion)
     exit $skipExitCode
 }
 
