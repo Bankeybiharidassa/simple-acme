@@ -202,6 +202,10 @@ FakesAssemblies/
 # Custom
 launchSettings.json
 
+# Keep generated release bundle visible to git status
+!out/
+!out/release/
+!out/release/**
 # Secret/private-key material
 *.pfx
 *.p12
