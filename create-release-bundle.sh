@@ -12,7 +12,11 @@ mkdir -p "${RELEASE_DIR}"
 rsync -a --delete \
   --exclude='.git/' \
   --exclude='out/' \
+  --exclude='create-release-bundle.sh' \
   "${ROOT_DIR}/" "${RELEASE_DIR}/"
+
+# Remove files intentionally excluded from release payload.
+rm -f "${RELEASE_DIR}/create-release-bundle.sh"
 
 # Normalize release docs that downstream consumers usually expect.
 if [[ -f "${RELEASE_DIR}/install.md" && ! -f "${RELEASE_DIR}/instructions.md" ]]; then
