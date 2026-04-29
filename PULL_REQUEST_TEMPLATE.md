@@ -2,7 +2,6 @@
 - Describe what changed and why.
 
 ## Validation
-- [ ] `dotnet build src/wacs.slnx -c Release` (or docs-only change)
 - [ ] `powershell.exe -ExecutionPolicy Bypass -File tests\Run-Tests.ps1`
 - [ ] Reviewed `PASS/SKIP/FAIL` output and explained skips if relevant
 
