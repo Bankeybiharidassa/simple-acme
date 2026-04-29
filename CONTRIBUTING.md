@@ -46,7 +46,7 @@ powershell.exe -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 Interpretation rules:
 - `[PASS]`: assertion passed.
 - `[SKIP]`: environment-dependent skip (for example no `dotnet` or no Pester function definitions).
-- `[SKIP_ENV]`: test harness is running on an unsupported runtime; `tests/Run-Tests.ps1` exits with code `3` when not on Windows PowerShell 5.1 Desktop.
+- `[SKIP_ENV_PS51_REQUIRED]`: test harness is running on an unsupported runtime; `tests/Run-Tests.ps1` exits with code `42` when not on Windows PowerShell 5.1 Desktop.
 - `[FAIL]`: test failed.
 - Any failure causes non-zero exit.
 
