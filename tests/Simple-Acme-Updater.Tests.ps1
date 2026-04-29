@@ -28,6 +28,10 @@ Describe 'Updater install-root extraction' {
         $manifest.source | Should -Be 'official-release'
         $manifest.officialChecksumVerified | Should -BeFalse
         $manifest.warning | Should -Match 'Official checksum was not available'
+        $envFile = Get-Content -Raw -Path (Join-Path $root 'certificate.env')
+        $envFile | Should -Match 'ACME_WACS_PATH='
+        $envFile | Should -Match 'ACME_WACS_SOURCE=official-release'
+        $envFile | Should -Match 'ACME_WACS_VERSION=local-fixture'
     }
 }
 

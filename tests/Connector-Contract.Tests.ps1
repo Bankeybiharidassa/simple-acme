@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 Describe 'Connector thumbprint contract and script signature drift' {
     It 'rejects invalid thumbprint format using shared validator' {
         Import-Module (Join-Path $PSScriptRoot '../Scripts/core/connector-core.psm1') -Force
-        { Assert-CertThumbprint -CertThumbprint 'not-a-thumbprint' } | Should -Throw
+        { Assert-CertThumbprint -CertThumbprint 'not-a-thumbprint' } | Should -Throw '*[CERT_THUMBPRINT_INVALID]*'
     }
 
     It 'accepts valid thumbprint and normalizes case/whitespace' {

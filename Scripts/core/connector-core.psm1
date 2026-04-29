@@ -2,15 +2,23 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 
+function New-ConnectorError {
+    param(
+        [Parameter(Mandatory)][string]$Code,
+        [Parameter(Mandatory)][string]$Message
+    )
+    return ('[{0}] {1}' -f $Code, $Message)
+}
+
 function Assert-CertThumbprint {
     param([Parameter(Mandatory)][string]$CertThumbprint)
 
     $normalized = ($CertThumbprint -replace '\s','').ToUpperInvariant()
     if ([string]::IsNullOrWhiteSpace($normalized)) {
-        throw 'CertThumbprint is required and cannot be empty.'
+        throw (New-ConnectorError -Code 'CERT_THUMBPRINT_REQUIRED' -Message 'CertThumbprint is required and cannot be empty.')
     }
     if ($normalized -notmatch '^[A-F0-9]{40}$') {
-        throw "CertThumbprint '$CertThumbprint' is not a valid SHA-1 thumbprint."
+        throw (New-ConnectorError -Code 'CERT_THUMBPRINT_INVALID' -Message "CertThumbprint '$CertThumbprint' is not a valid SHA-1 thumbprint.")
     }
     return $normalized
 }
@@ -156,6 +164,7 @@ function Invoke-ConnectorPipeline {
 }
 
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
+$FunctionsToExport.Add('New-ConnectorError')
 $FunctionsToExport.Add('Assert-CertThumbprint')
 $FunctionsToExport.Add('Get-CertificateByThumbprint')
 $FunctionsToExport.Add('Test-ThumbprintFormat')
