@@ -2,157 +2,23 @@
   "critical": [],
   "high": [
     {
-      "type": "ps7-runtime-risk",
-      "file": "build/compile-local.ps1",
-      "pattern": "\\bpwsh\\b",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "build/compile-local.ps1",
-      "pattern": "\\bpwsh\\b",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "build/compile-local.ps1",
-      "pattern": "\\bpwsh\\b",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "build/compile-local.ps1",
-      "pattern": "\\bpwsh\\b",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "certificate-orchestrator.ps1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "certificate-orchestrator.ps1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "secret-leak-risk",
-      "file": "certificate-setup.ps1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "core/Simple-Acme-Reconciler.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "core/Simple-Acme-Reconciler.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "core/Simple-Acme-Reconciler.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "core/Simple-Acme-Reconciler.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "core/Simple-Acme-Reconciler.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "setup/Form-Runner.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "setup/Form-Runner.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "setup/Form-Runner.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "setup/Form-Runner.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "setup/Form-Runner.psm1",
-      "pattern": "\\?\\s*:",
-      "fixStatus": "open"
-    },
-    {
-      "type": "secret-leak-risk",
-      "file": "setup/Form-Runner.psm1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "ps7-runtime-risk",
-      "file": "tests/Simple-Acme-Preflight.Tests.ps1",
-      "pattern": "\\bpwsh\\b",
+      "type": "environment-blocker",
+      "file": "tests/Run-Tests.ps1",
+      "detail": "Windows PowerShell 5.1 runtime unavailable in container",
       "fixStatus": "open"
     }
   ],
   "medium": [
     {
-      "type": "placeholder-marker",
-      "file": "Scripts/connectors/cert2kemp.ps1",
+      "type": "validation-pending",
+      "file": "certificate-update-simple-acme.ps1",
+      "detail": "DryRun and overwrite/backup flow need Windows execution verification",
       "fixStatus": "open"
     },
     {
-      "type": "placeholder-marker",
-      "file": "build/release.ps1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "core/Tui-Engine.psm1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "setup/Device-Schemas.ps1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "setup/Form-Runner.psm1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "tests/Form-Runner.Tests.ps1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "tests/Setup-TuiPolicy.Tests.ps1",
-      "fixStatus": "open"
-    },
-    {
-      "type": "placeholder-marker",
-      "file": "tests/Simple-Acme-Reconciler.Tests.ps1",
+      "type": "validation-pending",
+      "file": "Scripts/cert2rds.ps1",
+      "detail": "RDS binding behavior with {CertThumbprint} requires Windows validation",
       "fixStatus": "open"
     }
   ],
@@ -161,12 +27,16 @@
     {
       "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\Run-Tests.ps1",
       "result": "failed",
-      "reason": "powershell.exe not available in this Linux CI environment"
+      "reason": "powershell.exe missing"
+    },
+    {
+      "command": "rg -n \"\\?\\s*:|\\?\\?|ForEach-Object\\s+-Parallel|Start-ThreadJob|ConvertFrom-Json\\s+-AsHashtable\" certificate-*.ps1 core setup connectors",
+      "result": "passed",
+      "reason": "no confirmed PS7-only runtime syntax hits after manual triage"
     }
   ],
   "filesChanged": [],
   "remainingRisks": [
-    "Windows PowerShell 5.1 parser/import execution could not be run in this environment.",
-    "End-to-end WACS runtime verification requires Windows host with wacs.exe."
+    "Windows PS5.1 parse/import and functional execution are pending external validation."
   ]
 }

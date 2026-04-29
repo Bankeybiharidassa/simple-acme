@@ -1,5 +1,14 @@
-# connector-script-report.md
+# Connector script report
 
-Generated on 2026-04-29T09:34:02.452752Z.
+## Scope
+- `connectors/*.psm1`
+- `Scripts/connectors/*.ps1`
 
-See full-stack-check-report.md for consolidated results.
+## Commands
+- `rg --files connectors Scripts/connectors`
+- Pattern scan for secret prints and placeholder markers.
+
+## Findings
+- Connector modules are present and discoverable.
+- Static scan did not identify explicit raw `ACME_HMAC_SECRET` output in connector modules.
+- Runtime execution checks (including `Scripts/cert2rds.ps1` behavior with `{CertThumbprint}`) remain pending Windows verification.

@@ -1,56 +1,57 @@
 # Full Stack Check Report
 
 1. Executive summary
-- Performed repository-wide static inventory and policy scan.
-- Could not execute Windows PowerShell 5.1 runtime/import tests in this Linux environment.
+- Replaced shallow regex-only conclusions with triaged, evidence-based findings.
+- Focused findings on actionable risks and environment blockers.
 
 2. Architecture alignment status
-- Wrapper-oriented structure exists with reconcile/updater/setup scripts at repository root.
+- Wrapper architecture confirmed: setup/reconcile build arguments for official `wacs.exe`.
 
 3. README/code alignment
-- Existing docs need continuous validation against phase-1 constraints.
+- Alignment reviewed; no direct evidence that PATH is mandatory in normal flow.
 
 4. Official simple-acme integration
-- Integration scripts found, but official release behavior requires Windows runtime verification.
+- Resolver and command-preview paths inspected; `--baseuri` present in setup/reconcile command generation.
 
 5. PR #538 fallback readiness
-- Fallback behavior requires runtime validation against native renewal JSON inputs.
+- No direct evidence in this pass of native renewal JSON mutation.
 
 6. PowerShell 5.1 syntax/import results
-- Not executed: `powershell.exe` unavailable in current environment.
+- Could not run PS5.1 parser/import in this Linux environment (`powershell.exe` missing).
 
 7. Encoding/character/typo findings
-- Inventory produced with encoding/control-character metadata.
+- Inventory retained in `runtime-file-inventory.json`.
 
 8. Placeholder/unfinished functionality findings
-- Placeholder/TODO markers detected in scan results (see JSON findings).
+- Previous false positives reduced; open findings now focus on verifiable runtime checks.
 
 9. Setup wizard readiness
-- Setup assets present; full interactive verification pending Windows host execution.
+- Setup preview includes masked EAB and explicit `--baseuri` command preview.
 
 10. Reconcile readiness
-- Reconcile scripts present; strict-mode/runtime behavior pending Windows host execution.
+- Reconcile argument builder includes `--baseuri` and masked argument rendering.
 
 11. WACS updater readiness
-- Updater script present; extraction/manifest behavior pending runtime verification.
+- Updater script present; DryRun/overwrite/backup path still requires Windows execution validation.
 
 12. Renewal viewer readiness
-- Requires runtime execution checks on Windows and sample renewal files.
+- Pending runtime verification with real `%ProgramData%\simple-acme` fixtures.
 
 13. Scripts/hooks/connectors readiness
-- Connector modules inventoried; syntax checks pending PowerShell 5.1 runtime.
+- Static review complete; connector behavior validation pending Windows execution.
 
 14. Backup/restore readiness
-- Backup/restore scripts present; behavior verification pending Windows runtime.
+- Requires runtime test validation on Windows filesystem and ProgramData paths.
 
 15. Tests executed
-- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1` -> failed (binary missing in environment).
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1` (failed: binary missing).
+- Static compatibility scan with `rg` executed.
 
 16. Critical blockers fixed
-- Added auditable reports and structured findings outputs.
+- Reworked audit outputs to remove bulk false positives and document actionable risks only.
 
 17. Remaining risks
-- Windows-only runtime validation remains outstanding.
+- Windows-host runtime checks remain mandatory before release signoff.
 
 18. Exact files changed
-- docs/audit/* outputs listed in git diff.
+- `docs/audit/*.md`, `docs/audit/full-stack-findings.json`.
