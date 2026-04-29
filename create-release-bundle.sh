@@ -5,43 +5,106 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${ROOT_DIR}/out"
 RELEASE_DIR="${OUT_DIR}/release"
 
-mkdir -p "${RELEASE_DIR}"
+# Allowed runtime file extensions.
+ALLOWED_EXTENSIONS=("ps1" "psm1" "psd1" "md" "json")
 
-# Copy repository layout while preventing recursive self-copy and excluding git metadata.
-rsync -a --delete \
-  --exclude='.git/' \
-  --exclude='.git*' \
-  --exclude='.github/' \
-  --exclude='.editorconfig' \
-  --exclude='.eslintrc.cjs' \
-  --exclude='out/' \
-  --exclude='create-release-bundle.sh' \
-  "${ROOT_DIR}/" "${RELEASE_DIR}/"
+# Paths to copy into release (source_dir:target_subdir).
+declare -a COPY_MAP=(
+  "core:core"
+  "connectors:connectors"
+  "Scripts:scripts"
+  "scripts:scripts"
+)
 
-# Remove development-only assets from release payload.
-rm -f "${RELEASE_DIR}/create-release-bundle.sh"
-rm -rf "${RELEASE_DIR}/tests"
-rm -rf "${RELEASE_DIR}/.github"
-rm -f "${RELEASE_DIR}/.editorconfig" "${RELEASE_DIR}/.eslintrc.cjs"
-rm -f "${RELEASE_DIR}/.gitignore" "${RELEASE_DIR}/.gitmodules"
+# Reset output directory to ensure deterministic builds.
+rm -rf "${RELEASE_DIR}"
+mkdir -p "${RELEASE_DIR}/core" "${RELEASE_DIR}/connectors" "${RELEASE_DIR}/scripts"
 
-# Promote deploy scripts into the top-level Scripts folder for release consumers.
-mkdir -p "${RELEASE_DIR}/Scripts"
-if [[ -d "${RELEASE_DIR}/dist/Scripts" ]]; then
-  rsync -a "${RELEASE_DIR}/dist/Scripts/" "${RELEASE_DIR}/Scripts/"
-  rm -rf "${RELEASE_DIR}/dist/Scripts"
-fi
+copy_allowlisted_files() {
+  local src_dir="$1"
+  local dest_dir="$2"
 
-# Normalize release docs that downstream consumers usually expect.
-if [[ -f "${RELEASE_DIR}/install.md" && ! -f "${RELEASE_DIR}/instructions.md" ]]; then
-  cp "${RELEASE_DIR}/install.md" "${RELEASE_DIR}/instructions.md"
-fi
+  [[ -d "${src_dir}" ]] || return 0
 
-for required in "README.md" "LICENSE" "instructions.md"; do
-  if [[ ! -f "${RELEASE_DIR}/${required}" ]]; then
-    echo "Missing required release file: ${required}" >&2
-    exit 1
+  while IFS= read -r rel_path; do
+    mkdir -p "${dest_dir}/$(dirname "${rel_path}")"
+    cp "${src_dir}/${rel_path}" "${dest_dir}/${rel_path}"
+  done < <(
+    find "${src_dir}" -type f \
+      \( -name "*.ps1" -o -name "*.psm1" -o -name "*.psd1" -o -name "*.md" -o -name "*.json" \) \
+      -not -path "*/tests/*" \
+      -not -path "*/build/*" \
+      -not -path "*/dist/*" \
+      -not -path "*/docs/*" \
+      -not -path "*/setup/*" \
+      -not -path "*/.git/*" \
+      -not -name ".git*" \
+      -not -name ".editorconfig" \
+      -not -name ".eslintrc*" \
+      | sed "s#^${src_dir}/##" \
+      | LC_ALL=C sort
+  )
+}
+
+for mapping in "${COPY_MAP[@]}"; do
+  src="${mapping%%:*}"
+  dst="${mapping##*:}"
+  copy_allowlisted_files "${ROOT_DIR}/${src}" "${RELEASE_DIR}/${dst}"
+done
+
+# Copy explicitly allowed root-level files only when present.
+for root_file in "README.md" "LICENSE" "config.json"; do
+  if [[ -f "${ROOT_DIR}/${root_file}" ]]; then
+    cp "${ROOT_DIR}/${root_file}" "${RELEASE_DIR}/${root_file}"
   fi
 done
 
+# Validation 1: ensure no forbidden file types are present.
+forbidden_files="$(find "${RELEASE_DIR}" -type f \( -name "*.cs" -o -name "*.yml" -o -name "*.yaml" -o -name "*.dll" -o -name "*.exe" \))"
+if [[ -n "${forbidden_files}" ]]; then
+  echo "ERROR: Forbidden file types found in release bundle:" >&2
+  printf '%s\n' "${forbidden_files}" >&2
+  exit 1
+fi
+
+# Validation 2: ensure every file extension is explicitly allowlisted.
+non_allowlisted="$(find "${RELEASE_DIR}" -type f | while IFS= read -r file; do
+  filename="$(basename "${file}")"
+  case "${filename}" in
+    LICENSE)
+      continue
+      ;;
+  esac
+
+  ext="${filename##*.}"
+  if [[ "${filename}" == "${ext}" ]]; then
+    echo "${file}"
+    continue
+  fi
+
+  allowed=false
+  for allowed_ext in "${ALLOWED_EXTENSIONS[@]}"; do
+    if [[ "${ext}" == "${allowed_ext}" ]]; then
+      allowed=true
+      break
+    fi
+  done
+
+  if [[ "${allowed}" == false ]]; then
+    echo "${file}"
+  fi
+done)"
+
+if [[ -n "${non_allowlisted}" ]]; then
+  echo "ERROR: Non-allowlisted files found in release bundle:" >&2
+  printf '%s\n' "${non_allowlisted}" >&2
+  exit 1
+fi
+
+# Reporting.
 echo "Release bundle created at ${RELEASE_DIR}"
+echo "Included files:"
+find "${RELEASE_DIR}" -type f | LC_ALL=C sort
+
+echo "Total file count: $(find "${RELEASE_DIR}" -type f | wc -l | tr -d ' ')"
+echo "Total size: $(du -sh "${RELEASE_DIR}" | cut -f1)"
