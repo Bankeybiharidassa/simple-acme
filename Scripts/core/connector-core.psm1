@@ -1,6 +1,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+
+function Assert-CertThumbprint {
+    param([Parameter(Mandatory)][string]$CertThumbprint)
+
+    $normalized = ($CertThumbprint -replace '\s','').ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        throw 'CertThumbprint is required and cannot be empty.'
+    }
+    if ($normalized -notmatch '^[A-F0-9]{40}$') {
+        throw "CertThumbprint '$CertThumbprint' is not a valid SHA-1 thumbprint."
+    }
+    return $normalized
+}
+
 function Get-CertificateByThumbprint {
     param([Parameter(Mandatory)][string]$Thumbprint)
 
@@ -118,11 +132,9 @@ function Invoke-ConnectorPipeline {
         [object[]]$Endpoints = @([pscustomobject]@{ host = $env:COMPUTERNAME; method = 'local' })
     )
 
-    if (-not (Test-ThumbprintFormat -Thumbprint $CertThumbprint)) {
-        throw "CertThumbprint '$CertThumbprint' is not a valid SHA-1 thumbprint."
-    }
+    $normalizedThumbprint = Assert-CertThumbprint -CertThumbprint $CertThumbprint
 
-    $found = Get-CertificateByThumbprint -Thumbprint $CertThumbprint
+    $found = Get-CertificateByThumbprint -Thumbprint $normalizedThumbprint
     if ($null -eq $found.Certificate) { throw 'Certificate lookup returned null.' }
     $normalized = Ensure-CertificateInMyStore -Certificate $found.Certificate -StorePath $found.StorePath
 
@@ -144,6 +156,7 @@ function Invoke-ConnectorPipeline {
 }
 
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
+$FunctionsToExport.Add('Assert-CertThumbprint')
 $FunctionsToExport.Add('Get-CertificateByThumbprint')
 $FunctionsToExport.Add('Test-ThumbprintFormat')
 $FunctionsToExport.Add('Ensure-CertificateInMyStore')

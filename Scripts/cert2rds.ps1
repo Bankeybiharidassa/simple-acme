@@ -7,6 +7,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'core/connector-core.psm1') -Force
 
 function Normalize-Thumbprint([string]$Value) {
     return (($Value -replace '\s','').ToUpperInvariant())
@@ -32,7 +33,7 @@ try {
         throw "Certificate with thumbprint '$CertThumbprint' not found in LocalMachine\\My or LocalMachine\\WebHosting."
     }
 
-    $normalized = Normalize-Thumbprint $CertThumbprint
+    $normalized = Assert-CertThumbprint -CertThumbprint $CertThumbprint
     if ($found.Store -eq 'Cert:\LocalMachine\WebHosting') {
         Write-Host "Certificate found in WebHosting store, copying to LocalMachine\\My."
         $dest = Get-ChildItem -Path 'Cert:\LocalMachine\My' -ErrorAction SilentlyContinue | Where-Object {
