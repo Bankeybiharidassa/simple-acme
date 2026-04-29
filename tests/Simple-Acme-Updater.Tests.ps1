@@ -75,4 +75,36 @@ Describe 'Updater transactional behavior' {
         (Get-Content -Raw -Path (Join-Path $root 'wacs.exe')) | Should -Be 'old-wacs'
         (Test-Path (Join-Path $root 'settings_default.json')) | Should -BeFalse
     }
+
+    It 'writes consistent metadata and env keys on success' {
+        $root = Join-Path $TestDrive 'success-root'
+        New-Item -ItemType Directory -Path $root | Out-Null
+        Set-Content -Path (Join-Path $root 'wacs.exe') -Value 'old-wacs'
+
+        $fixture = Join-Path $TestDrive 'success-fixture'
+        New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+        Set-Content -Path (Join-Path $fixture 'wacs.exe') -Value 'new-wacs'
+        Set-Content -Path (Join-Path $fixture 'settings_default.json') -Value '{"ok":true}'
+        $zip = Join-Path $TestDrive 'success-official.zip'
+        Compress-Archive -Path (Join-Path $fixture '*') -DestinationPath $zip -Force
+
+        & (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path 'certificate-update-simple-acme.ps1') -RootPath $root -ReleaseZipPath $zip | Out-Null
+
+        $manifestPath = Join-Path $root 'simple-acme-release-manifest.json'
+        $manifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json
+        $manifest.source | Should -Be 'official-release'
+        $manifest.version | Should -Be 'local-fixture'
+        $manifest.sha256 | Should -Not -BeNullOrEmpty
+
+        $envFile = Get-Content -Raw -Path (Join-Path $root 'certificate.env')
+        $envFile | Should -Match 'ACME_WACS_SOURCE=official-release'
+        $envFile | Should -Match 'ACME_WACS_VERSION=local-fixture'
+        $envFile | Should -Match 'ACME_WACS_AUTO_UPDATE=0'
+        $envFile | Should -Match 'ACME_WACS_RELEASE_ZIP='
+        $envFile | Should -Match 'ACME_WACS_RELEASE_SHA256='
+
+        $backupDir = @(Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -like 'backup-update-*' } | Select-Object -First 1)
+        $backupDir.Count | Should -Be 1
+        (Test-Path (Join-Path $backupDir[0].FullName '_backup-index.txt')) | Should -BeTrue
+    }
 }
