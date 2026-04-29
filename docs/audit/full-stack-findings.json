@@ -1,0 +1,42 @@
+{
+  "critical": [],
+  "high": [
+    {
+      "type": "environment-blocker",
+      "file": "tests/Run-Tests.ps1",
+      "detail": "Windows PowerShell 5.1 runtime unavailable in container",
+      "fixStatus": "open"
+    }
+  ],
+  "medium": [
+    {
+      "type": "validation-pending",
+      "file": "certificate-update-simple-acme.ps1",
+      "detail": "DryRun and overwrite/backup flow need Windows execution verification",
+      "fixStatus": "open"
+    },
+    {
+      "type": "validation-pending",
+      "file": "Scripts/cert2rds.ps1",
+      "detail": "RDS binding behavior with {CertThumbprint} requires Windows validation",
+      "fixStatus": "open"
+    }
+  ],
+  "low": [],
+  "tests": [
+    {
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\Run-Tests.ps1",
+      "result": "failed",
+      "reason": "powershell.exe missing"
+    },
+    {
+      "command": "rg -n \"\\?\\s*:|\\?\\?|ForEach-Object\\s+-Parallel|Start-ThreadJob|ConvertFrom-Json\\s+-AsHashtable\" certificate-*.ps1 core setup connectors",
+      "result": "passed",
+      "reason": "no confirmed PS7-only runtime syntax hits after manual triage"
+    }
+  ],
+  "filesChanged": [],
+  "remainingRisks": [
+    "Windows PS5.1 parse/import and functional execution are pending external validation."
+  ]
+}

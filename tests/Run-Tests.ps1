@@ -56,7 +56,7 @@ function Invoke-CompileCheck {
 Invoke-ScriptAnalyzerCheck
 Invoke-CompileCheck
 
-$testFiles = @(Get-ChildItem -Path $PSScriptRoot -Filter '*.Tests.ps1' | Sort-Object Name)
+$testFiles = @(Get-ChildItem -Path $PSScriptRoot -File | Where-Object { $_.Name -like '*.Tests.ps1' -or $_.Name -like 'Test-*.ps1' } | Sort-Object Name)
 $pass = 0
 $fail = 0
 $skip = 0
