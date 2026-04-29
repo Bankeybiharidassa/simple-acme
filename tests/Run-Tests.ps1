@@ -2,6 +2,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 
+$skipExitCode = 3
+$requiresDesktop = $PSVersionTable.PSEdition -eq 'Desktop'
+$requiresMajor5 = $PSVersionTable.PSVersion.Major -eq 5
+if (-not ($requiresDesktop -and $requiresMajor5)) {
+    Write-Host ('[SKIP_ENV] requires Windows PowerShell 5.1 Desktop; detected edition={0} version={1}' -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion)
+    exit $skipExitCode
+}
+
+
 function Invoke-ScriptAnalyzerCheck {
     Write-Host '[INFO] ScriptAnalyzer check: linting PowerShell scripts.'
 
