@@ -200,7 +200,6 @@ FakesAssemblies/
 .idea/
 
 # Custom
-/out/*
 launchSettings.json
 
 # Secret/private-key material
