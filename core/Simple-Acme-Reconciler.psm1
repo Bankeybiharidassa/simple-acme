@@ -905,7 +905,7 @@ function Invoke-WacsIssue {
     Add-Content -LiteralPath $wrapperLog -Value ('env_path=' + [string]([Environment]::GetEnvironmentVariable('CERTIFICATE_ENV_FILE'))) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('wacs_path=' + [string](Resolve-WacsExecutable -EnvValues $EnvValues)) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('csr_selected=' + [string](Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec')) -Encoding UTF8
-    Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + (if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + $(if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
 
     $lastError = $null
     for ($idx = 0; $idx -lt (Get-SafeCount $csrAlgorithms); $idx++) {
