@@ -27,7 +27,7 @@ function Assert-NoForbiddenConstructs {
         [pscustomobject]@{ Pattern = ('ConvertFrom-Json\s+-As' + 'Hashtable'); AllowIn = @() },
         [pscustomobject]@{ Pattern = ('ForEach-Object\s+-Par' + 'allel'); AllowIn = @() },
         [pscustomobject]@{ Pattern = ('Start-' + 'ThreadJob'); AllowIn = @() },
-        [pscustomobject]@{ Pattern = ('\b' + 'pw' + 'sh' + '\b'); AllowIn = @('build/compile-local.ps1') },
+        [pscustomobject]@{ Pattern = ('\b' + 'pw' + 'sh' + '\b'); AllowIn = @() },
         [pscustomobject]@{ Pattern = '\?\?'; AllowIn = @() }
     )
 

@@ -41,29 +41,7 @@ function Invoke-ScriptAnalyzerCheck {
     }
 }
 
-function Invoke-CompileCheck {
-    Write-Host '[INFO] Compile check: validating .NET projects before running tests.'
-
-    $dotnet = Get-Command -Name 'dotnet' -ErrorAction SilentlyContinue
-    if (-not $dotnet) {
-        Write-Host '[SKIP] Compile check :: dotnet SDK is unavailable in this environment.'
-        return
-    }
-
-    $solution = Join-Path $PSScriptRoot '..' 'src/wacs.slnx'
-    if (-not (Test-Path -LiteralPath $solution)) {
-        Write-Host "[SKIP] Compile check :: solution file not found at $solution"
-        return
-    }
-
-    & $dotnet.Path build $solution --nologo --verbosity minimal
-    if ($LASTEXITCODE -ne 0) {
-        throw "Compile check failed with exit code $LASTEXITCODE"
-    }
-}
-
 Invoke-ScriptAnalyzerCheck
-Invoke-CompileCheck
 
 $testFiles = @(Get-ChildItem -Path $PSScriptRoot -File | Where-Object { $_.Name -like '*.Tests.ps1' -or $_.Name -like 'Test-*.ps1' } | Sort-Object Name)
 $pass = 0

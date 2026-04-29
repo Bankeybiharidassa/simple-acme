@@ -1,8 +1,6 @@
 # Contributing
 
-This repository contains two main contribution surfaces:
-- .NET `simple-acme` application code (`src/`)
-- PowerShell orchestrator/connector code (`*.ps1`, `*.psm1`)
+This repository is PowerShell-first and focuses on orchestrator/connector code (`*.ps1`, `*.psm1`).
 
 Use this guide for local build/test, connector contributions, and doc hygiene.
 
@@ -11,31 +9,10 @@ Use this guide for local build/test, connector contributions, and doc hygiene.
 ## Prerequisites
 
 - Windows PowerShell 5.1 for orchestrator and connector runtime behavior.
-- .NET SDK 10.x for compiling `src/wacs.slnx`.
-- Optional: `pwsh` for `build/compile-local.ps1` SDK bootstrap.
 
 ---
 
 ## Build and test
-
-### Compile
-
-```bash
-dotnet restore src/wacs.slnx
-dotnet build src/wacs.slnx -c Release
-```
-
-Or auto-bootstrap SDK when missing:
-
-```powershell
-pwsh -NoLogo -NoProfile -File build/compile-local.ps1
-```
-
-Optional publish check (main executable):
-
-```powershell
-pwsh -NoLogo -NoProfile -File build/compile-local.ps1 -PublishMain -Runtime win-x64
-```
 
 ### Test runner
 
@@ -45,7 +22,7 @@ powershell.exe -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 
 Interpretation rules:
 - `[PASS]`: assertion passed.
-- `[SKIP]`: environment-dependent skip (for example no `dotnet` or no Pester function definitions).
+- `[SKIP]`: environment-dependent skip (for example no Pester function definitions).
 - `[SKIP_ENV_PS51_REQUIRED]`: test harness is running on an unsupported runtime; `tests/Run-Tests.ps1` exits with code `42` when not on Windows PowerShell 5.1 Desktop.
 - `[FAIL]`: test failed.
 - Any failure causes non-zero exit.
@@ -141,7 +118,6 @@ For time-sensitive statements (fork status, feature parity, dated comparisons), 
 
 ## PR checklist
 
-- [ ] Build succeeds (`dotnet build src/wacs.slnx -c Release`) or change is docs-only.
 - [ ] `tests\Run-Tests.ps1` run and results reviewed (`PASS/SKIP/FAIL`).
 - [ ] PowerShell 5.1 compatibility preserved for orchestrator/connector scripts.
 - [ ] Connector exports follow repository naming pattern.
