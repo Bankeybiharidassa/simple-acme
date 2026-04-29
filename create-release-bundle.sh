@@ -53,11 +53,16 @@ for mapping in "${COPY_MAP[@]}"; do
 done
 
 # Copy explicitly allowed root-level files only when present.
-for root_file in "README.md" "LICENSE" "config.json"; do
+for root_file in "README.md" "LICENSE" "config.json" "instructions.md" "install.md"; do
   if [[ -f "${ROOT_DIR}/${root_file}" ]]; then
     cp "${ROOT_DIR}/${root_file}" "${RELEASE_DIR}/${root_file}"
   fi
 done
+
+# Ensure instructions.md is present for release consumers when install.md exists.
+if [[ -f "${RELEASE_DIR}/install.md" && ! -f "${RELEASE_DIR}/instructions.md" ]]; then
+  cp "${RELEASE_DIR}/install.md" "${RELEASE_DIR}/instructions.md"
+fi
 
 # Validation 1: ensure no forbidden file types are present.
 forbidden_files="$(find "${RELEASE_DIR}" -type f \( -name "*.cs" -o -name "*.yml" -o -name "*.yaml" -o -name "*.dll" -o -name "*.exe" \))"
