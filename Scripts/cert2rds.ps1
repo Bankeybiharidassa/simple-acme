@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory=$true, Position=0)]
     [ValidateNotNullOrEmpty()]
-    [string]$CertThumbprint
+    [string]$CertThumbprint,
+    [string]$ConfigDir = $env:CERTIFICATE_CONFIG_DIR,
+    [string]$RenewalId = ''
 )
 
 Set-StrictMode -Version Latest

@@ -127,6 +127,7 @@ Dry run:
 ```
 
 Update writes `<root>\simple-acme-release-manifest.json` and updates `ACME_WACS_*` keys in `<root>\certificate.env`.
+When mutations occur, updater creates a deterministic backup folder (`backup-update-<version>-<sha256>`) before overwrite and rolls back file swaps if any mutation-phase step fails.
 
 Do not silently replace WACS unless `ACME_WACS_AUTO_UPDATE=1` or the operator confirms.
 

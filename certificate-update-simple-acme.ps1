@@ -102,19 +102,23 @@ if ($DryRun) {
 }
 
 $staging = Join-Path $env:TEMP ('simple-acme-stage-' + [guid]::NewGuid().ToString('N'))
-$backupRoot = Join-Path $root ("backup-update-$ts")
-$backupManifestPath = Join-Path $backupRoot '_backup-index.txt'
 $backedUpRelativePaths = New-Object System.Collections.Generic.List[string]
 $logLines = New-Object System.Collections.Generic.List[string]
 $knownOfficialPatterns = @('wacs.exe','settings_default.json','*.dll','Scripts/*')
 $createdRelativePaths = New-Object System.Collections.Generic.List[string]
+$backupRoot = $null
+$backupManifestPath = $null
 try {
     # phase: validate
     if (-not (Test-Path -LiteralPath $root)) { throw "Root path not found: $root" }
+    if (-not (Test-Path -LiteralPath $zipPath)) { throw "ZIP not found: $zipPath" }
 
     # phase: stage
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     Expand-Archive -Path $zipPath -DestinationPath $staging -Force
+    $backupSeed = ('{0}-{1}' -f $rel.Version, $checksum) -replace '[^A-Za-z0-9._-]','_'
+    $backupRoot = Join-Path $root ("backup-update-$backupSeed")
+    $backupManifestPath = Join-Path $backupRoot '_backup-index.txt'
 
     # phase: swap
     $stageFiles = @(Get-ChildItem -Path $staging -Recurse -File)
@@ -207,12 +211,14 @@ catch {
             Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
         }
     }
-    foreach ($relativePath in ($backedUpRelativePaths | Sort-Object -Descending)) {
-        $backupPath = Join-Path $backupRoot $relativePath
-        $destPath = Join-Path $root $relativePath
-        if (Test-Path -LiteralPath $backupPath) {
-            New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destPath)) -Force | Out-Null
-            Copy-Item -LiteralPath $backupPath -Destination $destPath -Force
+    if ($backupRoot) {
+        foreach ($relativePath in ($backedUpRelativePaths | Sort-Object -Descending)) {
+            $backupPath = Join-Path $backupRoot $relativePath
+            $destPath = Join-Path $root $relativePath
+            if (Test-Path -LiteralPath $backupPath) {
+                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destPath)) -Force | Out-Null
+                Copy-Item -LiteralPath $backupPath -Destination $destPath -Force
+            }
         }
     }
     throw

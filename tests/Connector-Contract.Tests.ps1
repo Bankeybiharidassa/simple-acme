@@ -32,4 +32,13 @@ Describe 'Connector thumbprint contract and script signature drift' {
         ($rootAttrs -join ' ') | Should -Match 'ValidateNotNullOrEmpty'
         ($connectorAttrs -join ' ') | Should -Match 'ValidateNotNullOrEmpty'
     }
+
+    It 'keeps duplicate cert2rds script parameter names aligned' {
+        $rootAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../Scripts/cert2rds.ps1'), [ref]$null, [ref]$null)
+        $connectorAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../Scripts/connectors/cert2rds.ps1'), [ref]$null, [ref]$null)
+
+        $rootParams = @($rootAst.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        $connectorParams = @($connectorAst.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        $rootParams | Should -Be $connectorParams
+    }
 }
