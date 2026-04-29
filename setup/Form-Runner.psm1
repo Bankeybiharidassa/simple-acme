@@ -64,6 +64,8 @@ function Get-SafeDefaultPipeline {
         ACME_STORE_PLUGIN = 'certificatestore'
         ACME_WACS_RETRY_ATTEMPTS = '3'
         ACME_WACS_RETRY_DELAY_SECONDS = '2'
+        ACME_WACS_SOURCE = 'official-release'
+        ACME_WACS_AUTO_UPDATE = '0'
     }
 }
 
@@ -1311,7 +1313,11 @@ function Invoke-AcmeForm {
         'ACME_SCRIPT_PARAMETERS',
         'ACME_VALIDATION_MODE',
         'ACME_WACS_RETRY_ATTEMPTS',
-        'ACME_WACS_RETRY_DELAY_SECONDS'
+        'ACME_WACS_RETRY_DELAY_SECONDS',
+        'ACME_WACS_SOURCE',
+        'ACME_WACS_AUTO_UPDATE',
+        'ACME_WACS_RELEASE_ZIP',
+        'ACME_WACS_RELEASE_SHA256'
     )) {
         if ($pipelineTemplate.ContainsKey($pipelineKey)) {
             $values[$pipelineKey] = [string]$pipelineTemplate[$pipelineKey]

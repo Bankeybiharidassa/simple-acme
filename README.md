@@ -1,4 +1,4 @@
-# Certificate Hybrid Certificate Lifecycle Orchestrator
+# Certificate Helper for Official simple-acme Releases
 
 Certificate adds policy-based connector orchestration around `simple-acme` certificate issuance.
 
@@ -16,41 +16,14 @@ Certificate adds policy-based connector orchestration around `simple-acme` certi
 - Required Windows roles/features depend on configured connectors (IIS, ADFS, RD Gateway, etc.).
 
 ### Build/development
-- .NET SDK 10.x for compiling `src/wacs.slnx`.
-- `pwsh` optional (used by `build/compile-local.ps1` to bootstrap SDK when missing).
-- Internet access optional unless SDK bootstrap is needed.
+- No local C# simple-acme source build is required; this helper consumes official simple-acme releases.
+- Windows PowerShell 5.1 is sufficient for wrapper setup/orchestration scripts.
 
 ---
 
 ## Build and compile
 
-### Option A: SDK already installed
-
-```bash
-dotnet --info
-dotnet restore src/wacs.slnx
-dotnet build src/wacs.slnx -c Release
-```
-
-### Option B: auto-bootstrap local SDK
-
-```powershell
-pwsh -NoLogo -NoProfile -File build/compile-local.ps1
-```
-
-What `build/compile-local.ps1` does:
-- Reuses existing `dotnet` when available.
-- Otherwise downloads `https://dot.net/v1/dotnet-install.ps1` and installs SDK channel `10.0` into `.\.dotnet`.
-- Builds `src/wacs.slnx`.
-- Optional `-PublishMain` publishes `src/main/wacs.csproj` for a selected runtime (default `win-x64`).
-
-Publish example:
-
-```powershell
-pwsh -NoLogo -NoProfile -File build/compile-local.ps1 -PublishMain -Runtime win-x64
-```
-
-> Visual Studio 2022 (17.x) does not target `net10.0`. Use CLI builds with .NET 10 SDK.
+This repository no longer builds a local `src/` simple-acme fork. Install official simple-acme ZIP releases into your install root and use the wrapper scripts from this repo.
 
 ---
 
@@ -214,6 +187,29 @@ Each file should contain a certificate event matching `Assert-CertificateEvent` 
 ```
 
 ---
+
+## Official release install-root architecture
+
+This repository is now positioned as a **helper/wrapper** project. It does not maintain a long-lived fork as the primary ACME engine.
+
+Expected runtime layout (example):
+
+```text
+Install root: C:\certificaat
+Official simple-acme executable: C:\certificaat\wacs.exe
+Official simple-acme scripts: C:\certificaat\Scripts\
+```
+
+The helper must resolve WACS as `<root>\wacs.exe` (or `ACME_WACS_PATH`) and should not require a nested `tools\simple-acme` or `vendor` subdirectory.
+
+Updater rules:
+- Download official simple-acme ZIP releases.
+- Verify SHA256/checksum when official checksum data is available.
+- Extract/update official files directly into install root.
+- Update official `<root>\Scripts` content while preserving custom connector scripts that are not in the official ZIP.
+- Detect conflicts for custom-modified files and ask before overwrite.
+- Record version/checksum/source in `certificate.env` (`ACME_WACS_*`).
+- Never silently replace ACME engine unless `ACME_WACS_AUTO_UPDATE=1`.
 
 ## Integration with simple-acme
 
