@@ -219,3 +219,7 @@ You will be prompted for the passphrase. On a new machine:
 - Run `.\certificate-setup.ps1` after restore to verify connector connectivity.
 
 > **Important:** If the backup predates this version, `CERTIFICATE_API_KEY` may be absent. In that case, a new key is auto-generated and stored in certificate.env (value is not printed) — update any callers that use the old key.
+
+
+## DPAPI scope for runtime secrets
+Use machine-level DPAPI (`DataProtectionScope.LocalMachine`) for runtime/helper secret storage so scheduled tasks, services, and SYSTEM can decrypt on the same host. Keep secret files ACL-restricted to `SYSTEM` and `Administrators` only.

@@ -106,7 +106,7 @@ function Unprotect-DpapiValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CiphertextBase64,
-        [ValidateSet('CurrentUser', 'LocalMachine')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
     $entropy = [System.Text.Encoding]::UTF8.GetBytes('simple-acme-sophos-connector-v1')
@@ -128,7 +128,8 @@ function Resolve-EncryptedPassword {
         $payload = $raw | ConvertFrom-Json
         if (-not $payload.ciphertext) { throw 'Password JSON must contain ciphertext.' }
         $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
-        return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope $scope
+        if ($scope -ne 'LocalMachine') { throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine." }
+        return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope 'LocalMachine'
     }
 
     return Unprotect-DpapiValue -CiphertextBase64 $PasswordInput -Scope 'LocalMachine'

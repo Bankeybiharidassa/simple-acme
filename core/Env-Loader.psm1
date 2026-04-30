@@ -193,7 +193,7 @@ function Set-EnvFileAcl {
     $acl.SetAccessRuleProtection($true, $false)
 
     $systemAccount = New-Object System.Security.Principal.NTAccount('SYSTEM')
-    $currentAccount = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $administratorsAccount = New-Object System.Security.Principal.NTAccount('Administrators')
 
     $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
     $inheritFlags = [System.Security.AccessControl.InheritanceFlags]::None
@@ -201,7 +201,7 @@ function Set-EnvFileAcl {
     $allow = [System.Security.AccessControl.AccessControlType]::Allow
 
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($administratorsAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
 
     [System.IO.File]::SetAccessControl($Path, $acl)
 }
