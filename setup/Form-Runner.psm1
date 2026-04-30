@@ -1297,13 +1297,13 @@ function Invoke-AcmeForm {
         [Console]::WriteLine('Setup cancelled.')
         return $null
     }
-    $providerResult = Read-AcmeProviderSelection -CurrentValues $curr
+    $values.DOMAINS = $domains
+    $providerResult = Read-AcmeProviderSelection -CurrentValues $values
     if ($providerResult -in @('__BACK__','__CANCEL__') -or $null -eq $providerResult) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
         return $null
     }
-    $values.DOMAINS = $domains
     foreach ($key in $providerResult.Keys) {
         $values[$key] = [string]$providerResult[$key]
     }
