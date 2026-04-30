@@ -1252,7 +1252,7 @@ function Invoke-AcmeForm {
     Start-ConsoleSection -Title 'Target selection' -Clear
     [Console]::WriteLine('What do you want to secure?')
     [Console]::WriteLine('[1] Remote Desktop Gateway / RD Web on this server')
-    [Console]::WriteLine('[2] Remote Desktop Gateway + Session Hosts')
+    [Console]::WriteLine('[2] Remote Desktop Gateway + Session Hosts (farm)')
     [Console]::WriteLine('[3] Website (IIS)')
     [Console]::WriteLine('[4] Mail server (SMTP/IMAP/POP3)')
     [Console]::WriteLine('[5] Firewall / VPN')
@@ -1453,6 +1453,55 @@ function Invoke-AcmeForm {
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
     $values.ACME_TARGET_LOCATION = $location
+
+    if ($target -eq 'rds-farm') {
+        Start-ConsoleSection -Title 'RDS Gateway + Session Hosts mode'
+        [Console]::WriteLine('This server acts as the RDS Gateway. Remote Session Hosts will receive the certificate via PowerShell Remoting. The private key will be exported as PFX.')
+        [Console]::WriteLine('Enter RDS Session Host names or FQDNs, one per line.')
+        [Console]::WriteLine('Leave a line empty when done. Type Q to cancel.')
+        $sessionHosts = New-Object System.Collections.Generic.List[string]
+        while ($true) {
+            $h = [string](Read-Host 'Session host')
+            if ($h -match '^[Qq]$') { return $null }
+            $h = $h.Trim()
+            if ([string]::IsNullOrWhiteSpace($h)) {
+                if ($sessionHosts.Count -gt 0) { break }
+                Write-Warning 'At least one session host is required.'
+                continue
+            }
+            $sessionHosts.Add($h)
+        }
+        Start-ConsoleSection -Title 'Remote PowerShell authentication'
+        [Console]::WriteLine('Leave empty to use the current logged-on account (Kerberos/Negotiate).')
+        $remoteUser = [string](Read-Host 'Username (leave empty for current user)')
+
+        Start-ConsoleSection -Title 'Important'
+        [Console]::WriteLine('Important: RDS farm mode requires exporting the issued certificate private key as a PFX file to distribute it to the session hosts.')
+        [Console]::WriteLine('This setup will write ACME_PRIVATEKEY_EXPORTABLE=true to env.secure.')
+        $farmConfirm = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+        if ($farmConfirm -ne 'yes') { return $null }
+
+        $deployment = [ordered]@{
+            schema='simple-acme-helper-deployment-targets.v1';
+            targetType='rds-gateway-session-hosts';
+            pfxDistribution=[ordered]@{enabled=$true;exportSourceStore='Cert:\LocalMachine\My';localTempDirectory='runtime';remoteTempDirectory='C:\Windows\Temp\simple-acme-helper';deleteLocalPfxAfterImport=$true;deleteRemotePfxAfterImport=$true};
+            localGateway=[ordered]@{name='rds-gateway';type='rds-gateway';computerName='localhost';method='local';script='Scripts\cert2rds.ps1';enabled=$true};
+            sessionHosts=@()
+        }
+        foreach ($sh in $sessionHosts) {
+            $deployment.sessionHosts += [ordered]@{name=$sh;type='rds-session-host';computerName=$sh;method='powershell-remoting';script='Scripts\deploy-rds-sessionhost.ps1';username=$remoteUser;enabled=$true}
+        }
+        ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'deployment-targets.json') -Encoding UTF8
+
+        $values.ACME_SCRIPT_PATH = 'Scripts\deploy-rds-farm.ps1'
+        $values.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+        $values.ACME_PRIVATEKEY_EXPORTABLE = 'true'
+        $values.TARGET_SYSTEM = 'rds-farm'
+        $values.TARGET_LOCATION = 'cluster-farm'
+        $values.ACME_TARGET_SYSTEM = 'rds-farm'
+        $values.ACME_TARGET_LOCATION = 'cluster-farm'
+    }
+
     Start-ConsoleSection -Title 'Review selected settings'
     [Console]::WriteLine("Selected ACME provider: $([string]$values.ACME_PROVIDER)")
     [Console]::WriteLine("Selected ACME environment: $([string]$values.ACME_NETWORKING4ALL_ENVIRONMENT)")
