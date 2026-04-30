@@ -98,7 +98,8 @@ function Invoke-InitialAcmeReconcilePrompt {
     $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
     $storePlugin = if ($envValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$envValues.ACME_STORE_PLUGIN } else { 'certificatestore' }
     $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-    [Console]::WriteLine(("wacs.exe --accepttos --source manual --order single --baseuri {0} --validation none --globalvalidation none --host {1} --store {2} --installation script --script {3} --scriptparameters `\"{4}`\" --csr {5}" -f [string]$envValues.ACME_DIRECTORY, [string]$envValues.DOMAINS, $storePlugin, [string]$envValues.ACME_SCRIPT_PATH, $scriptParameters, $csrAlgo))
+    $commandPreview = ('wacs.exe --accepttos --source manual --order single --baseuri {0} --validation none --globalvalidation none --host {1} --store {2} --installation script --script {3} --scriptparameters "{4}" --csr {5}' -f [string]$envValues.ACME_DIRECTORY, [string]$envValues.DOMAINS, $storePlugin, [string]$envValues.ACME_SCRIPT_PATH, $scriptParameters, $csrAlgo)
+    [Console]::WriteLine($commandPreview)
     if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { [Console]::WriteLine('--eab-key-identifier <set>') }
     if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { [Console]::WriteLine('--eab-key <hidden>') }
     [Console]::WriteLine('')
