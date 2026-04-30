@@ -52,10 +52,10 @@ function Import-SecureOverlay {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         try { $raw = [System.IO.File]::ReadAllText($path); $obj = $raw | ConvertFrom-Json }
         catch {
-            try { $legacy = Import-Clixml -LiteralPath $path; if ($legacy) { foreach($k in $legacy.Keys){ $Values[$k] = [string]$legacy[$k] } } ; continue } catch { Write-Warning "Could not read $name: $($_.Exception.Message)"; continue }
+            try { $legacy = Import-Clixml -LiteralPath $path; if ($legacy) { foreach($k in $legacy.Keys){ $Values[$k] = [string]$legacy[$k] } } ; continue } catch { Write-Warning "Could not read ${name}: $($_.Exception.Message)"; continue }
         }
         foreach ($prop in $obj.PSObject.Properties) {
-            try { $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine } catch { Write-Warning "Could not decrypt '$($prop.Name)' from $name: $($_.Exception.Message)" }
+            try { $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine } catch { Write-Warning "Could not decrypt '$($prop.Name)' from ${name}: $($_.Exception.Message)" }
         }
     }
     return $Values
