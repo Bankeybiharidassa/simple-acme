@@ -1,29 +1,27 @@
+#Requires -Version 5.1
 param(
-    [Parameter(Position=0, Mandatory=$true)]
-    [string]$NewCertThumbprint,
-    [Parameter(Position=1, Mandatory=$true)]
-    [string]$PfxPath,
-    [Parameter(Position=2, Mandatory=$true)]
-    [System.Security.SecureString]$PfxPassword
+    [Parameter(Position=0, Mandatory=$true)][ValidateNotNullOrEmpty()][string]$NewCertThumbprint,
+    [Parameter(Position=1, Mandatory=$true)][string]$PfxPath,
+    [Parameter(Position=2, Mandatory=$true)][System.Security.SecureString]$PfxPassword
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'core\connector-core.psm1') -Force
-$normalizedThumbprint = Assert-CertThumbprint -Thumbprint $NewCertThumbprint
-$cert = Get-CertificateByThumbprint -Thumbprint $normalizedThumbprint -PrimaryStorePath 'Cert:\LocalMachine\My'
+$normalized = Assert-CertThumbprint -CertThumbprint $NewCertThumbprint
+$cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $normalized } | Select-Object -First 1
 if ($null -eq $cert) {
-    if (-not (Test-Path -LiteralPath $PfxPath)) { Write-Error 'PFX file not found.'; exit 1 }
+    if (-not (Test-Path -LiteralPath $PfxPath)) { Write-Error "PFX not found: $PfxPath"; exit 1 }
     Import-PfxCertificate -FilePath $PfxPath -Password $PfxPassword -CertStoreLocation 'Cert:\LocalMachine\My' -Exportable | Out-Null
-    $cert = Get-CertificateByThumbprint -Thumbprint $normalizedThumbprint -PrimaryStorePath 'Cert:\LocalMachine\My'
+    $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $normalized } | Select-Object -First 1
     if ($null -eq $cert) { Write-Error 'Certificate not found after import.'; exit 1 }
 }
+$filter = "TerminalName='RDP-Tcp'"
 $bound = $false
-try {
-    $rdpSettings = Get-WmiObject -Class 'Win32_TSGeneralSetting' -Namespace 'root\cimv2\terminalservices' -Filter "TerminalName='RDP-Tcp'"
-    if ($rdpSettings) { $rdpSettings.SSLCertificateSHA1Hash = $normalizedThumbprint; $rdpSettings.Put() | Out-Null; $bound = $true; Write-Host 'Bound via WMI RDP-Tcp.' }
-} catch { Write-Warning 'WMI RDP-Tcp binding skipped.' }
-if (Get-Command -Name Set-RDCertificate -ErrorAction SilentlyContinue) {
-    try { Set-RDCertificate -Role RDRedirector -Thumbprint $normalizedThumbprint -Force -ErrorAction Stop; $bound = $true; Write-Host 'Set-RDCertificate attempted.' } catch { Write-Warning 'Set-RDCertificate skipped/failed.' }
+try { $rdp = Get-CimInstance -ClassName Win32_TSGeneralSetting -Namespace root\cimv2\terminalservices -Filter $filter -ErrorAction Stop; Set-CimInstance -InputObject $rdp -Property @{ SSLCertificateSHA1Hash = $normalized } -ErrorAction Stop; $bound=$true } catch {}
+if (-not $bound) {
+    $rdp = Get-WmiObject -Class Win32_TSGeneralSetting -Namespace root\cimv2\terminalservices -Filter $filter -ErrorAction SilentlyContinue
+    if ($null -ne $rdp) { $rdp.SSLCertificateSHA1Hash = $normalized; $rdp.Put() | Out-Null; $bound=$true }
 }
-if (-not $bound) { Write-Error 'No binding was applicable or all bindings failed.'; exit 1 }
+if (-not $bound) { Write-Error 'Could not bind certificate to RDP listener.'; exit 1 }
+Write-Host "OK: certificate $normalized bound to RDP listener on $env:COMPUTERNAME"
 exit 0
