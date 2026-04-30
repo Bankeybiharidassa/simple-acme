@@ -91,6 +91,14 @@ function Get-GuidedPipelineTemplate {
             $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'cert2rds.ps1'
             $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
         }
+        'rds-farm' {
+            $base.ACME_SOURCE_PLUGIN = 'manual'
+            $base.ACME_VALIDATION_MODE = $ValidationMode
+            $base.ACME_INSTALLATION_PLUGINS = 'script'
+            $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1'
+            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+            $base.ACME_PRIVATEKEY_EXPORTABLE = 'true'
+        }
         default {
             throw "Unsupported guided target '$TargetSystem'."
         }
@@ -971,14 +979,9 @@ function Save-SecurePlatformConfig {
             $envSnapshot[$k] = [string]$Values[$k]
         }
     }
-    $envSnapshot | Export-Clixml -Path $secureEnvPath
+    Write-SecureOverlay -ConfigDir $ConfigDir -Values $envSnapshot
 
-    $credObject = [pscustomobject]@{
-        ACME_KID = ConvertTo-SecureString ([string]$Values.ACME_KID) -AsPlainText -Force
-        ACME_HMAC_SECRET = ConvertTo-SecureString ([string]$Values.ACME_HMAC_SECRET) -AsPlainText -Force
-        CERTIFICATE_API_KEY = ConvertTo-SecureString ([string]$Values.CERTIFICATE_API_KEY) -AsPlainText -Force
-    }
-    $credObject | Export-Clixml -Path $credPath
+    Write-CredentialStore -ConfigDir $ConfigDir -Values $Values
 
     if (-not (Test-Path -LiteralPath $mappingPath)) {
         @() | ConvertTo-Json | Set-Content -LiteralPath $mappingPath -Encoding UTF8
@@ -1008,11 +1011,15 @@ function Save-RenewalMapping {
 function Get-ConnectorScriptByIntent {
     param([Parameter(Mandatory)][string]$TargetIntent)
     switch ($TargetIntent) {
-        'rds' { return 'cert2rds.ps1' }
-        'iis' { return 'cert2iis.ps1' }
-        'mail' { throw 'This target type is not implemented yet.' }
-        'firewall' { throw 'This target type is not implemented yet.' }
-        'waf' { throw 'This target type is not implemented yet.' }
+        'rds' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2rds.ps1') }
+        'rds-farm' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1') }
+        'iis' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2iis.ps1') }
+        'mail' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2mail.ps1') }
+        'firewall' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2fw.ps1') }
+        'firewall-paloalto' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-paloalto.ps1') }
+        'firewall-sophos' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-sophos.ps1') }
+        'waf' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2waf.ps1') }
+        'kemp' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2kemp.ps1') }
         'custom' { throw 'This target type is not implemented yet.' }
         default { throw "Unsupported target intent: $TargetIntent" }
     }
@@ -1248,9 +1255,11 @@ function Invoke-AcmeForm {
     [Console]::WriteLine('[2] Website (IIS)')
     [Console]::WriteLine('[3] Mail server (SMTP/IMAP/POP3)')
     [Console]::WriteLine('[4] Firewall / VPN')
-    [Console]::WriteLine('[5] Load balancer / WAF')
-    [Console]::WriteLine('[6] Custom system')
-    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='iis'; '3'='mail'; '4'='firewall'; '5'='waf'; '6'='custom' } -DefaultKey '1'
+    [Console]::WriteLine('[5] Web application firewall')
+    [Console]::WriteLine('[6] Load balancer (Kemp)')
+    [Console]::WriteLine('[7] Remote Desktop Gateway + Session Hosts (farm)')
+    [Console]::WriteLine('[8] Custom system')
+    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='iis'; '3'='mail'; '4'='firewall'; '5'='waf'; '6'='kemp'; '7'='rds-farm'; '8'='custom' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
@@ -1474,6 +1483,7 @@ function Invoke-AcmeForm {
     Assert-AcmeSetupValues -Values $values
 
     Write-EnvFile -Values $values -Path $resolvedEnvFilePath
+    if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$values.CERTIFICATE_CONFIG_DIR) -Values $values }
     $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
     Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
@@ -1993,6 +2003,7 @@ function Invoke-FirstRunWizard {
     if (-not $all.ContainsKey('ACME_PRIVATEKEY_EXPORTABLE') -or [string]::IsNullOrWhiteSpace([string]$all.ACME_PRIVATEKEY_EXPORTABLE)) { $all.ACME_PRIVATEKEY_EXPORTABLE = 'false' }
 
     Write-EnvFile -Values $all -Path $DefaultEnvPath
+    Save-SecurePlatformConfig -ConfigDir ([string]$all.CERTIFICATE_CONFIG_DIR) -Values $all
 
     Show-TuiStatus -Message "Wizard complete. certificate.env saved to: $DefaultEnvPath" `
         -Type Success -Row ([Math]::Max(0, [Console]::WindowHeight) - 2)

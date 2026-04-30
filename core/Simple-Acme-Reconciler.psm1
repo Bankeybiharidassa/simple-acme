@@ -880,7 +880,8 @@ WACS entered interactive menu. The generated command is incomplete.
 function Invoke-WacsIssue {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
-    $storePlugins = @('certificatestore')
+    $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
+    $storePlugins = @($storePlugin)
     $csrAlgorithms = Get-CsrExecutionPlan -EnvValues $EnvValues
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
@@ -893,7 +894,8 @@ function Invoke-WacsIssue {
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
-    $args += @('--installation', 'script','--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', '{CertThumbprint}')
+    $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
+    $args += @('--installation', 'script','--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', $scriptParams)
 
     $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }

@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module "$PSScriptRoot/Crypto.psm1" -Force
 
 $script:RequiredEnvKeys = @(
     'ACME_DIRECTORY',
@@ -48,21 +49,15 @@ function Import-SecureOverlay {
     $configDir = if ($Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$Values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if ([string]::IsNullOrWhiteSpace($configDir)) { return $Values }
 
-    $secureEnvPath = Join-Path $configDir 'env.secure'
-    if (Test-Path -LiteralPath $secureEnvPath) {
-        $secureEnv = Import-Clixml -Path $secureEnvPath
-        if ($secureEnv -is [System.Collections.IDictionary]) {
-            foreach ($k in $secureEnv.Keys) { $Values[$k] = [string]$secureEnv[$k] }
-        }
-    }
-
-    $credPath = Join-Path $configDir 'credentials.sec'
-    if (Test-Path -LiteralPath $credPath) {
-        $creds = Import-Clixml -Path $credPath
-        foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')) {
-            if ($creds.PSObject.Properties.Name -contains $k -and $creds.$k -is [Security.SecureString]) {
-                $Values[$k] = ConvertFrom-SecureStringToPlainText -SecureString $creds.$k
-            }
+    foreach ($name in @('env.secure','credentials.sec')) {
+        $path = Join-Path $configDir $name
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        $obj = ConvertFrom-Json -InputObject $raw
+        foreach ($prop in $obj.PSObject.Properties) {
+            if ([string]::IsNullOrWhiteSpace([string]$prop.Value)) { continue }
+            $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine
         }
     }
 
@@ -211,6 +206,27 @@ function Set-EnvFileAcl {
     [System.IO.File]::SetAccessControl($Path, $acl)
 }
 
+
+function Write-SecureOverlay {
+    param([Parameter(Mandatory)][string]$ConfigDir,[Parameter(Mandatory)][hashtable]$Values)
+    if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+    $out = [ordered]@{}
+    foreach ($k in $Values.Keys) { $out[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine }
+    ($out | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $ConfigDir 'env.secure') -Encoding UTF8
+}
+
+function Write-CredentialStore {
+    param([Parameter(Mandatory)][string]$ConfigDir,[Parameter(Mandatory)][hashtable]$Values)
+    if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+    $out = [ordered]@{}
+    foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','ACME_API_KEY')) {
+        if ($Values.ContainsKey($k) -and -not [string]::IsNullOrWhiteSpace([string]$Values[$k])) {
+            $out[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
+        }
+    }
+    ($out | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $ConfigDir 'credentials.sec') -Encoding UTF8
+}
+
 function Write-EnvFile {
     param(
         [Parameter(Mandatory)][hashtable]$Values,
@@ -222,7 +238,8 @@ function Write-EnvFile {
     $lines.Add($Header)
     $lines.Add('')
 
-    foreach ($key in ($Values.Keys | Sort-Object)) {
+    $allowed = @('DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR')
+    foreach ($key in ($Values.Keys | Where-Object { $allowed -contains $_ } | Sort-Object)) {
         $value = [string]$Values[$key]
         if ($value.Contains('=') -or $value.Contains('#')) {
             $escaped = '"{0}"' -f $value.Replace('"', '""')
@@ -248,6 +265,8 @@ $FunctionsToExport.Add('Resolve-BootstrapEnvPath')
 $FunctionsToExport.Add('Read-EnvFile')
 $FunctionsToExport.Add('Import-EnvFile')
 $FunctionsToExport.Add('Write-EnvFile')
+$FunctionsToExport.Add('Write-SecureOverlay')
+$FunctionsToExport.Add('Write-CredentialStore')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {
