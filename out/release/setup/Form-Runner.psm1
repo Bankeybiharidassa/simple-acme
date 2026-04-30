@@ -221,7 +221,9 @@ function Assert-AcmeSetupValues {
 
     $domains = @([string]$Values.DOMAINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     foreach ($domain in $domains) {
-        if ($domain -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
+        $isWildcard = $domain.StartsWith('*.')
+        $domainToValidate = if ($isWildcard) { $domain.Substring(2) } else { $domain }
+        if ([string]::IsNullOrWhiteSpace($domainToValidate) -or $domainToValidate -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
             throw "Invalid domain format: $domain"
         }
     }
@@ -1470,19 +1472,28 @@ function Invoke-AcmeForm {
         return $null
     }
 
-    Assert-ProviderDirectoryConsistency -Values $values
-    Assert-AcmeSetupValues -Values $values
+    try {
+        Assert-ProviderDirectoryConsistency -Values $values
+        Assert-AcmeSetupValues -Values $values
 
-    Write-EnvFile -Values $values -Path $resolvedEnvFilePath
-    $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
-    Assert-ProviderDirectoryConsistency -Values $reloaded
-    Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
-    if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
-        throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
+        Write-EnvFile -Values $values -Path $resolvedEnvFilePath
+        if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$values.CERTIFICATE_CONFIG_DIR) -Values $values }
+        $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
+        Assert-ProviderDirectoryConsistency -Values $reloaded
+        Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
+        if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
+            throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
+        }
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Saved bootstrap certificate.env for initial simple-acme setup.')
+        return $reloaded
+    } catch {
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup could not be saved due to invalid settings:')
+        [Console]::WriteLine($_.Exception.Message)
+        Wait-ForAnyKey -Message 'Press Enter to return to the previous menu.'
+        return $null
     }
-    [Console]::WriteLine('')
-    [Console]::WriteLine('Saved bootstrap certificate.env for initial simple-acme setup.')
-    return $reloaded
 }
 
 function Get-ObjectPropertyValue {
