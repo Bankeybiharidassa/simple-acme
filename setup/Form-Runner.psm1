@@ -265,12 +265,12 @@ function Resolve-DeploymentScriptPath {
         throw 'Deployment script file name is empty.'
     }
 
-    if ([System.IO.Path]::IsPathRooted($ScriptFileName)) {
-        $candidate = $ScriptFileName
-    } else {
-        $projectRoot = Split-Path $PSScriptRoot -Parent
-        $candidate = Join-Path $projectRoot (Join-Path 'Scripts' $ScriptFileName)
+    if ($ScriptFileName -match '[\\/]' -or [System.IO.Path]::IsPathRooted($ScriptFileName)) {
+        throw "Deployment script must be provided as a file name only (for example 'cert2rds.ps1'). Received: $ScriptFileName"
     }
+
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    $candidate = Join-Path $projectRoot (Join-Path 'Scripts' $ScriptFileName)
 
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
         throw @"

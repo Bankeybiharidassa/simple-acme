@@ -6,23 +6,20 @@ function Invoke-TestRepositoryLayout {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
     & $Assert 'Repository layout does not allow loose deployment scripts in root' {
-        $allowedRootScripts = @(
-            'certificate-setup.ps1',
-            'certificate-simple-acme-reconcile.ps1',
-            'certificate-update-simple-acme.ps1',
-            'certificate-backup.ps1',
-            'certificate-restore.ps1',
-            'certificate-orchestrator.ps1',
-            'config.ps1'
+        $forbiddenRootScripts = @(
+            'cert2rds.ps1',
+            'deploy-rds-farm.ps1',
+            'deploy-rds-sessionhost.ps1',
+            'deploy-paloalto.ps1',
+            'deploy-sophos.ps1'
         )
 
-        $forbidden = @(Get-ChildItem -Path $repoRoot -File -Filter '*.ps1' | Where-Object {
-            ($_.Name -like 'deploy-*.ps1' -or $_.Name -like '*-paloalto*.ps1' -or $_.Name -like '*-sophos*.ps1') -and
-            ($allowedRootScripts -notcontains $_.Name)
+        $forbidden = @($forbiddenRootScripts | Where-Object {
+            Test-Path -LiteralPath (Join-Path $repoRoot $_) -PathType Leaf
         })
 
         if ($forbidden.Count -gt 0) {
-            throw ('Forbidden root deployment scripts found: {0}' -f (($forbidden | Select-Object -ExpandProperty Name) -join ', '))
+            throw ('Forbidden root deployment scripts found: {0}' -f ($forbidden -join ', '))
         }
     }
 
@@ -37,6 +34,9 @@ function Invoke-TestRepositoryLayout {
 
     & $Assert 'Deployment scripts exist under Scripts directory' {
         $required = @(
+            (Join-Path $repoRoot 'Scripts/cert2rds.ps1'),
+            (Join-Path $repoRoot 'Scripts/deploy-rds-farm.ps1'),
+            (Join-Path $repoRoot 'Scripts/deploy-rds-sessionhost.ps1'),
             (Join-Path $repoRoot 'Scripts/deploy-paloalto.ps1'),
             (Join-Path $repoRoot 'Scripts/deploy-sophos.ps1')
         )
