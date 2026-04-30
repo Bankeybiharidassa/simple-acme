@@ -8,6 +8,7 @@ Import-Module "$PSScriptRoot/../core/Config-Store.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Native-Process.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Simple-Acme-Reconciler.psm1" -Force -Global
+Import-Module (Join-Path $PSScriptRoot '..\core\Crypto.psm1') -Force
 . "$PSScriptRoot/Device-Schemas.ps1"
 . "$PSScriptRoot/Menu-Tree.ps1"
 
@@ -97,7 +98,34 @@ function Get-GuidedPipelineTemplate {
             $base.ACME_INSTALLATION_PLUGINS = 'script'
             $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1'
             $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
-            $base.ACME_PRIVATEKEY_EXPORTABLE = 'true'
+        }
+        'mail' {
+            $base.ACME_SOURCE_PLUGIN = 'manual'
+            $base.ACME_VALIDATION_MODE = $ValidationMode
+            $base.ACME_INSTALLATION_PLUGINS = 'script'
+            $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'cert2mail.ps1'
+            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+        }
+        'firewall' {
+            $base.ACME_SOURCE_PLUGIN = 'manual'
+            $base.ACME_VALIDATION_MODE = $ValidationMode
+            $base.ACME_INSTALLATION_PLUGINS = 'script'
+            $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'cert2fw.ps1'
+            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+        }
+        'waf' {
+            $base.ACME_SOURCE_PLUGIN = 'manual'
+            $base.ACME_VALIDATION_MODE = $ValidationMode
+            $base.ACME_INSTALLATION_PLUGINS = 'script'
+            $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'cert2waf.ps1'
+            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+        }
+        'custom' {
+            $base.ACME_SOURCE_PLUGIN = 'manual'
+            $base.ACME_VALIDATION_MODE = $ValidationMode
+            $base.ACME_INSTALLATION_PLUGINS = 'script'
+            $base.ACME_SCRIPT_PATH = ''
+            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
         }
         default {
             throw "Unsupported guided target '$TargetSystem'."
@@ -229,7 +257,8 @@ function Assert-AcmeSetupValues {
 
     $domains = @([string]$Values.DOMAINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     foreach ($domain in $domains) {
-        if ($domain -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
+        $domainToCheck = if ($domain -match '^\*\.') { $domain.Substring(2) } else { $domain }
+        if ($domainToCheck -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
             throw "Invalid domain format: $domain"
         }
     }
@@ -242,7 +271,7 @@ function Assert-AcmeSetupValues {
             $scriptPath = Resolve-AbsoluteSetupPath -PathValue $scriptPath
             $Values.ACME_SCRIPT_PATH = $scriptPath
         }
-        if (-not (Test-Path -LiteralPath $scriptPath)) { throw "Script installation selected but script path does not exist: $scriptPath" }
+        if (-not (Test-Path -LiteralPath $scriptPath)) { Write-Warning "Script path does not exist yet: $scriptPath. Ensure the script is deployed before running wacs.exe." }
         if ([string]::IsNullOrWhiteSpace([string]$Values.ACME_SCRIPT_PARAMETERS)) { throw 'Script installation selected but ACME_SCRIPT_PARAMETERS is empty.' }
     }
 
@@ -752,7 +781,10 @@ function Invoke-AcmeSettingsMenu {
                 if (Test-Path -LiteralPath $resolvedEnvFilePath -PathType Leaf) { $envValues = Read-EnvFile -Path $resolvedEnvFilePath }
                 $envValues.ACME_KID = [string](Read-Host 'ACME_KID')
                 $envValues.ACME_HMAC_SECRET = [string](Read-Host 'ACME_HMAC_SECRET')
-                Write-EnvFile -Values $envValues -Path $resolvedEnvFilePath
+                $toWrite = @{}
+                foreach ($k in $envValues.Keys) { if ($k -notin @('ACME_KID','ACME_HMAC_SECRET')) { $toWrite[$k] = $envValues[$k] } }
+                Write-EnvFile -Values $toWrite -Path $resolvedEnvFilePath
+                if ($envValues.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$envValues.CERTIFICATE_CONFIG_DIR) -Values $envValues }
                 [Console]::WriteLine('Updated EAB credentials.')
                 Wait-ForOperatorReturn
             }
@@ -781,7 +813,9 @@ function Invoke-AcmeSettingsMenu {
                     continue
                 }
                 $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
-                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store certificatestore --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
+                $storePlugin = if ($envValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$envValues.ACME_STORE_PLUGIN } else { 'certificatestore' }
+                $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store $storePlugin --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $csrAlgo"
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
                 [Console]::WriteLine($line)
@@ -968,27 +1002,25 @@ function Save-SecurePlatformConfig {
 
     if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
 
-    $secureEnvPath = Join-Path $ConfigDir 'env.secure'
-    $credPath = Join-Path $ConfigDir 'credentials.sec'
-    $mappingPath = Join-Path $ConfigDir 'mappings.json'
-    $mappingCompatPath = Join-Path $ConfigDir 'mapping.json'
-
-    $envSnapshot = @{}
+    $secretKeys  = @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')
+    $allowedPlainKeys = @('DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR')
+    $credMap = @{}
+    foreach ($k in $secretKeys) {
+        $v = if ($Values.ContainsKey($k)) { [string]$Values[$k] } else { '' }
+        $credMap[$k] = Protect-DpapiValue -Plaintext $v -Scope LocalMachine
+    }
+    [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'credentials.sec'), ($credMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+    $envMap = @{}
     foreach ($k in $Values.Keys) {
-        if ($k -notin @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')) {
-            $envSnapshot[$k] = [string]$Values[$k]
+        if ($k -notin $secretKeys -and $k -notin $allowedPlainKeys) {
+            $envMap[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
         }
     }
-    Write-SecureOverlay -ConfigDir $ConfigDir -Values $envSnapshot
-
-    Write-CredentialStore -ConfigDir $ConfigDir -Values $Values
-
-    if (-not (Test-Path -LiteralPath $mappingPath)) {
-        @() | ConvertTo-Json | Set-Content -LiteralPath $mappingPath -Encoding UTF8
-    }
-    if (-not (Test-Path -LiteralPath $mappingCompatPath)) {
-        @() | ConvertTo-Json | Set-Content -LiteralPath $mappingCompatPath -Encoding UTF8
-    }
+    [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'env.secure'), ($envMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+    $mappingPath = Join-Path $ConfigDir 'mappings.json'
+    $mappingCompatPath = Join-Path $ConfigDir 'mapping.json'
+    if (-not (Test-Path -LiteralPath $mappingPath)) { '[]' | Set-Content -LiteralPath $mappingPath -Encoding UTF8 }
+    if (-not (Test-Path -LiteralPath $mappingCompatPath)) { '[]' | Set-Content -LiteralPath $mappingCompatPath -Encoding UTF8 }
 }
 
 function Save-RenewalMapping {
@@ -1011,17 +1043,17 @@ function Save-RenewalMapping {
 function Get-ConnectorScriptByIntent {
     param([Parameter(Mandatory)][string]$TargetIntent)
     switch ($TargetIntent) {
-        'rds' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2rds.ps1') }
-        'rds-farm' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1') }
-        'iis' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2iis.ps1') }
-        'mail' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2mail.ps1') }
-        'firewall' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2fw.ps1') }
-        'firewall-paloalto' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-paloalto.ps1') }
-        'firewall-sophos' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-sophos.ps1') }
-        'waf' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2waf.ps1') }
-        'kemp' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2kemp.ps1') }
-        'custom' { return '' }
-        default { throw "Unsupported target intent: $TargetIntent" }
+        'rds'      { return 'cert2rds.ps1' }
+        'rds-farm' { return 'deploy-rds-farm.ps1' }
+        'iis'      { return 'cert2iis.ps1' }
+        'mail'     { return 'cert2mail.ps1' }
+        'firewall' { return 'cert2fw.ps1' }
+        'waf'      { return 'cert2waf.ps1' }
+        'kemp'     { return 'cert2kemp.ps1' }
+        'paloalto' { return 'deploy-paloalto.ps1' }
+        'sophos'   { return 'deploy-sophos.ps1' }
+        'custom'   { return '' }
+        default    { throw "Unsupported target intent: $TargetIntent" }
     }
 }
 
@@ -1201,7 +1233,7 @@ function Assert-SavedEnvMatchesSetup {
         [Parameter(Mandatory)][hashtable]$Expected,
         [Parameter(Mandatory)][hashtable]$Actual
     )
-    foreach ($key in @('ACME_PROVIDER','ACME_DIRECTORY','ACME_REQUIRES_EAB','ACME_NETWORKING4ALL_ENVIRONMENT','ACME_NETWORKING4ALL_PRODUCT','DOMAINS')) {
+    foreach ($key in @('ACME_DIRECTORY','DOMAINS')) {
         $expectedValue = ''
         $actualValue = ''
         if ($Expected.ContainsKey($key)) { $expectedValue = [string]$Expected[$key] }
@@ -1373,12 +1405,16 @@ function Invoke-AcmeForm {
             [Console]::WriteLine('Setup cancelled.')
             return $null
         }
-        [Console]::WriteLine('Enabling exportable keys reduces security because private keys can be transferred.')
-        $continue = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
-        if ($continue -in @('__CANCEL__','__BACK__','no')) {
+        if ($multiChoice -eq 'exportable') {
             [Console]::WriteLine('')
-            [Console]::WriteLine('Setup cancelled.')
-            return $null
+            [Console]::WriteLine('Warning: enabling exportable private keys reduces security.')
+            [Console]::WriteLine('The private key can be transferred off this server.')
+            $continue = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+            if ($continue -in @('__CANCEL__','__BACK__','no')) {
+                [Console]::WriteLine('')
+                [Console]::WriteLine('Setup cancelled.')
+                return $null
+            }
         }
 
         if ($multiChoice -eq 'exportable') {
@@ -1542,7 +1578,9 @@ function Invoke-AcmeForm {
     Assert-AcmeSetupValues -Values $values
 
     Write-EnvFile -Values $values -Path $resolvedEnvFilePath
-    if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$values.CERTIFICATE_CONFIG_DIR) -Values $values }
+    $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { '' }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+    if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $values }
     $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
     Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
@@ -2062,7 +2100,9 @@ function Invoke-FirstRunWizard {
     if (-not $all.ContainsKey('ACME_PRIVATEKEY_EXPORTABLE') -or [string]::IsNullOrWhiteSpace([string]$all.ACME_PRIVATEKEY_EXPORTABLE)) { $all.ACME_PRIVATEKEY_EXPORTABLE = 'false' }
 
     Write-EnvFile -Values $all -Path $DefaultEnvPath
-    Save-SecurePlatformConfig -ConfigDir ([string]$all.CERTIFICATE_CONFIG_DIR) -Values $all
+    $configDir = if ($all.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$all.CERTIFICATE_CONFIG_DIR } else { '' }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+    if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $all }
 
     Show-TuiStatus -Message "Wizard complete. certificate.env saved to: $DefaultEnvPath" `
         -Type Success -Row ([Math]::Max(0, [Console]::WindowHeight) - 2)

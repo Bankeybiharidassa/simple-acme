@@ -45,22 +45,19 @@ function ConvertFrom-SecureStringToPlainText {
 
 function Import-SecureOverlay {
     param([Parameter(Mandatory)][hashtable]$Values)
-
     $configDir = if ($Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$Values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if ([string]::IsNullOrWhiteSpace($configDir)) { return $Values }
-
     foreach ($name in @('env.secure','credentials.sec')) {
         $path = Join-Path $configDir $name
         if (-not (Test-Path -LiteralPath $path)) { continue }
-        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
-        $obj = ConvertFrom-Json -InputObject $raw
+        try { $raw = [System.IO.File]::ReadAllText($path); $obj = $raw | ConvertFrom-Json }
+        catch {
+            try { $legacy = Import-Clixml -LiteralPath $path; if ($legacy) { foreach($k in $legacy.Keys){ $Values[$k] = [string]$legacy[$k] } } ; continue } catch { Write-Warning "Could not read $name: $($_.Exception.Message)"; continue }
+        }
         foreach ($prop in $obj.PSObject.Properties) {
-            if ([string]::IsNullOrWhiteSpace([string]$prop.Value)) { continue }
-            $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine
+            try { $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine } catch { Write-Warning "Could not decrypt '$($prop.Name)' from $name: $($_.Exception.Message)" }
         }
     }
-
     return $Values
 }
 
