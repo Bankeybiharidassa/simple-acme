@@ -107,7 +107,7 @@ function Unprotect-DpapiValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CiphertextBase64,
-        [ValidateSet('LocalMachine', 'CurrentUser')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
     $entropy = [System.Text.Encoding]::UTF8.GetBytes('certificate-dpapi-entropy-v1')
@@ -138,11 +138,15 @@ function Resolve-ApiKey {
 
     $raw = Get-Content -Path $EncryptedFile -Raw -Encoding UTF8
     $payload = $raw | ConvertFrom-Json
-    if (-not $payload.ciphertext -or -not $payload.scope) {
-        throw 'Invalid encrypted API key file. Expected JSON with ciphertext and scope.'
+    if (-not $payload.ciphertext) {
+        throw 'Invalid encrypted API key file. Expected JSON with ciphertext.'
+    }
+    $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
+    if ($scope -ne 'LocalMachine') {
+        throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine."
     }
 
-    return Unprotect-DpapiValue -CiphertextBase64 $payload.ciphertext -Scope $payload.scope
+    return Unprotect-DpapiValue -CiphertextBase64 $payload.ciphertext -Scope 'LocalMachine'
 }
 
 function Invoke-PanApi {

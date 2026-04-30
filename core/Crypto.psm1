@@ -26,7 +26,7 @@ function ConvertTo-SecureStringValue {
 function Protect-DpapiValue {
     param(
         [Parameter(Mandatory)][string]$Plaintext,
-        [ValidateSet('LocalMachine','CurrentUser')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
@@ -38,7 +38,7 @@ function Protect-DpapiValue {
 function Unprotect-DpapiValue {
     param(
         [Parameter(Mandatory)][string]$CiphertextBase64,
-        [ValidateSet('LocalMachine','CurrentUser')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
     try {
