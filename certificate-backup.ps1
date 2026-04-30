@@ -173,6 +173,9 @@ try {
         'config.ps1'
     )
 
+
+    [void](Add-BackupFileEntry -Collection $files -Category 'project' -Path (Join-Path $ProjectRoot 'deployment-targets.json') -Destination 'project/deployment-targets.json')
+
     foreach ($pattern in $projectPatterns) {
         foreach ($f in @(Get-Item -Path (Join-Path $ProjectRoot $pattern) -ErrorAction SilentlyContinue)) {
             if ($f -is [System.IO.FileInfo]) {
