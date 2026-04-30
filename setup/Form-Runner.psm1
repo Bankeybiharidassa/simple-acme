@@ -1020,7 +1020,7 @@ function Get-ConnectorScriptByIntent {
         'firewall-sophos' { return (Resolve-DeploymentScriptPath -ScriptFileName 'deploy-sophos.ps1') }
         'waf' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2waf.ps1') }
         'kemp' { return (Resolve-DeploymentScriptPath -ScriptFileName 'cert2kemp.ps1') }
-        'custom' { throw 'This target type is not implemented yet.' }
+        'custom' { return '' }
         default { throw "Unsupported target intent: $TargetIntent" }
     }
 }
@@ -1251,15 +1251,14 @@ function Invoke-AcmeForm {
 
     Start-ConsoleSection -Title 'Target selection' -Clear
     [Console]::WriteLine('What do you want to secure?')
-    [Console]::WriteLine('[1] Remote Desktop Gateway (RDS)')
-    [Console]::WriteLine('[2] Website (IIS)')
-    [Console]::WriteLine('[3] Mail server (SMTP/IMAP/POP3)')
-    [Console]::WriteLine('[4] Firewall / VPN')
-    [Console]::WriteLine('[5] Web application firewall')
-    [Console]::WriteLine('[6] Load balancer (Kemp)')
-    [Console]::WriteLine('[7] Remote Desktop Gateway + Session Hosts (farm)')
-    [Console]::WriteLine('[8] Custom system')
-    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='iis'; '3'='mail'; '4'='firewall'; '5'='waf'; '6'='kemp'; '7'='rds-farm'; '8'='custom' } -DefaultKey '1'
+    [Console]::WriteLine('[1] Remote Desktop Gateway / RD Web on this server')
+    [Console]::WriteLine('[2] Remote Desktop Gateway + Session Hosts')
+    [Console]::WriteLine('[3] Website (IIS)')
+    [Console]::WriteLine('[4] Mail server (SMTP/IMAP/POP3)')
+    [Console]::WriteLine('[5] Firewall / VPN')
+    [Console]::WriteLine('[6] Load balancer / WAF')
+    [Console]::WriteLine('[7] Custom system')
+    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='rds-farm'; '3'='iis'; '4'='mail'; '5'='firewall'; '6'='waf'; '7'='custom' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
@@ -1339,6 +1338,17 @@ function Invoke-AcmeForm {
         }
     }
     $values.ACME_ACCOUNT_NAME = ''
+    if ($target -eq 'custom') {
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Custom system deployment script')
+        [Console]::WriteLine('Provide a script path relative to project root or an absolute path.')
+        $customScriptPath = [string](Read-Host 'Script path')
+        if ([string]::IsNullOrWhiteSpace($customScriptPath)) { return $null }
+        $values.ACME_SCRIPT_PATH = $customScriptPath
+        $customScriptParams = [string](Read-Host 'Script parameters (default: {CertThumbprint})')
+        if ([string]::IsNullOrWhiteSpace($customScriptParams)) { $customScriptParams = '{CertThumbprint}' }
+        $values.ACME_SCRIPT_PARAMETERS = $customScriptParams
+    }
     if ($curr.ContainsKey('ACME_SCRIPT_PATH')) {
         $existingScriptPath = Resolve-AbsoluteSetupPath -PathValue ([string]$curr.ACME_SCRIPT_PATH)
         $sameTarget = $curr.ContainsKey('ACME_TARGET_SYSTEM') -and ([string]$curr.ACME_TARGET_SYSTEM).ToLowerInvariant() -eq $target

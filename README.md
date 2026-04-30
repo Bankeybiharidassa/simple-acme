@@ -163,4 +163,6 @@ Until then, the helper must always pass `--baseuri` explicitly during issuance/r
 - Farm mode requires an exportable private key and explicit operator confirmation.
 - PFX password is generated in memory only, never persisted.
 - Runtime PFX artifacts are cleaned up locally and remotely when configured.
-- No extra topology keys are stored in plaintext `certificate.env`; deployment script settings are stored in encrypted `env.secure`.
+- No extra topology keys are stored in `certificate.env`.
+- RDS farm topology is stored in `deployment-targets.json`.
+- Passwords and PFX passwords are never stored.
