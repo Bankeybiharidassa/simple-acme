@@ -152,3 +152,15 @@ Until then, the helper must always pass `--baseuri` explicitly during issuance/r
 ## Advanced / Phase 2 orchestrator
 
 `certificate-orchestrator.ps1`, drop directories, HTTP listener, API key auth, and state/event workflows are advanced features. They are optional and not required for phase-1 local bootstrap or standard RDS deployment.
+
+
+## RDS deployment modes
+
+- **Single RDS Gateway mode** keeps using `Scripts\cert2rds.ps1` for local role bindings.
+- **RDS Gateway + Session Hosts mode** uses `Scripts\deploy-rds-farm.ps1` which exports a runtime-only PFX and distributes it to session hosts over PowerShell Remoting.
+- Session host targets are collected in setup and stored in `deployment-targets.json` (hostnames + optional username only, never passwords).
+- Password prompts happen only at deployment runtime when fallback credentials are needed.
+- Farm mode requires an exportable private key and explicit operator confirmation.
+- PFX password is generated in memory only, never persisted.
+- Runtime PFX artifacts are cleaned up locally and remotely when configured.
+- No extra topology keys are stored in plaintext `certificate.env`; deployment script settings are stored in encrypted `env.secure`.
