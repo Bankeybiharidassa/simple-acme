@@ -40,9 +40,16 @@ function Write-CertificateLog {
     }
 
     $logDir = $env:CERTIFICATE_LOG_DIR
-    if ($logDir -and (Test-Path -LiteralPath $logDir)) {
-        $path = Join-Path $logDir 'orchestrator.log'
-        try { Add-Content -Path $path -Value $line -Encoding UTF8 } catch { Write-Warning "Log file write failed: $($_.Exception.Message)" }
+    if ([string]::IsNullOrWhiteSpace($logDir)) {
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' 'logs'))
+    }
+    if (-not (Test-Path -LiteralPath $logDir)) {
+        try { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } catch { Write-Warning "Cannot create log directory '$logDir': $($_.Exception.Message)" }
+    }
+    if (Test-Path -LiteralPath $logDir) {
+        $datestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd')
+        $path = Join-Path $logDir "orchestrator-$datestamp.log"
+        try { Add-Content -LiteralPath $path -Value $line -Encoding UTF8 } catch { Write-Warning "Log file write failed: $($_.Exception.Message)" }
     }
 }
 
