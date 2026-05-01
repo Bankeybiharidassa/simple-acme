@@ -117,6 +117,25 @@ ACME_ALLOW_CSR_FALLBACK=0
 
 Ensure `<root>\wacs.exe` exists, or set `ACME_WACS_PATH` explicitly. `PATH` is fallback only.
 
+
+## Where debug logs are written
+
+`certificate-setup.ps1` writes setup debug files to:
+
+1. `CERTIFICATE_LOG_DIR` when set
+2. otherwise `<root>\logs` (the script directory log folder)
+
+Enable debug file logging with either common `-Debug` or explicit `-EnableDebugFileLog`:
+
+```powershell
+.\certificate-setup.ps1 -EnableDebugFileLog
+# or
+.\certificate-setup.ps1 -Debug
+```
+
+When debug file logging is active, setup prints the absolute debug log path to the console as:
+`Setup debug file log: <absolute-path>`.
+
 ## Official release updater
 
 Use `certificate-update-simple-acme.ps1` to download/refresh official simple-acme files in the install root.
