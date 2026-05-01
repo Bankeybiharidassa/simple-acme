@@ -176,6 +176,38 @@ function Invoke-ConnectorPipeline {
     }
 }
 
+function Write-ConnectorLog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Component,
+        [Parameter(Mandatory)][string]$Action,
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][ValidateSet('success','fail','info')][string]$Result,
+        [hashtable]$Details = @{},
+        [string]$LogDir = '',
+        [switch]$EmitConsole
+    )
+
+    $resolvedLogDir = if ([string]::IsNullOrWhiteSpace($LogDir)) {
+        if ($IsWindows) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot '..\logs' }
+    } else { $LogDir }
+    if (-not (Test-Path -LiteralPath $resolvedLogDir)) {
+        New-Item -Path $resolvedLogDir -ItemType Directory -Force | Out-Null
+    }
+    $file = Join-Path $resolvedLogDir ("connector-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
+    $entry = [ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString('o')
+        component = $Component
+        action    = $Action
+        target    = $Target
+        result    = $Result
+        details   = $Details
+    }
+    $json = $entry | ConvertTo-Json -Depth 8 -Compress
+    Add-Content -Path $file -Value $json -Encoding UTF8
+    if ($EmitConsole) { Write-Host $json }
+}
+
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('New-ConnectorError')
 $FunctionsToExport.Add('Assert-RequiredString')
@@ -186,6 +218,7 @@ $FunctionsToExport.Add('Ensure-CertificateInMyStore')
 $FunctionsToExport.Add('Resolve-RenewalMapping')
 $FunctionsToExport.Add('Invoke-EndpointAction')
 $FunctionsToExport.Add('Invoke-ConnectorPipeline')
+$FunctionsToExport.Add('Write-ConnectorLog')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {
