@@ -1,6 +1,37 @@
+[CmdletBinding()]
+param()
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:tuiModule = $null
+$script:SetupLogEnabled = $false
+$script:SetupLogPath = $null
+
+function Initialize-SetupDebugLogging {
+    $debugRequested = $PSBoundParameters.ContainsKey('Debug') -or $DebugPreference -ne [System.Management.Automation.ActionPreference]::SilentlyContinue
+    if (-not $debugRequested) { return }
+
+    $logRoot = if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_LOG_DIR)) { [string]$env:CERTIFICATE_LOG_DIR } else { Join-Path $PSScriptRoot 'logs' }
+    if (-not (Test-Path -LiteralPath $logRoot)) { New-Item -ItemType Directory -Path $logRoot -Force | Out-Null }
+
+    $script:SetupLogPath = Join-Path $logRoot ("certificate-setup-debug-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
+    "[$((Get-Date).ToUniversalTime().ToString('o'))] Setup debug logging started." | Set-Content -LiteralPath $script:SetupLogPath -Encoding UTF8
+    $script:SetupLogEnabled = $true
+}
+
+function Write-SetupDebugLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    if (-not $script:SetupLogEnabled) { return }
+    $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('o'), $Message
+    Add-Content -LiteralPath $script:SetupLogPath -Value $line -Encoding UTF8
+}
+
+Initialize-SetupDebugLogging
+Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScriptRoot'"
 
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
@@ -44,6 +75,7 @@ Run this script from a full repository checkout and confirm the module file exis
 }
 
 $tuiModule = Import-Module $tuiEngineModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $tuiEngineModulePath"
 if ($null -eq $tuiModule) {
     throw "Unable to import required TUI module from path: $tuiEngineModulePath"
 }
@@ -51,6 +83,7 @@ Assert-SetupCommandAvailable -CommandName 'Show-TuiMenu' -ExpectedModulePath $tu
 Assert-SetupCommandAvailable -CommandName 'Show-TuiStatus' -ExpectedModulePath $tuiEngineModulePath -ModuleInfo $tuiModule
 
 $formRunnerModule = Import-Module $formRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $formRunnerModulePath"
 if ($null -eq $formRunnerModule) {
     throw "Unable to import required setup module from path: $formRunnerModulePath"
 }
@@ -66,12 +99,15 @@ Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -Ex
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $schedulerModulePath"
 if ($null -eq $schedulerModule) {
     throw "Unable to import required scheduler module from path: $schedulerModulePath"
 }
 Assert-SetupCommandAvailable -CommandName 'Ensure-OrchestratorScheduledTask' -ExpectedModulePath $schedulerModulePath -ModuleInfo $schedulerModule
 Import-Module $envLoaderModulePath -Force -Global | Out-Null
+Write-SetupDebugLog -Message "Imported module: $envLoaderModulePath"
 . "$PSScriptRoot/setup/Menu-Tree.ps1"
+Write-SetupDebugLog -Message "Loaded menu tree."
 
 function Invoke-InitialAcmeReconcilePrompt {
     param(
@@ -192,6 +228,7 @@ function Invoke-OrchestratorTaskRegistration {
 }
 
 $envPath = Resolve-BootstrapEnvPath -ProjectRoot $PSScriptRoot
+Write-SetupDebugLog -Message "Resolved env path: $envPath"
 [Console]::WriteLine('Active bootstrap env:')
 [Console]::WriteLine($envPath)
 if ($env:CERTIFICATE_ENV_FILE) {
@@ -200,12 +237,14 @@ if ($env:CERTIFICATE_ENV_FILE) {
 
 . "$PSScriptRoot/config.ps1"
 Initialize-CertificateConfig -AllowIncomplete | Out-Null
+Write-SetupDebugLog -Message "Certificate config initialized."
 
 $configDir = if ($env:CERTIFICATE_CONFIG_DIR) { $env:CERTIFICATE_CONFIG_DIR } else { Join-Path $PSScriptRoot 'config' }
 if (-not (Test-Path -LiteralPath $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
 
 $menuStack = @($CertificateMenuTree)
 while ($menuStack.Count -gt 0) {
+    Write-SetupDebugLog -Message "Rendering menu: $($menuStack[$menuStack.Count - 1].Title)"
     $currentMenu = $menuStack[$menuStack.Count - 1]
     $selected = Show-TuiMenu -Menu $currentMenu -DisableSubmenuRecursion
 
@@ -219,6 +258,7 @@ while ($menuStack.Count -gt 0) {
     if ($null -eq $menuItem) { continue }
 
     if ($menuItem.Type -eq 'submenu') {
+        Write-SetupDebugLog -Message "Opening submenu: $selected"
         if ($selected -eq 'advanced') {
             [Console]::WriteLine('')
             [Console]::WriteLine('These features are experimental phase-2 deployment/orchestrator functions.')
@@ -235,6 +275,7 @@ while ($menuStack.Count -gt 0) {
     Clear-TuiScreen
     switch ($selected) {
         'setup-new'      {
+            Write-SetupDebugLog -Message "Executing action: setup-new"
             $result = Invoke-AcmeForm -EnvFilePath $envPath
             if ($null -ne $result) {
                 Invoke-InitialAcmeReconcilePrompt -RootDir $PSScriptRoot -EnvFilePath $envPath
@@ -242,13 +283,14 @@ while ($menuStack.Count -gt 0) {
         }
         'manage-certs'   { Invoke-ManageCertificatesMenu -ConfigDir $configDir }
         'acme'           {
+            Write-SetupDebugLog -Message "Executing action: acme"
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
-        'logs-diagnostics' { Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
-        'task-register'  { Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
-        'policies'       { Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
-        'policies-view'  { Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }
-        'backup-create'  { & "$PSScriptRoot/certificate-backup.ps1" -OutputPath (Join-Path $PSScriptRoot ("certificate-{0}.certbak" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))) }
+        'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
+        'task-register'  { Write-SetupDebugLog -Message "Executing action: task-register"; Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
+        'policies'       { Write-SetupDebugLog -Message "Executing action: policies"; Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
+        'policies-view'  { Write-SetupDebugLog -Message "Executing action: policies-view"; Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }
+        'backup-create'  { Write-SetupDebugLog -Message "Executing action: backup-create"; & "$PSScriptRoot/certificate-backup.ps1" -OutputPath (Join-Path $PSScriptRoot ("certificate-{0}.certbak" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))) }
         'backup-restore' {
             $path = Read-Host 'Backup path'
             if ($path) { & "$PSScriptRoot/certificate-restore.ps1" -BackupPath $path }
