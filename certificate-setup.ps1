@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$EnableDebugFileLog
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -8,15 +10,33 @@ $script:SetupLogEnabled = $false
 $script:SetupLogPath = $null
 
 function Initialize-SetupDebugLogging {
-    $debugRequested = $PSBoundParameters.ContainsKey('Debug') -or $DebugPreference -ne [System.Management.Automation.ActionPreference]::SilentlyContinue
+    $debugRequested = $EnableDebugFileLog -or $PSBoundParameters.ContainsKey('Debug') -or $DebugPreference -ne [System.Management.Automation.ActionPreference]::SilentlyContinue
     if (-not $debugRequested) { return }
 
-    $logRoot = if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_LOG_DIR)) { [string]$env:CERTIFICATE_LOG_DIR } else { Join-Path $PSScriptRoot 'logs' }
-    if (-not (Test-Path -LiteralPath $logRoot)) { New-Item -ItemType Directory -Path $logRoot -Force | Out-Null }
+    $configuredRoot = if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_LOG_DIR)) { [string]$env:CERTIFICATE_LOG_DIR } else { Join-Path $PSScriptRoot 'logs' }
+    try {
+        $logRoot = [System.IO.Path]::GetFullPath($configuredRoot)
+    } catch {
+        throw "Unable to resolve debug log directory path '$configuredRoot'. $($_.Exception.Message)"
+    }
+
+    if (-not (Test-Path -LiteralPath $logRoot)) {
+        try {
+            New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+        } catch {
+            throw "Unable to create debug log directory '$logRoot'. Verify the path and ensure the current user has write permission. $($_.Exception.Message)"
+        }
+    }
 
     $script:SetupLogPath = Join-Path $logRoot ("certificate-setup-debug-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
-    "[$((Get-Date).ToUniversalTime().ToString('o'))] Setup debug logging started." | Set-Content -LiteralPath $script:SetupLogPath -Encoding UTF8
+    try {
+        "[$((Get-Date).ToUniversalTime().ToString('o'))] Setup debug logging started." | Set-Content -LiteralPath $script:SetupLogPath -Encoding UTF8
+    } catch {
+        throw "Unable to write setup debug log '$script:SetupLogPath'. Verify write permissions for '$logRoot'. $($_.Exception.Message)"
+    }
+
     $script:SetupLogEnabled = $true
+    [Console]::WriteLine("Setup debug file log: $script:SetupLogPath")
 }
 
 function Write-SetupDebugLog {

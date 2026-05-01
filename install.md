@@ -104,6 +104,29 @@ Use the menu to configure:
 - **Local Windows services / Network appliances** connector settings
 - **Deployment policies** (`policies.json`)
 
+### Where debug logs are written
+
+`certificate-setup.ps1` debug file logs are written to:
+
+1. `CERTIFICATE_LOG_DIR` when configured
+2. otherwise `C:\certificate\logs` (or `<root>\logs` for your chosen install root)
+
+Run setup with explicit debug file logging:
+
+```powershell
+cd C:\certificate
+.\certificate-setup.ps1 -EnableDebugFileLog
+```
+
+Compatibility mode with PowerShell common debug parameter is also supported:
+
+```powershell
+cd C:\certificate
+.\certificate-setup.ps1 -Debug
+```
+
+When enabled, setup prints the resolved absolute log file path at startup.
+
 ### TUI behavior note
 
 The ACME form updates ACME fields and preserves existing non-ACME values from current env state. Keep full env maintenance disciplined when editing manually.
