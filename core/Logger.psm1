@@ -16,17 +16,25 @@ function Ensure-EventSource {
 
 function Write-CertificateLog {
     param(
-        [ValidateSet('INFO','WARN','ERROR')][string]$Level,
+        [string]$Level,
         [string]$Message,
         [string]$JobId = '',
         [string]$Domain = '',
         [string]$Step = ''
     )
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    $line = '{0} [{1,-5}] [job:{2}] [domain:{3}] [step:{4}] {5}' -f $timestamp, $Level, $JobId, $Domain, $Step, $Message
 
-    $entryType = switch ($Level) {
+    $normalizedLevel = switch -Regex (($Level ?? '').Trim().ToUpperInvariant()) {
+        '^INFO(RMATION)?$' { 'INFO'; break }
+        '^WARN(ING)?$' { 'WARN'; break }
+        '^ERR(OR)?$' { 'ERROR'; break }
+        default { 'INFO' }
+    }
+
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $line = '{0} [{1,-5}] [job:{2}] [domain:{3}] [step:{4}] {5}' -f $timestamp, $normalizedLevel, $JobId, $Domain, $Step, $Message
+
+    $entryType = switch ($normalizedLevel) {
         'INFO' { 'Information' }
         'WARN' { 'Warning' }
         'ERROR' { 'Error' }
