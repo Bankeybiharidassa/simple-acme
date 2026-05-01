@@ -983,11 +983,12 @@ function Write-ReconcileLog {
     $serialized = $entry | ConvertTo-Json -Compress -Depth 5
     Write-Host $serialized
     $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
-    if (-not [string]::IsNullOrWhiteSpace($logDir)) {
-        if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-        $logPath = Join-Path $logDir ("reconcile-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd'))
-        Add-Content -LiteralPath $logPath -Value $serialized -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($logDir)) {
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' 'logs'))
     }
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $logPath = Join-Path $logDir ("reconcile-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd'))
+    Add-Content -LiteralPath $logPath -Value $serialized -Encoding UTF8
 }
 
 function Invoke-SimpleAcmeReconcile {
