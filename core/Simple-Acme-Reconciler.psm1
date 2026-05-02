@@ -644,7 +644,10 @@ function Get-InstallationPlugins {
         return @('script')
     }
 
-    $valid = @('script','iis')
+    # Backward compatibility: some environments accidentally put store plugin values
+    # (for example "pfxfile") in ACME_INSTALLATION_PLUGINS. We accept these and
+    # treat them as no-op installers so reconcile can continue.
+    $valid = @('script','iis','pfxfile')
     $plugins = Get-NormalizedCsvValues -InputText $raw
     if ((Get-SafeCount $plugins) -eq 0) {
         throw 'ACME_INSTALLATION_PLUGINS does not contain any valid values.'
@@ -945,6 +948,9 @@ function Invoke-WacsIssue {
         }
         $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
         $args += @('--installation', 'script','--script', [string]$scriptPath, '--scriptparameters', [string]$scriptParams)
+    }
+    if ($installationPlugins -contains 'iis') {
+        $args += @('--installation', 'iis')
     }
 
     $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
