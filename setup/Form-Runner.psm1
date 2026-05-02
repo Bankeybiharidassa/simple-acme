@@ -1225,6 +1225,12 @@ function Resolve-EabCredentialsForSetup {
             $TargetValues.ACME_HMAC_SECRET = $existingSecret
             return 'ok'
         }
+        $confirmReplace = Read-SetupChoice -Prompt 'Replace credentials: [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+        if ($confirmReplace -in @('__CANCEL__','__BACK__','no')) {
+            $TargetValues.ACME_KID = $existingKid
+            $TargetValues.ACME_HMAC_SECRET = $existingSecret
+            return 'ok'
+        }
     } elseif ($hasKid -or $hasSecret) {
         Start-ConsoleSection -Title 'EAB credentials'
         $kidState = 'not set'
@@ -1628,7 +1634,7 @@ function Invoke-AcmeForm {
     $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { '' }
     if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $values }
-    $reloaded = Read-EffectiveEnvFile -Path $resolvedEnvFilePath
+    $reloaded = Read-EffectiveSavedEnvValues -EnvFilePath $resolvedEnvFilePath -ConfigDir $configDir
     Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
     if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {

@@ -124,10 +124,28 @@ function Read-EnvFile {
 }
 
 function Read-EffectiveEnvFile {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$ValidateRequired
+    )
 
     $values = Read-EnvFile -Path $Path
     $values = Import-SecureOverlay -Values $values
+    if ($ValidateRequired) {
+        $missing = @($script:RequiredEnvKeys | Where-Object { -not $values.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$values[$_]) })
+        $requiresEab = $values.ContainsKey('ACME_REQUIRES_EAB') -and [string]$values.ACME_REQUIRES_EAB -eq '1'
+        if ($requiresEab) {
+            foreach ($key in @('ACME_KID','ACME_HMAC_SECRET')) {
+                if (-not $values.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$values[$key])) {
+                    $missing += $key
+                }
+            }
+        }
+        $missing = @($missing | Select-Object -Unique)
+        if ($missing.Count -gt 0) {
+            throw "Missing required environment keys in '$Path': $($missing -join ', ')"
+        }
+    }
     return $values
 }
 
