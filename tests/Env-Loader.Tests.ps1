@@ -26,6 +26,23 @@ Describe 'Env loader' {
         $values.DOMAINS | Should -Be 'example.com'
     }
 
+    It 'Read-EffectiveEnvFile merges secure overlay secrets from credentials.sec' {
+        $cfgDir = Join-Path $TestDrive 'cfg'
+        New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+        @(
+            'ACME_DIRECTORY=https://acme.example.com/directory',
+            'DOMAINS=example.com',
+            "CERTIFICATE_CONFIG_DIR=$cfgDir"
+        ) | Set-Content -Path $script:path -Encoding UTF8
+
+        $secretValues = @{ ACME_KID='kid-merged'; ACME_HMAC_SECRET='secret-merged' }
+        Write-CredentialStore -ConfigDir $cfgDir -Values $secretValues
+
+        $effective = Read-EffectiveEnvFile -Path $script:path
+        $effective.ACME_KID | Should -Be 'kid-merged'
+        $effective.ACME_HMAC_SECRET | Should -Be 'secret-merged'
+    }
+
     It 'Duplicate key throws with key and line' {
         @('A=1','A=2') | Set-Content -Path $script:path -Encoding UTF8
         { Read-EnvFile -Path $script:path } | Should -Throw '*A*line 2*'
@@ -139,6 +156,17 @@ Describe 'Env loader' {
         ) | Set-Content -Path $script:path -Encoding UTF8
 
         { Import-EnvFile -Path $script:path -Force -AllowIncomplete } | Should -Not -Throw
+    }
+
+    It 'Runtime strict import fails when script plugin is selected but runtime script path is missing' {
+        @(
+            'ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory',
+            'DOMAINS=example.com',
+            'ACME_INSTALLATION_PLUGINS=script',
+            'CERTIFICATE_CONFIG_DIR=C:\cfg'
+        ) | Set-Content -Path $script:path -Encoding UTF8
+
+        { Import-EnvFile -Path $script:path -Force } | Should -Throw '*ACME_SCRIPT_PATH*'
     }
 
     It 'Write round-trips through Read-EnvFile' {

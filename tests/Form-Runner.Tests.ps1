@@ -113,6 +113,55 @@ Describe 'ACME provider state handling' {
             $target.ACME_HMAC_SECRET | Should -Be 'secret123'
         }
 
+        It 'Resolve-EabCredentialsForSetup keeps existing credentials when replace is cancelled at explicit confirm' {
+            $script:eabChoices = @('replace','no')
+            Mock -CommandName Read-SetupChoice -MockWith {
+                $next = $script:eabChoices[0]
+                $script:eabChoices = @($script:eabChoices | Select-Object -Skip 1)
+                return $next
+            }
+            Mock -CommandName Read-Host -MockWith { throw 'Read-Host should not be called when replace confirmation is denied.' }
+            $curr = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
+            $target = @{}
+            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
+            $state | Should -Be 'ok'
+            $target.ACME_KID | Should -Be 'kid123'
+            $target.ACME_HMAC_SECRET | Should -Be 'secret123'
+        }
+
+        It 'Resolve-EabCredentialsForSetup replaces existing credentials only with explicit confirm and complete values' {
+            $script:eabChoices = @('replace','yes')
+            $script:eabInputs = @('kid-new','secret-new')
+            Mock -CommandName Read-SetupChoice -MockWith {
+                $next = $script:eabChoices[0]
+                $script:eabChoices = @($script:eabChoices | Select-Object -Skip 1)
+                return $next
+            }
+            Mock -CommandName Read-Host -MockWith {
+                $next = $script:eabInputs[0]
+                $script:eabInputs = @($script:eabInputs | Select-Object -Skip 1)
+                return $next
+            }
+            $curr = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
+            $target = @{}
+            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
+            $state | Should -Be 'ok'
+            $target.ACME_KID | Should -Be 'kid-new'
+            $target.ACME_HMAC_SECRET | Should -Be 'secret-new'
+        }
+
+        It 'Resolve-EabCredentialsForSetup does not mutate target when replace values are incomplete' {
+            Mock -CommandName Read-SetupChoice -MockWith { 'yes' } -ParameterFilter { $Prompt -like 'Replace credentials*' }
+            Mock -CommandName Read-SetupChoice -MockWith { 'replace' } -ParameterFilter { $Prompt -eq 'EAB credentials' }
+            Mock -CommandName Read-Host -MockWith { '' }
+            $curr = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
+            $target = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
+            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
+            $state | Should -Be '__BACK__'
+            $target.ACME_KID | Should -Be 'kid123'
+            $target.ACME_HMAC_SECRET | Should -Be 'secret123'
+        }
+
         It 'Read-AcmeProviderSelection preserves existing EAB credentials when switching to Networking4All' {
             $script:providerAnswers = @('2','1','3')
             Mock -CommandName Read-SetupChoice -MockWith {
@@ -128,6 +177,18 @@ Describe 'ACME provider state handling' {
             $selection.ACME_KID | Should -Be 'kid-existing'
             $selection.ACME_HMAC_SECRET | Should -Be 'secret-existing'
             $selection.ACME_REQUIRES_EAB | Should -Be '1'
+        }
+
+        It 'Read-AcmeProviderSelection keeps existing EAB credentials when switching to LetsEncrypt' {
+            Mock -CommandName Read-SetupChoice -MockWith { 'letsencrypt' }
+            $selection = Read-AcmeProviderSelection -CurrentValues @{
+                ACME_KID = 'kid-existing'
+                ACME_HMAC_SECRET = 'secret-existing'
+            }
+            $selection.ACME_PROVIDER | Should -Be 'letsencrypt'
+            $selection.ACME_KID | Should -Be 'kid-existing'
+            $selection.ACME_HMAC_SECRET | Should -Be 'secret-existing'
+            $selection.ACME_REQUIRES_EAB | Should -Be '0'
         }
     }
 }
