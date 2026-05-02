@@ -180,7 +180,7 @@ function Import-EnvFile {
     foreach ($key in $values.Keys) {
         $existing = [Environment]::GetEnvironmentVariable($key)
         if (-not $Force -and -not [string]::IsNullOrWhiteSpace($existing)) {
-            Write-Warning "Skipping existing env var '$key' because -Force was not specified."
+            Write-Verbose "Skipping existing env var '$key' because -Force was not specified."
             continue
         }
         [Environment]::SetEnvironmentVariable($key, [string]$values[$key])
