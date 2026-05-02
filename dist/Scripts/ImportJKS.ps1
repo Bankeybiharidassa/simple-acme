@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 <#
 .SYNOPSIS
 Add a win-acme renewal to a Java keystore
@@ -37,6 +35,8 @@ param(
 	[string]
 	$KeyStoreKeyPassword
 )
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $keytoolpath = Join-Path -Path $env:JAVA_HOME -ChildPath bin\keytool.exe
 

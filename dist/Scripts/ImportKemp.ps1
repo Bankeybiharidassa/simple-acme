@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 <#
 .SYNOPSIS
 Imports a cert from WASC renewal into KEMP Loadmaster.
@@ -71,6 +69,8 @@ param(
 	[string]
 	$KempIP
 )
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 Import-Module Kemp.LoadBalancer.Powershell
 

@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 <#
 .SYNOPSIS
 Imports a cert from WASC renewal into Exchange services.
@@ -95,6 +93,8 @@ param(
 	
 	[switch]$DebugOn
 )
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 if($DebugOn){
 	$DebugPreference = "Continue"
