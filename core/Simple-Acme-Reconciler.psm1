@@ -157,7 +157,7 @@ function Test-ValidWildcardDomainName {
     if ([string]::IsNullOrWhiteSpace($candidate)) { return $false }
     if ($candidate -notlike '*.*') { return $false }
     if (-not $candidate.StartsWith('*.')) { return $false }
-    if (($candidate.ToCharArray() | Where-Object { $_ -eq '*' }).Count -ne 1) { return $false }
+    if ((Get-SafeCount ($candidate.ToCharArray() | Where-Object { $_ -eq '*' })) -ne 1) { return $false }
     $suffix = $candidate.Substring(2)
     if ([string]::IsNullOrWhiteSpace($suffix)) { return $false }
     return (Test-ValidDomainName -Domain $suffix)
