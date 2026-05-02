@@ -151,6 +151,18 @@ function Test-ValidDomainName {
     return $true
 }
 
+function Test-ValidWildcardDomainName {
+    param([Parameter(Mandatory)][string]$Domain)
+    $candidate = $Domain.Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($candidate)) { return $false }
+    if ($candidate -notlike '*.*') { return $false }
+    if (-not $candidate.StartsWith('*.')) { return $false }
+    if (($candidate.ToCharArray() | Where-Object { $_ -eq '*' }).Count -ne 1) { return $false }
+    $suffix = $candidate.Substring(2)
+    if ([string]::IsNullOrWhiteSpace($suffix)) { return $false }
+    return (Test-ValidDomainName -Domain $suffix)
+}
+
 function Get-RenewalFiles {
     param([string]$SimpleAcmeDir = (Join-Path $env:ProgramData 'simple-acme'))
 
@@ -178,11 +190,18 @@ function Get-SimpleAcmeLogDirectories {
 }
 
 function Get-LatestSimpleAcmeLogFile {
-    param([string[]]$Directories = @(Get-SimpleAcmeLogDirectories))
+    param(
+        [string[]]$Directories = @(Get-SimpleAcmeLogDirectories),
+        [string]$FilterText = ''
+    )
     $files = @()
     foreach ($dir in @($Directories)) {
         if (Test-Path -LiteralPath $dir -PathType Container) {
-            $files += @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue)
+            $selected = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue)
+            if (-not [string]::IsNullOrWhiteSpace($FilterText)) {
+                $selected = @($selected | Where-Object { $_.FullName -like "*$FilterText*" })
+            }
+            $files += $selected
         }
     }
     if ((Get-SafeCount $files) -eq 0) { return $null }
@@ -535,10 +554,21 @@ function Test-ReconcilePreflight {
     }
 
     $domains = Get-NormalizedDomains -Domains ([string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))
+    $product = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_NETWORKING4ALL_PRODUCT')
+    $isWildcardProduct = (-not [string]::IsNullOrWhiteSpace($product) -and $product -like '*wildcard*')
     if ((Get-SafeCount $domains) -eq 0) {
         throw "DOMAINS did not contain any valid hostnames. Current value: '$((Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))'"
     }
     foreach ($domain in $domains) {
+        if ($domain.StartsWith('*.')) {
+            if (-not $isWildcardProduct) {
+                throw "Wildcard domain '$domain' requires a wildcard product, current product is '$product'."
+            }
+            if (-not (Test-ValidWildcardDomainName -Domain $domain)) {
+                throw "Invalid wildcard domain format in DOMAINS: '$domain'"
+            }
+            continue
+        }
         if (-not (Test-ValidDomainName -Domain $domain)) {
             throw "Invalid domain format in DOMAINS: '$domain'"
         }
