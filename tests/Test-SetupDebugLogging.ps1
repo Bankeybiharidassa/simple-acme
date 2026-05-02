@@ -27,6 +27,21 @@ function Invoke-TestSetupDebugLogging {
         }
     }
 
+
+    & $Assert 'logs initial reconcile prompt decisions and outcomes' {
+        if ($content -notmatch 'Initial reconcile prompt response captured') { throw 'Expected decision logging for initial reconcile prompt.' }
+        if ($content -notmatch 'Initial reconcile skipped by operator choice') { throw 'Expected explicit skip logging.' }
+        if ($content -notmatch 'Initial reconcile completed successfully') { throw 'Expected explicit success logging.' }
+        if ($content -notmatch 'Initial reconcile failed') { throw 'Expected explicit failure logging.' }
+    }
+
+    & $Assert 'logs reconcile artifact pointers and transcript guidance' {
+        if ($content -notmatch 'Reconcile log pattern: reconcile-YYYYMMDD.log') { throw 'Expected reconcile log pattern pointer.' }
+        if ($content -notmatch 'reconcile-transcript-YYYYMMDD-HHMMSS.log') { throw 'Expected transcript pattern pointer.' }
+        if ($content -notmatch 'Latest reconcile log discovered') { throw 'Expected latest reconcile log discovery message.' }
+        if ($content -notmatch 'CERTIFICATE_TRANSCRIPT_LOGGING=1') { throw 'Expected transcript enablement guidance.' }
+    }
+
     & $Assert 'includes actionable directory and write permission errors' {
         if ($content -notmatch 'Unable to create debug log directory') { throw 'Expected create-directory error message.' }
         if ($content -notmatch 'has write permission') { throw 'Expected permission hint for directory creation failure.' }

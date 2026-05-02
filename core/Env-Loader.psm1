@@ -169,14 +169,29 @@ function Import-EnvFile {
         if (-not $values.ContainsKey($key)) { $values[$key] = $script:OptionalEnvDefaults[$key] }
     }
 
+    $appliedKeys = New-Object System.Collections.Generic.List[string]
+    $skippedKeys = New-Object System.Collections.Generic.List[string]
+
     foreach ($key in $values.Keys) {
         $existing = [Environment]::GetEnvironmentVariable($key)
         if (-not $Force -and -not [string]::IsNullOrWhiteSpace($existing)) {
+            $skippedKeys.Add([string]$key)
             Write-Verbose "Skipping existing env var '$key' because -Force was not specified."
             continue
         }
         [Environment]::SetEnvironmentVariable($key, [string]$values[$key])
+        $appliedKeys.Add([string]$key)
     }
+
+    $summary = [ordered]@{
+        AppliedCount = $appliedKeys.Count
+        SkippedCount = $skippedKeys.Count
+        AppliedKeys = @($appliedKeys)
+        SkippedKeys = @($skippedKeys)
+    }
+    $values['__ENV_IMPORT_SUMMARY'] = $summary
+
+    Write-Verbose ("Env import summary: applied {0}, skipped {1}." -f $summary.AppliedCount, $summary.SkippedCount)
 
     return $values
 }

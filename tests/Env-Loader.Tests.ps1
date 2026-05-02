@@ -58,6 +58,23 @@ Describe 'Env loader' {
         [Environment]::GetEnvironmentVariable('DOMAINS') | Should -Be 'example.com'
     }
 
+
+    It 'Import returns env import summary metadata' {
+        $values = Import-EnvFile -Path $script:path -Force
+        $values.ContainsKey('__ENV_IMPORT_SUMMARY') | Should -BeTrue
+        $values['__ENV_IMPORT_SUMMARY'].AppliedCount | Should -BeGreaterThan 0
+        $values['__ENV_IMPORT_SUMMARY'].SkippedCount | Should -Be 0
+    }
+
+    It 'Import summary tracks skipped keys without exposing values' {
+        [Environment]::SetEnvironmentVariable('DOMAINS','preset.example')
+        $values = Import-EnvFile -Path $script:path
+        $summary = $values['__ENV_IMPORT_SUMMARY']
+        $summary.SkippedCount | Should -BeGreaterThan 0
+        $summary.SkippedKeys | Should -Contain 'DOMAINS'
+        ($summary | ConvertTo-Json -Compress) | Should -Not -Match 'preset\.example'
+    }
+
     It 'Lets Encrypt style config does not require EAB values' {
         @(
             'ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory',
