@@ -1164,6 +1164,13 @@ function Read-AcmeProviderSelection {
             $warnings.Add('SAN product selected with one domain configured.')
         }
 
+        if ($hasWildcardDomain -and -not $isWildcardProduct) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine("Wildcard domain detected in DOMAINS, but selected product '$productChoice' is non-wildcard.")
+            [Console]::WriteLine('Select a *-wildcard product or remove wildcard domains before continuing.')
+            Read-SetupChoice -Prompt 'Press [0] Back' -Options @{ '0'='back' } -DefaultKey '0' -AllowBack | Out-Null
+            return '__BACK__'
+        }
         if ($warnings.Count -gt 0) {
             [Console]::WriteLine('')
             [Console]::WriteLine('Domain/product sanity warnings:')
