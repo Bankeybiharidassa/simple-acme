@@ -123,6 +123,14 @@ function Read-EnvFile {
     return $result
 }
 
+function Read-EffectiveEnvFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $values = Read-EnvFile -Path $Path
+    $values = Import-SecureOverlay -Values $values
+    return $values
+}
+
 function Import-EnvFile {
     param(
         [string]$Path = '',
@@ -280,6 +288,7 @@ function Write-EnvFile {
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('Resolve-BootstrapEnvPath')
 $FunctionsToExport.Add('Read-EnvFile')
+$FunctionsToExport.Add('Read-EffectiveEnvFile')
 $FunctionsToExport.Add('Import-EnvFile')
 $FunctionsToExport.Add('Write-EnvFile')
 $FunctionsToExport.Add('Write-SecureOverlay')

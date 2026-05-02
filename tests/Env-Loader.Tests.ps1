@@ -21,6 +21,11 @@ Describe 'Env loader' {
         $values.DOMAINS | Should -Be 'example.com'
     }
 
+    It 'Read-EffectiveEnvFile returns base env values when no secure overlay is present' {
+        $values = Read-EffectiveEnvFile -Path $script:path
+        $values.DOMAINS | Should -Be 'example.com'
+    }
+
     It 'Duplicate key throws with key and line' {
         @('A=1','A=2') | Set-Content -Path $script:path -Encoding UTF8
         { Read-EnvFile -Path $script:path } | Should -Throw '*A*line 2*'

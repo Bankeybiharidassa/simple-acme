@@ -112,6 +112,23 @@ Describe 'ACME provider state handling' {
             $target.ACME_KID | Should -Be 'kid123'
             $target.ACME_HMAC_SECRET | Should -Be 'secret123'
         }
+
+        It 'Read-AcmeProviderSelection preserves existing EAB credentials when switching to Networking4All' {
+            $script:providerAnswers = @('2','1','3')
+            Mock -CommandName Read-SetupChoice -MockWith {
+                $next = $script:providerAnswers[0]
+                $script:providerAnswers = @($script:providerAnswers | Select-Object -Skip 1)
+                return $next
+            }
+            $selection = Read-AcmeProviderSelection -CurrentValues @{
+                DOMAINS = '*.example.com'
+                ACME_KID = 'kid-existing'
+                ACME_HMAC_SECRET = 'secret-existing'
+            }
+            $selection.ACME_KID | Should -Be 'kid-existing'
+            $selection.ACME_HMAC_SECRET | Should -Be 'secret-existing'
+            $selection.ACME_REQUIRES_EAB | Should -Be '1'
+        }
     }
 }
 
