@@ -51,9 +51,9 @@ function Initialize-SetupDebugLogging {
     } else {
         [Environment]::SetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS', '1', 'Process')
     }
-    [Console]::WriteLine("Setup debug file log: $script:SetupLogPath")
+    [Console]::WriteLine(('Setup debug file log: {0}' -f $script:SetupLogPath))
     if ($script:SetupTranscriptEnabled) {
-        [Console]::WriteLine("Setup transcript log: $script:SetupTranscriptPath")
+        [Console]::WriteLine(('Setup transcript log: {0}' -f $script:SetupTranscriptPath))
     }
 }
 
