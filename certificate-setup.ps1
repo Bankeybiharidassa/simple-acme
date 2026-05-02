@@ -167,11 +167,17 @@ function Invoke-InitialAcmeReconcilePrompt {
         [Parameter(Mandatory)][string]$EnvFilePath
     )
 
+    Write-SetupDebugLog -Message "Initial reconcile prompt started. env_file='$EnvFilePath'"
     $envValues = Import-EnvFile -Path $EnvFilePath -Force
+    if ($envValues.ContainsKey('__ENV_IMPORT_SUMMARY')) {
+        $summary = $envValues['__ENV_IMPORT_SUMMARY']
+        Write-SetupDebugLog -Message ("Env import summary for initial reconcile: applied={0}; skipped={1}" -f $summary.AppliedCount, $summary.SkippedCount)
+    }
 
     try {
         Assert-ProviderDirectoryConsistency -Values $envValues
     } catch {
+        Write-SetupDebugLog -Message ("Provider directory consistency check failed: " + $_.Exception.Message)
         [Console]::WriteLine('')
         [Console]::WriteLine($_.Exception.Message)
         Wait-ForOperatorReturn
@@ -192,18 +198,38 @@ function Invoke-InitialAcmeReconcilePrompt {
     if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { [Console]::WriteLine('--eab-key <hidden>') }
     [Console]::WriteLine('')
 
+    Write-SetupDebugLog -Message "Initial reconcile prompt displayed to operator."
     [Console]::WriteLine('')
     $answer = [string](Read-Host 'Run initial ACME reconcile now? [Y/N]')
-    if ($answer.Trim().ToLowerInvariant() -notin @('y','yes')) {
+    $normalizedAnswer = $answer.Trim().ToLowerInvariant()
+    $willProceed = $normalizedAnswer -in @('y','yes')
+    Write-SetupDebugLog -Message ("Initial reconcile prompt response captured. raw='{0}' normalized='{1}' decision='{2}'" -f $answer, $normalizedAnswer, $(if ($willProceed) { 'proceed' } else { 'skip' }))
+    if (-not $willProceed) {
+        Write-SetupDebugLog -Message 'Initial reconcile skipped by operator choice.'
         [Console]::WriteLine('')
         [Console]::WriteLine('Skipped ACME reconcile. Run certificate-simple-acme-reconcile.ps1 later to bootstrap issuance.')
         Wait-ForOperatorReturn
         return
     }
 
+    $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
+    if ([string]::IsNullOrWhiteSpace($logDir)) {
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path $RootDir 'logs'))
+    }
+    $transcriptEnabled = ([Environment]::GetEnvironmentVariable('CERTIFICATE_TRANSCRIPT_LOGGING') -eq '1')
+    Write-SetupDebugLog -Message ("Initial reconcile log directory resolved: '{0}'" -f $logDir)
+    Write-SetupDebugLog -Message "Reconcile log pattern: reconcile-YYYYMMDD.log"
+    if ($transcriptEnabled) {
+        Write-SetupDebugLog -Message "Reconcile transcript logging is enabled. Pattern: reconcile-transcript-YYYYMMDD-HHMMSS.log"
+    } else {
+        Write-SetupDebugLog -Message 'Reconcile transcript logging is disabled. To enable set CERTIFICATE_TRANSCRIPT_LOGGING=1.'
+    }
+
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
+        Write-SetupDebugLog -Message ("Starting initial reconcile. domains='{0}' acme_directory='{1}' script_path='{2}'" -f [string]$envValues.DOMAINS, [string]$envValues.ACME_DIRECTORY, [string]$envValues.ACME_SCRIPT_PATH)
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
+        Write-SetupDebugLog -Message ("Initial reconcile completed successfully. action='{0}' completed_utc='{1}'" -f [string]$action, (Get-Date).ToUniversalTime().ToString('o'))
         [Console]::WriteLine('')
         [Console]::WriteLine("ACME reconcile completed successfully (action=$action).")
         if ([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS') -eq '1') {
@@ -211,6 +237,18 @@ function Invoke-InitialAcmeReconcilePrompt {
         }
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
+        Write-SetupDebugLog -Message ("Initial reconcile failed: " + $_.Exception.Message)
+        if ($_.InvocationInfo) {
+            Write-SetupDebugLog -Message ("Failure invocation context: script='{0}' line='{1}' command='{2}'" -f $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.Line)
+        } else {
+            Write-SetupDebugLog -Message 'Failure invocation context unavailable.'
+        }
+        if ($_.ScriptStackTrace) {
+            Write-SetupDebugLog -Message ('Failure stack trace: ' + $_.ScriptStackTrace)
+        } else {
+            Write-SetupDebugLog -Message 'Failure stack trace unavailable.'
+        }
+
         [Console]::WriteLine('')
         [Console]::WriteLine('ACME reconcile failed: ' + $_.Exception.Message)
         if ($_.InvocationInfo) {
@@ -226,6 +264,16 @@ function Invoke-InitialAcmeReconcilePrompt {
         [Console]::WriteLine('See reconcile-*.log in the logs\ directory next to this script.')
         Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
+    } finally {
+        $latestReconcileLog = $null
+        if (Test-Path -LiteralPath $logDir) {
+            $latestReconcileLog = Get-ChildItem -LiteralPath $logDir -Filter 'reconcile-*.log' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTimeUtc -Descending |
+                Select-Object -First 1
+        }
+        $latestPath = if ($null -eq $latestReconcileLog) { '(not found)' } else { [string]$latestReconcileLog.FullName }
+        Write-SetupDebugLog -Message ("Latest reconcile log discovered: {0}" -f $latestPath)
+        Write-SetupDebugLog -Message ("Reconcile transcript status: {0}" -f $(if ($transcriptEnabled) { 'enabled' } else { 'disabled (set CERTIFICATE_TRANSCRIPT_LOGGING=1 to enable)' }))
     }
 }
 
