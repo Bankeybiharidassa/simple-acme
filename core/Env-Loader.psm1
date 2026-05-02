@@ -251,11 +251,10 @@ function Write-EnvFile {
     $lines.Add('')
 
     $allowed = @(
+        # Bootstrap/plain env values: defaults + operator secrets used at first-run boundaries.
         'DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR',
         'ACME_PROVIDER','ACME_REQUIRES_EAB','ACME_NETWORKING4ALL_ENVIRONMENT','ACME_NETWORKING4ALL_PRODUCT',
-        'ACME_SOURCE_PLUGIN','ACME_ORDER_PLUGIN','ACME_STORE_PLUGIN','ACME_VALIDATION_MODE',
-        'ACME_INSTALLATION_PLUGINS','ACME_SCRIPT_PATH','ACME_SCRIPT_PARAMETERS','ACME_TARGET_SYSTEM','ACME_TARGET_LOCATION',
-        'ACME_KEY_TYPE','ACME_EC_CURVE','ACME_RSA_KEY_SIZE','ACME_ALLOW_CSR_FALLBACK','ACME_CSR_ALGORITHM'
+        'ACME_KID','ACME_HMAC_SECRET'
     )
     foreach ($key in ($Values.Keys | Where-Object { $allowed -contains $_ } | Sort-Object)) {
         $value = [string]$Values[$key]
