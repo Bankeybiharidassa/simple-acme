@@ -886,16 +886,26 @@ function Invoke-WacsIssue {
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
     if ($timeoutSeconds -lt 30) { $timeoutSeconds = 30 }
+    $sourcePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual'
+    $orderPlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN' -Default 'single'
+    $validationMode = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_VALIDATION_MODE' -Default 'none'
     $args = @(
-        '--accepttos','--source', 'manual','--order', 'single','--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
-        '--validation', 'none','--globalvalidation', 'none','--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
+        '--accepttos','--source', [string]$sourcePlugin,'--order', [string]$orderPlugin,'--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
+        '--validation', [string]$validationMode,'--globalvalidation', [string]$validationMode,'--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     )
     $args += @('--store', ($storePlugins -join ','))
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
-    $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
-    $args += @('--installation', 'script','--script', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH'), '--scriptparameters', $scriptParams)
+    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
+    if ($installationPlugins -contains 'script') {
+        $scriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
+        if ([string]::IsNullOrWhiteSpace([string]$scriptPath)) {
+            throw 'ACME_INSTALLATION_PLUGINS includes script, but ACME_SCRIPT_PATH is empty.'
+        }
+        $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
+        $args += @('--installation', 'script','--script', [string]$scriptPath, '--scriptparameters', [string]$scriptParams)
+    }
 
     $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
