@@ -1261,11 +1261,24 @@ function Read-EffectiveSavedEnvValues {
         [string]$ConfigDir = ''
     )
 
-    $effective = Read-EnvFile -Path $EnvFilePath
+    if (-not (Get-Command -Name Read-EffectiveEnvFile -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw "Required command 'Read-EffectiveEnvFile' is unavailable. Import core/Env-Loader.psm1 before invoking setup actions."
+    }
+
+    $effective = Read-EffectiveEnvFile -Path $EnvFilePath
     if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
         $effective.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
+        try {
+            if (Get-Command -Name Import-SecureOverlay -CommandType Function -ErrorAction SilentlyContinue) {
+                $effective = Import-SecureOverlay -Values $effective
+            } else {
+                Write-Verbose "Import-SecureOverlay is not exported; using values from Read-EffectiveEnvFile for '$EnvFilePath'."
+            }
+        } catch {
+            throw "Failed to apply secure overlay while reloading saved settings from '$EnvFilePath': $($_.Exception.Message)"
+        }
     }
-    return Import-SecureOverlay -Values $effective
+    return $effective
 }
 
 function Assert-SavedEnvMatchesSetup {
