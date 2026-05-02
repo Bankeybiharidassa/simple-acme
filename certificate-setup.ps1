@@ -64,13 +64,6 @@ function Stop-SetupDebugLogging {
     }
 }
 
-function Stop-SetupDebugLogging {
-    if ($script:SetupTranscriptEnabled) {
-        try { Stop-Transcript | Out-Null } catch {}
-        $script:SetupTranscriptEnabled = $false
-    }
-}
-
 function Write-SetupDebugLog {
     param(
         [Parameter(Mandatory = $true)]
@@ -79,7 +72,18 @@ function Write-SetupDebugLog {
 
     if (-not $script:SetupLogEnabled) { return }
     $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('o'), $Message
-    Add-Content -LiteralPath $script:SetupLogPath -Value $line -Encoding UTF8
+    try {
+        Add-Content -LiteralPath $script:SetupLogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch [System.IO.IOException] {
+        $fallbackPath = [string]$script:SetupLogPath + '.fallback'
+        try {
+            Add-Content -LiteralPath $fallbackPath -Value $line -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            # Debug logging must never terminate setup execution.
+        }
+    } catch {
+        # Debug logging must never terminate setup execution.
+    }
 }
 
 Initialize-SetupDebugLogging
