@@ -426,7 +426,7 @@ function Get-NormalizedCsvValues {
     if ([string]::IsNullOrWhiteSpace($InputText)) { return @() }
     return @(
         $InputText -split '[,;\s]+' |
-            ForEach-Object { $_.Trim().Trim("'"").ToLowerInvariant() } |
+            ForEach-Object { $_.Trim().Trim("'`\"").ToLowerInvariant() } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
     )
@@ -960,9 +960,6 @@ function Invoke-WacsIssue {
         $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
         $args += @('--installation', 'script','--script', [string]$scriptPath, '--scriptparameters', [string]$scriptParams)
     } elseif ($installationPlugins -contains 'iis') {
-        $args += @('--installation', 'iis')
-    }
-    if ($installationPlugins -contains 'iis') {
         $args += @('--installation', 'iis')
     }
 
