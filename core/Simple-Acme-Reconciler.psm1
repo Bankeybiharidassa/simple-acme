@@ -157,7 +157,7 @@ function Test-ValidWildcardDomainName {
     if ([string]::IsNullOrWhiteSpace($candidate)) { return $false }
     if ($candidate -notlike '*.*') { return $false }
     if (-not $candidate.StartsWith('*.')) { return $false }
-    if (($candidate.ToCharArray() | Where-Object { $_ -eq '*' }).Count -ne 1) { return $false }
+    if ((Get-SafeCount ($candidate.ToCharArray() | Where-Object { $_ -eq '*' })) -ne 1) { return $false }
     $suffix = $candidate.Substring(2)
     if ([string]::IsNullOrWhiteSpace($suffix)) { return $false }
     return (Test-ValidDomainName -Domain $suffix)
@@ -231,7 +231,12 @@ function Get-SimpleAcmeLogDiagnosticSummary {
 }
 
 function Write-SimpleAcmeLogDiagnosticSummary {
-    $latest = Get-LatestSimpleAcmeLogFile
+    $filterText = ''
+    $acmeDirValue = [Environment]::GetEnvironmentVariable('ACME_DIRECTORY')
+    if (-not [string]::IsNullOrWhiteSpace($acmeDirValue)) {
+        try { $filterText = ([System.Uri]$acmeDirValue).Host } catch {}
+    }
+    $latest = Get-LatestSimpleAcmeLogFile -FilterText $filterText
     if ($null -eq $latest) {
         Write-Host 'No log files discovered under ProgramData\simple-acme.'
         return
@@ -723,7 +728,12 @@ WACS entered interactive menu. The generated command is incomplete.
 
     if ($last.TimedOut) { throw "wacs timed out after $TimeoutSeconds seconds and was terminated." }
     $lastOutput = @($last.OutputLines | Select-Object -Last 30)
-    $latestLog = Get-LatestSimpleAcmeLogFile
+    $wacsLogFilter = ''
+    $acmeDirValue = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY' -Default ''
+    if (-not [string]::IsNullOrWhiteSpace($acmeDirValue)) {
+        try { $wacsLogFilter = ([System.Uri]$acmeDirValue).Host } catch {}
+    }
+    $latestLog = Get-LatestSimpleAcmeLogFile -FilterText $wacsLogFilter
     $stderr = [string]$last.StdErr
     $messageParts = New-Object System.Collections.Generic.List[string]
     $messageParts.Add("wacs issuance failed with exit code $($last.ExitCode).")
