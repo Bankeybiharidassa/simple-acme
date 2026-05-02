@@ -377,8 +377,13 @@ while ($menuStack.Count -gt 0) {
         'setup-new'      {
             Write-SetupDebugLog -Message "Executing action: setup-new"
             $result = Invoke-AcmeForm -EnvFilePath $envPath
-            if ($null -ne $result) {
+            if ($null -eq $result) {
+                Write-SetupDebugLog -Message 'setup-new outcome: canceled-before-save (Invoke-AcmeForm returned null).'
+            } elseif ([string]$result.Status -eq 'saved') {
+                Write-SetupDebugLog -Message ("setup-new outcome: saved (target='{0}' domains='{1}'). Reconcile prompt will be shown." -f [string]$result.TargetSystem, [string]$result.Domains)
                 Invoke-InitialAcmeReconcilePrompt -RootDir $PSScriptRoot -EnvFilePath $envPath
+            } else {
+                Write-SetupDebugLog -Message ("setup-new outcome: unexpected-result-status='{0}'. Reconcile prompt will be skipped." -f [string]$result.Status)
             }
         }
         'manage-certs'   { Invoke-ManageCertificatesMenu -ConfigDir $configDir }
