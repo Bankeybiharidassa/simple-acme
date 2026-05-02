@@ -253,17 +253,9 @@ function Invoke-InitialAcmeReconcilePrompt {
             Write-SetupDebugLog -Message 'Failure stack trace unavailable.'
         }
 
+        $failurePhase = 'initial reconcile'
         [Console]::WriteLine('')
-        $failurePhase = 'acme-call'
-        if ($_.Exception.Message -like '*domain format*' -or $_.Exception.Message -like '*Missing required environment values*') {
-            $failurePhase = 'preflight'
-        }
-        [Console]::WriteLine("ACME reconcile failed during $failurePhase: " + $_.Exception.Message)
-        [Console]::WriteLine("ACME directory: $([string]$envValues.ACME_DIRECTORY)")
-        [Console]::WriteLine("ACME product: $([string]$envValues.ACME_NETWORKING4ALL_PRODUCT)")
-        [Console]::WriteLine("Domains: $([string]$envValues.DOMAINS)")
-        [Console]::WriteLine("Validation mode: $([string]$envValues.ACME_VALIDATION_MODE)")
-        [Console]::WriteLine("Script path: $([string]$envValues.ACME_SCRIPT_PATH)")
+        [Console]::WriteLine(('ACME reconcile failed during {0}: ' -f $failurePhase) + $_.Exception.Message)
         if ($_.InvocationInfo) {
             [Console]::WriteLine('Script: ' + $_.InvocationInfo.ScriptName)
             [Console]::WriteLine('Line: ' + $_.InvocationInfo.ScriptLineNumber)
