@@ -779,8 +779,27 @@ function Invoke-AcmeSettingsMenu {
             'eab' {
                 $envValues = @{}
                 if (Test-Path -LiteralPath $resolvedEnvFilePath -PathType Leaf) { $envValues = Read-EnvFile -Path $resolvedEnvFilePath }
-                $envValues.ACME_KID = [string](Read-Host 'ACME_KID')
-                $envValues.ACME_HMAC_SECRET = [string](Read-Host 'ACME_HMAC_SECRET')
+                $currentKid = if ($envValues.ContainsKey('ACME_KID')) { [string]$envValues.ACME_KID } else { '' }
+                $currentSecret = if ($envValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$envValues.ACME_HMAC_SECRET } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($currentKid) -and -not [string]::IsNullOrWhiteSpace($currentSecret)) {
+                    [Console]::WriteLine('[1] Keep existing credentials')
+                    [Console]::WriteLine('[2] Replace credentials')
+                    $choice = Read-SetupChoice -Prompt 'EAB credentials' -Options @{ '1'='keep'; '2'='replace' } -DefaultKey '1' -AllowBack
+                    if ($choice -in @('__CANCEL__','__BACK__','keep')) {
+                        [Console]::WriteLine('Kept existing EAB credentials.')
+                        Wait-ForOperatorReturn
+                        continue
+                    }
+                }
+                $newKid = ([string](Read-Host 'ACME_KID')).Trim()
+                $newSecret = ([string](Read-Host 'ACME_HMAC_SECRET')).Trim()
+                if ([string]::IsNullOrWhiteSpace($newKid) -or [string]::IsNullOrWhiteSpace($newSecret)) {
+                    [Console]::WriteLine('EAB credentials were not changed: both values are required.')
+                    Wait-ForOperatorReturn
+                    continue
+                }
+                $envValues.ACME_KID = $newKid
+                $envValues.ACME_HMAC_SECRET = $newSecret
                 $toWrite = @{}
                 foreach ($k in $envValues.Keys) { if ($k -notin @('ACME_KID','ACME_HMAC_SECRET')) { $toWrite[$k] = $envValues[$k] } }
                 Write-EnvFile -Values $toWrite -Path $resolvedEnvFilePath
@@ -1220,14 +1239,27 @@ function Resolve-EabCredentialsForSetup {
     }
 
     [Console]::WriteLine('')
-    $kid = [string](Read-Host 'ACME_KID')
+    $kid = ([string](Read-Host 'ACME_KID')).Trim()
     if ([string]::IsNullOrWhiteSpace($kid)) { return '__BACK__' }
     [Console]::WriteLine('')
-    $secret = [string](Read-Host 'ACME_HMAC_SECRET')
+    $secret = ([string](Read-Host 'ACME_HMAC_SECRET')).Trim()
     if ([string]::IsNullOrWhiteSpace($secret)) { return '__BACK__' }
     $TargetValues.ACME_KID = $kid
     $TargetValues.ACME_HMAC_SECRET = $secret
     return 'ok'
+}
+
+function Read-EffectiveSavedEnvValues {
+    param(
+        [Parameter(Mandatory)][string]$EnvFilePath,
+        [string]$ConfigDir = ''
+    )
+
+    $effective = Read-EnvFile -Path $EnvFilePath
+    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $effective.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
+    }
+    return Import-SecureOverlay -Values $effective
 }
 
 function Assert-SavedEnvMatchesSetup {
