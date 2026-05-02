@@ -1088,11 +1088,13 @@ function Read-AcmeProviderSelection {
     $providerChoice = Read-SetupChoice -Prompt 'Provider' -Options @{ '1'='letsencrypt'; '2'='networking4all'; '3'='custom'; '0'='back' } -DefaultKey '1' -AllowBack
     if ($providerChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
+    $existingKid = if ($null -ne $CurrentValues -and $CurrentValues.ContainsKey('ACME_KID')) { [string]$CurrentValues.ACME_KID } else { '' }
+    $existingSecret = if ($null -ne $CurrentValues -and $CurrentValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$CurrentValues.ACME_HMAC_SECRET } else { '' }
     $values = @{
         ACME_PROVIDER = [string]$providerChoice
         ACME_REQUIRES_EAB = '0'
-        ACME_KID = if ($CurrentValues.ContainsKey('ACME_KID')) { [string]$CurrentValues.ACME_KID } else { '' }
-        ACME_HMAC_SECRET = if ($CurrentValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$CurrentValues.ACME_HMAC_SECRET } else { '' }
+        ACME_KID = $existingKid
+        ACME_HMAC_SECRET = $existingSecret
         ACME_VALIDATION_MODE = 'none'
         ACME_NETWORKING4ALL_ENVIRONMENT = ''
         ACME_NETWORKING4ALL_PRODUCT = ''
@@ -1626,7 +1628,7 @@ function Invoke-AcmeForm {
     $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { '' }
     if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $values }
-    $reloaded = Read-EffectiveSavedEnvValues -EnvFilePath $resolvedEnvFilePath -ConfigDir $configDir
+    $reloaded = Read-EffectiveEnvFile -Path $resolvedEnvFilePath
     Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
     if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {

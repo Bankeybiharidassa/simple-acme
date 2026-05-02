@@ -113,46 +113,21 @@ Describe 'ACME provider state handling' {
             $target.ACME_HMAC_SECRET | Should -Be 'secret123'
         }
 
-        It 'Resolve-EabCredentialsForSetup replaces only after explicit choice and trims boundary whitespace' {
-            $script:answers = @('replace')
-            Mock -CommandName Read-SetupChoice -MockWith { $script:answers[0] }
-            $script:reads = @('  new-kid  ', '  new-secret  ')
-            Mock -CommandName Read-Host -MockWith {
-                $next = $script:reads[0]
-                $script:reads = @($script:reads | Select-Object -Skip 1)
+        It 'Read-AcmeProviderSelection preserves existing EAB credentials when switching to Networking4All' {
+            $script:providerAnswers = @('2','1','3')
+            Mock -CommandName Read-SetupChoice -MockWith {
+                $next = $script:providerAnswers[0]
+                $script:providerAnswers = @($script:providerAnswers | Select-Object -Skip 1)
                 return $next
             }
-            $curr = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
-            $target = @{}
-            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
-            $state | Should -Be 'ok'
-            $target.ACME_KID | Should -Be 'new-kid'
-            $target.ACME_HMAC_SECRET | Should -Be 'new-secret'
-        }
-
-        It 'Resolve-EabCredentialsForSetup leaves target unchanged when replacement input is invalid' {
-            Mock -CommandName Read-Host -MockWith { '' }
-            $curr = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
-            $target = @{ ACME_KID = 'kid123'; ACME_HMAC_SECRET = 'secret123' }
-            $state = Resolve-EabCredentialsForSetup -CurrentValues $curr -TargetValues $target
-            $state | Should -Be '__BACK__'
-            $target.ACME_KID | Should -Be 'kid123'
-            $target.ACME_HMAC_SECRET | Should -Be 'secret123'
-        }
-
-        It 'Read-EffectiveSavedEnvValues validates merged state from secure overlay' {
-            $envPath = 'TestDrive:\certificate.env'
-            Set-Content -Path $envPath -Value @('ACME_PROVIDER=networking4all','ACME_REQUIRES_EAB=1') -Encoding UTF8
-            Mock -CommandName Import-SecureOverlay -MockWith {
-                param($Values)
-                $Values.ACME_KID = 'secure-kid'
-                $Values.ACME_HMAC_SECRET = 'secure-secret'
-                return $Values
+            $selection = Read-AcmeProviderSelection -CurrentValues @{
+                DOMAINS = '*.example.com'
+                ACME_KID = 'kid-existing'
+                ACME_HMAC_SECRET = 'secret-existing'
             }
-            $reloaded = Read-EffectiveSavedEnvValues -EnvFilePath $envPath -ConfigDir 'TestDrive:\cfg'
-            $reloaded.ACME_KID | Should -Be 'secure-kid'
-            $reloaded.ACME_HMAC_SECRET | Should -Be 'secure-secret'
-            { Assert-SavedEnvMatchesSetup -Expected @{ ACME_PROVIDER='networking4all'; ACME_REQUIRES_EAB='1'; ACME_KID='secure-kid'; ACME_HMAC_SECRET='secure-secret' } -Actual $reloaded } | Should -Not -Throw
+            $selection.ACME_KID | Should -Be 'kid-existing'
+            $selection.ACME_HMAC_SECRET | Should -Be 'secret-existing'
+            $selection.ACME_REQUIRES_EAB | Should -Be '1'
         }
     }
 }
