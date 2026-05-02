@@ -1500,7 +1500,7 @@ function Invoke-AcmeForm {
             $values.ACME_STORE_PLUGIN = 'pfxfile'
             $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
             $values.Store_CertificateStore_PrivateKeyExportable = 'false'
-            $values.ACME_INSTALLATION_PLUGINS = 'script,pfxfile'
+            $values.ACME_INSTALLATION_PLUGINS = 'script'
         }
 
         $values.ACME_RENEWAL_MODE = 'multi-endpoint'

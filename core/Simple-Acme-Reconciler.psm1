@@ -425,8 +425,8 @@ function Get-NormalizedCsvValues {
     param([string]$InputText)
     if ([string]::IsNullOrWhiteSpace($InputText)) { return @() }
     return @(
-        $InputText -split ',' |
-            ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        $InputText -split '[,;\s]+' |
+            ForEach-Object { $_.Trim().Trim("'`\"").ToLowerInvariant() } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
     )
@@ -648,6 +648,16 @@ function Get-InstallationPlugins {
     $plugins = Get-NormalizedCsvValues -InputText $raw
     if ((Get-SafeCount $plugins) -eq 0) {
         throw 'ACME_INSTALLATION_PLUGINS does not contain any valid values.'
+    }
+
+    $storeTokensInInstallation = @($plugins | Where-Object { $_ -eq 'pfxfile' })
+    if ((Get-SafeCount $storeTokensInInstallation) -gt 0) {
+        Write-CertificateLog -Level WARN -Message 'ACME_INSTALLATION_PLUGINS contains pfxfile. pfxfile is a store plugin; move it to ACME_STORE_PLUGIN. Ignoring pfxfile in installation list.'
+        $plugins = @($plugins | Where-Object { $_ -ne 'pfxfile' })
+    }
+
+    if ((Get-SafeCount $plugins) -eq 0) {
+        return @()
     }
 
     $unknown = @($plugins | Where-Object { $valid -notcontains $_ })
@@ -921,7 +931,8 @@ function Invoke-WacsIssue {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
-    $storePlugins = @($storePlugin)
+    $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
+    if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
     $csrAlgorithms = Get-CsrExecutionPlan -EnvValues $EnvValues
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
@@ -945,6 +956,8 @@ function Invoke-WacsIssue {
         }
         $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
         $args += @('--installation', 'script','--script', [string]$scriptPath, '--scriptparameters', [string]$scriptParams)
+    } elseif ($installationPlugins -contains 'iis') {
+        $args += @('--installation', 'iis')
     }
 
     $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'

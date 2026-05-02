@@ -178,9 +178,9 @@ function Import-EnvFile {
 
         $installationPlugins = @()
         if ($values.ContainsKey('ACME_INSTALLATION_PLUGINS')) {
-            $installationPlugins = @([string]$values.ACME_INSTALLATION_PLUGINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+            $installationPlugins = @([string]$values.ACME_INSTALLATION_PLUGINS -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
         } elseif ($script:OptionalEnvDefaults.ContainsKey('ACME_INSTALLATION_PLUGINS')) {
-            $installationPlugins = @([string]$script:OptionalEnvDefaults.ACME_INSTALLATION_PLUGINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+            $installationPlugins = @([string]$script:OptionalEnvDefaults.ACME_INSTALLATION_PLUGINS -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
         }
         if ($installationPlugins -contains 'script') {
             foreach ($key in @('ACME_SCRIPT_PATH')) {
