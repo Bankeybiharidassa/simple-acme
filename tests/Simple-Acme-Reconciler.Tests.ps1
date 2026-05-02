@@ -76,6 +76,32 @@ function Invoke-TestSimpleAcmeReconciler {
         }
     }
 
+    & $Assert 'installation plugins tolerate pfxfile token as store-only compatibility' {
+        $plugins = Get-InstallationPlugins -EnvValues @{ ACME_INSTALLATION_PLUGINS = 'pfxfile' }
+        if ((@($plugins).Count) -ne 0) {
+            throw "Expected no installation plugins but got: $($plugins -join ',')"
+        }
+    }
+
+    & $Assert 'installation plugins keep script and ignore pfxfile token' {
+        $plugins = Get-InstallationPlugins -EnvValues @{ ACME_INSTALLATION_PLUGINS = 'script,pfxfile' }
+        if (($plugins -join ',') -ne 'script') {
+            throw "Expected script only but got: $($plugins -join ',')"
+        }
+    }
+
+    & $Assert 'installation plugins still reject unknown token' {
+        $threw = $false
+        try {
+            $null = Get-InstallationPlugins -EnvValues @{ ACME_INSTALLATION_PLUGINS = 'script,totally-unknown' }
+        } catch {
+            $threw = $true
+        }
+        if (-not $threw) {
+            throw 'Expected unknown installation plugin token to throw.'
+        }
+    }
+
     & $Assert 'config hash is deterministic for equivalent values' {
         $envA = @{
             DOMAINS = 'b.example.com, a.example.com'
