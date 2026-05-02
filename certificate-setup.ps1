@@ -64,6 +64,13 @@ function Stop-SetupDebugLogging {
     }
 }
 
+function Stop-SetupDebugLogging {
+    if ($script:SetupTranscriptEnabled) {
+        try { Stop-Transcript | Out-Null } catch {}
+        $script:SetupTranscriptEnabled = $false
+    }
+}
+
 function Write-SetupDebugLog {
     param(
         [Parameter(Mandatory = $true)]
