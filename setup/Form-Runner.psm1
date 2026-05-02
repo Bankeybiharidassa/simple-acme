@@ -1261,11 +1261,7 @@ function Read-EffectiveSavedEnvValues {
         [string]$ConfigDir = ''
     )
 
-    $effective = Read-EnvFile -Path $EnvFilePath
-    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
-        $effective.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
-    }
-    return Import-SecureOverlay -Values $effective
+    return Read-EffectiveEnvFile -Path $EnvFilePath -ConfigDir $ConfigDir
 }
 
 function Assert-SavedEnvMatchesSetup {
