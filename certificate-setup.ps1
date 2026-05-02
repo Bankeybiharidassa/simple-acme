@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 $script:tuiModule = $null
 $script:SetupLogEnabled = $false
 $script:SetupLogPath = $null
+$script:SetupTranscriptPath = $null
+$script:SetupTranscriptEnabled = $false
 
 function Initialize-SetupDebugLogging {
     $debugRequested = $EnableDebugFileLog -or $PSBoundParameters.ContainsKey('Debug') -or $DebugPreference -ne [System.Management.Automation.ActionPreference]::SilentlyContinue
@@ -36,7 +38,30 @@ function Initialize-SetupDebugLogging {
     }
 
     $script:SetupLogEnabled = $true
+    $script:SetupTranscriptPath = Join-Path $logRoot ("certificate-setup-transcript-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
+    try {
+        Start-Transcript -LiteralPath $script:SetupTranscriptPath -Append -ErrorAction Stop | Out-Null
+        $script:SetupTranscriptEnabled = $true
+    } catch {
+        $script:SetupTranscriptEnabled = $false
+        Add-Content -LiteralPath $script:SetupLogPath -Value ("[{0}] Warning: unable to start transcript. {1}" -f (Get-Date).ToUniversalTime().ToString('o'), $_.Exception.Message) -Encoding UTF8
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS')))) {
+        # preserve explicit operator value
+    } else {
+        [Environment]::SetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS', '1', 'Process')
+    }
     [Console]::WriteLine("Setup debug file log: $script:SetupLogPath")
+    if ($script:SetupTranscriptEnabled) {
+        [Console]::WriteLine("Setup transcript log: $script:SetupTranscriptPath")
+    }
+}
+
+function Stop-SetupDebugLogging {
+    if ($script:SetupTranscriptEnabled) {
+        try { Stop-Transcript | Out-Null } catch {}
+        $script:SetupTranscriptEnabled = $false
+    }
 }
 
 function Write-SetupDebugLog {
@@ -342,3 +367,5 @@ while ($menuStack.Count -gt 0) {
     }
     Clear-TuiScreen
 }
+
+Stop-SetupDebugLogging
