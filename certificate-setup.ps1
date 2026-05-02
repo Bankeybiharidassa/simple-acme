@@ -51,9 +51,9 @@ function Initialize-SetupDebugLogging {
     } else {
         [Environment]::SetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS', '1', 'Process')
     }
-    [Console]::WriteLine("Setup debug file log: $script:SetupLogPath")
+    [Console]::WriteLine(('Setup debug file log: {0}' -f $script:SetupLogPath))
     if ($script:SetupTranscriptEnabled) {
-        [Console]::WriteLine("Setup transcript log: $script:SetupTranscriptPath")
+        [Console]::WriteLine(('Setup transcript log: {0}' -f $script:SetupTranscriptPath))
     }
 }
 
@@ -253,8 +253,9 @@ function Invoke-InitialAcmeReconcilePrompt {
             Write-SetupDebugLog -Message 'Failure stack trace unavailable.'
         }
 
+        $failurePhase = 'initial reconcile'
         [Console]::WriteLine('')
-        [Console]::WriteLine('ACME reconcile failed: ' + $_.Exception.Message)
+        [Console]::WriteLine(('ACME reconcile failed during {0}: ' -f $failurePhase) + $_.Exception.Message)
         if ($_.InvocationInfo) {
             [Console]::WriteLine('Script: ' + $_.InvocationInfo.ScriptName)
             [Console]::WriteLine('Line: ' + $_.InvocationInfo.ScriptLineNumber)
