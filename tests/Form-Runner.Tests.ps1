@@ -145,4 +145,19 @@ Describe 'Invoke-AcmeForm linear output guards' {
         $savedIndex | Should -BeGreaterThan $saveIndex
         $reconcileIndex | Should -BeGreaterThan -1
     }
+
+    It 'returns a saved result object after successful ACME form save' {
+        $formRunnerPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'setup/Form-Runner.psm1'
+        $formRunnerText = Get-Content -LiteralPath $formRunnerPath -Raw -Encoding UTF8
+        $formRunnerText | Should -Match "Status = 'saved'"
+        $formRunnerText | Should -Match 'EnvFilePath = \[string\]\$resolvedEnvFilePath'
+    }
+
+    It 'routes setup-new to reconcile prompt only when result status is saved' {
+        $setupScriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'certificate-setup.ps1'
+        $setupScriptText = Get-Content -LiteralPath $setupScriptPath -Raw -Encoding UTF8
+        $setupScriptText | Should -Match "if \(\$null -eq \$result\)"
+        $setupScriptText | Should -Match "elseif \(\[string\]\$result\.Status -eq 'saved'\)"
+        $setupScriptText | Should -Match 'Invoke-InitialAcmeReconcilePrompt -RootDir \$PSScriptRoot -EnvFilePath \$envPath'
+    }
 }

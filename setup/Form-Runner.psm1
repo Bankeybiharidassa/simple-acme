@@ -1587,6 +1587,13 @@ function Invoke-AcmeForm {
     if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
         throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
     }
+
+    return [pscustomobject]@{
+        Status = 'saved'
+        EnvFilePath = [string]$resolvedEnvFilePath
+        TargetSystem = [string]$values.ACME_TARGET_SYSTEM
+        Domains = [string]$values.DOMAINS
+    }
 }
 
 function Get-ObjectPropertyValue {
