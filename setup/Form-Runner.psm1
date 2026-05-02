@@ -1233,7 +1233,20 @@ function Assert-SavedEnvMatchesSetup {
         [Parameter(Mandatory)][hashtable]$Expected,
         [Parameter(Mandatory)][hashtable]$Actual
     )
-    foreach ($key in @('ACME_DIRECTORY','DOMAINS')) {
+
+    $keysToCompare = New-Object System.Collections.Generic.List[string]
+    foreach ($key in @('ACME_DIRECTORY','DOMAINS','ACME_PROVIDER','ACME_REQUIRES_EAB')) {
+        [void]$keysToCompare.Add($key)
+    }
+
+    $requiresEab = [string]$Expected['ACME_REQUIRES_EAB'] -eq '1'
+    if ($requiresEab) {
+        foreach ($key in @('ACME_KID','ACME_HMAC_SECRET')) {
+            [void]$keysToCompare.Add($key)
+        }
+    }
+
+    foreach ($key in $keysToCompare) {
         $expectedValue = ''
         $actualValue = ''
         if ($Expected.ContainsKey($key)) { $expectedValue = [string]$Expected[$key] }
