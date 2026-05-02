@@ -280,13 +280,7 @@ function Write-EnvFile {
     $lines.Add($Header)
     $lines.Add('')
 
-    $allowed = @(
-        # Bootstrap/plain env values: defaults + operator secrets used at first-run boundaries.
-        'DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR',
-        'ACME_PROVIDER','ACME_REQUIRES_EAB','ACME_NETWORKING4ALL_ENVIRONMENT','ACME_NETWORKING4ALL_PRODUCT',
-        'ACME_KID','ACME_HMAC_SECRET'
-    )
-    foreach ($key in ($Values.Keys | Where-Object { $allowed -contains $_ } | Sort-Object)) {
+    foreach ($key in ($Values.Keys | Sort-Object)) {
         $value = [string]$Values[$key]
         if ($value.Contains('=') -or $value.Contains('#')) {
             $escaped = '"{0}"' -f $value.Replace('"', '""')
