@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 <#
 .SYNOPSIS
 Imports a cert from WACS renewal into SPARX ProCloud Server.
@@ -42,6 +40,8 @@ param(
 	[string]
 	$CaFile
 )
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 
 

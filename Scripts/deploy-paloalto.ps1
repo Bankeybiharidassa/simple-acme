@@ -185,7 +185,7 @@ function Invoke-PanApi {
             $boundary = [System.Guid]::NewGuid().ToString('N')
             $crlf = "`r`n"
             $header = "--$boundary$crlf" +
-                "Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$crlf" +
+                "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"$crlf" +
                 "Content-Type: application/octet-stream$crlf$crlf"
             $footer = "$crlf--$boundary--$crlf"
             $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
@@ -281,8 +281,8 @@ function Upload-Certificate {
 
     Write-StructuredLog -Action 'upload-certificate' -Target $Firewall -Result 'info' -Details @{ certName = $CertName }
 
-    $certQuery = @{ type = 'import'; category = 'certificate'; certificate-name = $CertName; format = 'pem' }
-    $keyQuery = @{ type = 'import'; category = 'private-key'; certificate-name = $CertName; format = 'pem'; passphrase = '' }
+    $certQuery = @{ type = 'import'; category = 'certificate'; 'certificate-name' = $CertName; format = 'pem' }
+    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = '' }
 
     $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
     $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds

@@ -169,7 +169,7 @@ function Invoke-SophosApi {
         return [xml]'<Response APIVersion="1805.1"><Status code="200">Configuration applied successfully.</Status></Response>'
     }
 
-    $apiUri = "https://$Firewall:4444/webconsole/APIController"
+    $apiUri = "https://${Firewall}:4444/webconsole/APIController"
 
     $result = Invoke-WithRetry -Operation "Sophos API call" -ScriptBlock {
         Invoke-RestMethod -Uri $apiUri -Method Post -Body $requestXml -ContentType 'application/xml' -TimeoutSec $TimeoutSeconds
