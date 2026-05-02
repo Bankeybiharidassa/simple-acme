@@ -315,6 +315,7 @@ $FunctionsToExport.Add('Import-EnvFile')
 $FunctionsToExport.Add('Write-EnvFile')
 $FunctionsToExport.Add('Write-SecureOverlay')
 $FunctionsToExport.Add('Write-CredentialStore')
+$FunctionsToExport.Add('Import-SecureOverlay')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {
