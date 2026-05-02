@@ -2,7 +2,7 @@ Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force
 
 Describe 'Env loader' {
     BeforeEach {
-        $script:path = 'TestDrive:\certificate.env'
+        $script:path = Join-Path $TestDrive 'certificate.env'
         @(
             'ACME_DIRECTORY=https://acme.example.com/directory',
             'DOMAINS=example.com',
@@ -41,6 +41,20 @@ Describe 'Env loader' {
         $effective = Read-EffectiveEnvFile -Path $script:path
         $effective.ACME_KID | Should -Be 'kid-merged'
         $effective.ACME_HMAC_SECRET | Should -Be 'secret-merged'
+    }
+
+    It 'Read-EffectiveEnvFile uses explicit config-dir override for secure overlay reads' {
+        $cfgDir = Join-Path $TestDrive 'cfg-override'
+        New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+        @(
+            'ACME_DIRECTORY=https://acme.example.com/directory',
+            'DOMAINS=example.com'
+        ) | Set-Content -Path $script:path -Encoding UTF8
+
+        Write-CredentialStore -ConfigDir $cfgDir -Values @{ ACME_KID='kid-override'; ACME_HMAC_SECRET='secret-override' }
+        $effective = Read-EffectiveEnvFile -Path $script:path -ConfigDir $cfgDir
+        $effective.ACME_KID | Should -Be 'kid-override'
+        $effective.ACME_HMAC_SECRET | Should -Be 'secret-override'
     }
 
     It 'Duplicate key throws with key and line' {

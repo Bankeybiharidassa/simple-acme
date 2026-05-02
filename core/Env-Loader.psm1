@@ -126,10 +126,14 @@ function Read-EnvFile {
 function Read-EffectiveEnvFile {
     param(
         [Parameter(Mandatory)][string]$Path,
+        [string]$ConfigDir = '',
         [switch]$ValidateRequired
     )
 
     $values = Read-EnvFile -Path $Path
+    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $values.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
+    }
     $values = Import-SecureOverlay -Values $values
     if ($ValidateRequired) {
         $missing = @($script:RequiredEnvKeys | Where-Object { -not $values.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$values[$_]) })
