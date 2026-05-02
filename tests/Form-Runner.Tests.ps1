@@ -69,6 +69,34 @@ Describe 'Form runner deployment script wiring' {
 
 Describe 'ACME provider state handling' {
     InModuleScope Form-Runner {
+        It 'Read-EffectiveSavedEnvValues reads effective values via exported Env-Loader API without private helper calls' {
+            $envPath = Join-Path $TestDrive 'certificate.env'
+            @(
+                'ACME_DIRECTORY=https://acme.networking4all.com/dv',
+                'DOMAINS=example.com'
+            ) | Set-Content -Path $envPath -Encoding UTF8
+            $cfgDir = Join-Path $TestDrive 'cfg'
+            New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+            Write-CredentialStore -ConfigDir $cfgDir -Values @{ ACME_KID='kid-from-overlay'; ACME_HMAC_SECRET='secret-from-overlay' }
+
+            { Read-EffectiveSavedEnvValues -EnvFilePath $envPath -ConfigDir $cfgDir } | Should -Not -Throw
+            $effective = Read-EffectiveSavedEnvValues -EnvFilePath $envPath -ConfigDir $cfgDir
+            $effective.ACME_KID | Should -Be 'kid-from-overlay'
+            $effective.ACME_HMAC_SECRET | Should -Be 'secret-from-overlay'
+        }
+
+        It 'Save-time verification remains bootstrap tolerant for env files lacking runtime-only keys' {
+            $envPath = Join-Path $TestDrive 'certificate.env'
+            @(
+                'ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory',
+                'DOMAINS=example.com',
+                'ACME_INSTALLATION_PLUGINS=script'
+            ) | Set-Content -Path $envPath -Encoding UTF8
+
+            { Read-EffectiveSavedEnvValues -EnvFilePath $envPath } | Should -Not -Throw
+            { Import-EnvFile -Path $envPath -Force } | Should -Throw '*ACME_SCRIPT_PATH*'
+        }
+
         It 'Get-Networking4AllAcmeDirectory builds test DV endpoint' {
             $url = Get-Networking4AllAcmeDirectory -Environment test -Product dv
             $url | Should -Be 'https://test-acme.networking4all.com/dv'
