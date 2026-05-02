@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 <#
 .SYNOPSIS
 Imports a cert from win-acme (WACS) renewal into an Azure Application Gateway instance.
@@ -76,6 +74,8 @@ param(
     [Parameter(Position=9,Mandatory=$false)]
     [string]$AppGatewayHttpsRuleName = 'httpsRule'
 )
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 if ($CertPass -ne "") {
     $CertPassSecure = ConvertTo-SecureString -String $CertPass
