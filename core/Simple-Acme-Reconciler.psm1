@@ -426,7 +426,14 @@ function Get-NormalizedCsvValues {
     if ([string]::IsNullOrWhiteSpace($InputText)) { return @() }
     return @(
         $InputText -split '[,;\s]+' |
-            ForEach-Object { $_.Trim().Trim("'`\"").ToLowerInvariant() } |
+            ForEach-Object {
+                $token = $_.Trim()
+                $token = $token -replace '^"', ''
+                $token = $token -replace "^'", ''
+                $token = $token -replace '"$', ''
+                $token = $token -replace "'$", ''
+                $token.ToLowerInvariant()
+            } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
     )
