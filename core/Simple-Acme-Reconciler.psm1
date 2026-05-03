@@ -394,19 +394,27 @@ function Get-RenewalSummary {
     if ($null -eq $renewal) {
         throw "Renewal JSON '$($File.FullName)' parsed as null."
     }
-    $baseUriCandidates = Find-PropertyValues -InputObject $renewal -Names @('BaseUri')
-    $kidCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyIdentifier','Kid','EabKeyIdentifier')
-    $validationCandidates = Find-PropertyValues -InputObject $renewal -Names @('Plugin','Name','ValidationPlugin')
-    $storeCandidates = Find-PropertyValues -InputObject $renewal -Names @('StorePlugin','StoreType','Store')
-    $installationCandidates = Find-PropertyValues -InputObject $renewal -Names @('InstallationPlugin','InstallationPlugins','Installation')
-    $accountCandidates = Find-PropertyValues -InputObject $renewal -Names @('Account','AccountName')
-    $sourceCandidates = Find-PropertyValues -InputObject $renewal -Names @('SourcePlugin','Source')
-    $orderCandidates = Find-PropertyValues -InputObject $renewal -Names @('OrderPlugin','Order')
-    $renewalIdCandidates = Find-PropertyValues -InputObject $renewal -Names @('Id','RenewalId')
-    $scriptCandidates = Find-PropertyValues -InputObject $renewal -Names @('Script','ScriptFileName')
-    $scriptParameterCandidates = Find-PropertyValues -InputObject $renewal -Names @('ScriptParameters','Parameters')
-    $csrCandidates = Find-PropertyValues -InputObject $renewal -Names @('CsrPlugin','Csr')
-    $keyTypeCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyType','KeyAlgorithm','Algorithm')
+    $baseUriCandidates = $null; $kidCandidates = $null; $validationCandidates = $null
+    $storeCandidates = $null; $installationCandidates = $null; $accountCandidates = $null
+    $sourceCandidates = $null; $orderCandidates = $null; $renewalIdCandidates = $null
+    $scriptCandidates = $null; $scriptParameterCandidates = $null; $csrCandidates = $null; $keyTypeCandidates = $null
+    try {
+        $baseUriCandidates = Find-PropertyValues -InputObject $renewal -Names @('BaseUri')
+        $kidCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyIdentifier','Kid','EabKeyIdentifier')
+        $validationCandidates = Find-PropertyValues -InputObject $renewal -Names @('Plugin','Name','ValidationPlugin')
+        $storeCandidates = Find-PropertyValues -InputObject $renewal -Names @('StorePlugin','StoreType','Store')
+        $installationCandidates = Find-PropertyValues -InputObject $renewal -Names @('InstallationPlugin','InstallationPlugins','Installation')
+        $accountCandidates = Find-PropertyValues -InputObject $renewal -Names @('Account','AccountName')
+        $sourceCandidates = Find-PropertyValues -InputObject $renewal -Names @('SourcePlugin','Source')
+        $orderCandidates = Find-PropertyValues -InputObject $renewal -Names @('OrderPlugin','Order')
+        $renewalIdCandidates = Find-PropertyValues -InputObject $renewal -Names @('Id','RenewalId')
+        $scriptCandidates = Find-PropertyValues -InputObject $renewal -Names @('Script','ScriptFileName')
+        $scriptParameterCandidates = Find-PropertyValues -InputObject $renewal -Names @('ScriptParameters','Parameters')
+        $csrCandidates = Find-PropertyValues -InputObject $renewal -Names @('CsrPlugin','Csr')
+        $keyTypeCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyType','KeyAlgorithm','Algorithm')
+    } catch {
+        throw "Failed to traverse property values in '$($File.FullName)': $($_.Exception.Message) [$($_.Exception.GetType().FullName)]"
+    }
 
     $hosts = try { Get-RenewalHosts -Renewal $renewal } catch { throw "Failed to extract hosts from '$($File.FullName)': $($_.Exception.Message) [$($_.Exception.GetType().FullName)]" }
 
@@ -972,6 +980,21 @@ function Invoke-WacsIssue {
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
     if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
     $validStorePlugins = @('certificatestore','pfxfile','pemfiles','centralssl','p7bfile','keyvault','userstore')
+    $repairedPlugins = [System.Collections.Generic.List[string]]::new()
+    foreach ($token in $storePlugins) {
+        if ($validStorePlugins -contains $token) { $repairedPlugins.Add($token); continue }
+        # Greedy decomposition: 'pfxfilecertificatestore' -> 'pfxfile','certificatestore'
+        $remaining = $token; $parts = [System.Collections.Generic.List[string]]::new(); $ok = $true
+        while ($remaining.Length -gt 0 -and $ok) {
+            $hit = @($validStorePlugins | Where-Object { $remaining.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
+            if ($hit.Count -eq 0) { $ok = $false } else { $parts.Add($hit[0]); $remaining = $remaining.Substring($hit[0].Length) }
+        }
+        if ($ok -and $parts.Count -gt 1) {
+            Write-Warning "ACME_STORE_PLUGIN token '$token' looks like plugin names concatenated without a comma separator. Auto-correcting to: $($parts -join ', '). Fix your config: ACME_STORE_PLUGIN=$($parts -join ',')."
+            foreach ($p in $parts) { $repairedPlugins.Add($p) }
+        } else { $repairedPlugins.Add($token) }
+    }
+    $storePlugins = @($repairedPlugins | Sort-Object -Unique)
     $unknownStorePlugins = @($storePlugins | Where-Object { $validStorePlugins -notcontains $_ })
     if ((Get-SafeCount $unknownStorePlugins) -gt 0) {
         throw "ACME_STORE_PLUGIN contains unrecognized token(s): $($unknownStorePlugins -join ', '). Valid values: $($validStorePlugins -join ', '). Check for missing comma separator (e.g. 'pfxfile,certificatestore' not 'pfxfilecertificatestore')."
