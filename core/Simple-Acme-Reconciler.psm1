@@ -960,6 +960,9 @@ function Invoke-WacsIssue {
         if ([string]::IsNullOrWhiteSpace([string]$pfxFilePath)) {
             throw 'ACME_STORE_PLUGIN includes pfxfile, but ACME_PFX_FILE_PATH is empty.'
         }
+        if (-not (Test-Path -LiteralPath ([string]$pfxFilePath) -PathType Container)) {
+            New-Item -ItemType Directory -Path ([string]$pfxFilePath) -Force | Out-Null
+        }
         $args += @('--pfxfilepath', [string]$pfxFilePath)
     }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }

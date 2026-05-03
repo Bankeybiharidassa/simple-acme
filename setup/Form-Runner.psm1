@@ -1503,7 +1503,7 @@ function Invoke-AcmeForm {
             $values.ACME_INSTALLATION_PLUGINS = 'script'
             $pfxPath = ''
             while ([string]::IsNullOrWhiteSpace($pfxPath)) {
-                $pfxPath = [string](Read-Host 'PFX output file path (e.g. C:\certs\certificate.pfx)')
+                $pfxPath = [string](Read-Host 'PFX output directory (e.g. C:\certs)')
                 $pfxPath = $pfxPath.Trim()
             }
             $values.ACME_PFX_FILE_PATH = $pfxPath
