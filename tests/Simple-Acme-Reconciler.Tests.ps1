@@ -356,9 +356,9 @@ No version here
     }
 
 
-    & $Assert 'csr plan defaults to ec only with fallback disabled' {
+    & $Assert 'csr plan defaults to ec,rsa fallback when env is empty' {
         $plan = Get-CsrExecutionPlan -EnvValues @{}
-        if (($plan -join ',') -ne 'ec') { throw "Expected ec only, got $($plan -join ',')" }
+        if (($plan -join ',') -ne 'ec,rsa') { throw "Expected ec,rsa by default, got $($plan -join ',')" }
     }
 
 
