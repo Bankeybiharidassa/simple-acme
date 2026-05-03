@@ -1067,7 +1067,7 @@ function Write-ReconcileLog {
     Write-Host $serialized
     $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
     if ([string]::IsNullOrWhiteSpace($logDir)) {
-        $logDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' 'logs'))
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $PSScriptRoot '..') 'logs'))
     }
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     $logPath = Join-Path $logDir ("reconcile-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd'))
