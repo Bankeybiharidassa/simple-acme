@@ -943,7 +943,7 @@ function Invoke-WacsIssue {
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
     if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
-    $csrAlgorithms = Get-CsrExecutionPlan -EnvValues $EnvValues
+    $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
     if ($timeoutSeconds -lt 30) { $timeoutSeconds = 30 }
