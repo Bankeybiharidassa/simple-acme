@@ -966,6 +966,11 @@ function Invoke-WacsIssue {
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
     if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
+    $validStorePlugins = @('certificatestore','pfxfile','pemfiles','centralssl','p7bfile','keyvault','userstore')
+    $unknownStorePlugins = @($storePlugins | Where-Object { $validStorePlugins -notcontains $_ })
+    if ((Get-SafeCount $unknownStorePlugins) -gt 0) {
+        throw "ACME_STORE_PLUGIN contains unrecognized token(s): $($unknownStorePlugins -join ', '). Valid values: $($validStorePlugins -join ', '). Check for missing comma separator (e.g. 'pfxfile,certificatestore' not 'pfxfilecertificatestore')."
+    }
 
     $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
     if ($installationPlugins -contains 'script' -and -not ($storePlugins -contains 'certificatestore')) {

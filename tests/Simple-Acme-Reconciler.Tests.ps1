@@ -102,6 +102,48 @@ function Invoke-TestSimpleAcmeReconciler {
         }
     }
 
+    & $Assert 'store plugin rejects concatenated token missing comma separator' {
+        $threw = $false
+        try {
+            $null = Invoke-WacsIssue -EnvValues @{
+                DOMAINS = 'example.com'
+                ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+                ACME_SOURCE_PLUGIN = 'manual'
+                ACME_ORDER_PLUGIN = 'single'
+                ACME_VALIDATION_MODE = 'none'
+                ACME_INSTALLATION_PLUGINS = 'script'
+                ACME_SCRIPT_PATH = 'C:\install.ps1'
+                ACME_STORE_PLUGIN = 'pfxfilecertificatestore'
+                ACME_PFX_FILE_PATH = 'C:\certs'
+            }
+        } catch {
+            if ($_.Exception.Message -match 'unrecognized token') { $threw = $true }
+        }
+        if (-not $threw) {
+            throw 'Expected concatenated store plugin token to throw with unrecognized token message.'
+        }
+    }
+
+    & $Assert 'store plugin rejects completely unknown value' {
+        $threw = $false
+        try {
+            $null = Invoke-WacsIssue -EnvValues @{
+                DOMAINS = 'example.com'
+                ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+                ACME_SOURCE_PLUGIN = 'manual'
+                ACME_ORDER_PLUGIN = 'single'
+                ACME_VALIDATION_MODE = 'none'
+                ACME_INSTALLATION_PLUGINS = ''
+                ACME_STORE_PLUGIN = 'nosuchthing'
+            }
+        } catch {
+            if ($_.Exception.Message -match 'unrecognized token') { $threw = $true }
+        }
+        if (-not $threw) {
+            throw 'Expected unknown store plugin token to throw with unrecognized token message.'
+        }
+    }
+
     & $Assert 'config hash is deterministic for equivalent values' {
         $envA = @{
             DOMAINS = 'b.example.com, a.example.com'
