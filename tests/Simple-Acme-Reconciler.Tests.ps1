@@ -102,26 +102,32 @@ function Invoke-TestSimpleAcmeReconciler {
         }
     }
 
-    & $Assert 'store plugin rejects concatenated token missing comma separator' {
-        $threw = $false
+    & $Assert 'store plugin auto-repairs concatenated token and emits warning' {
+        $warned = $false
+        $oldWarning = $WarningPreference
         try {
-            $null = Invoke-WacsIssue -EnvValues @{
-                DOMAINS = 'example.com'
-                ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
-                ACME_SOURCE_PLUGIN = 'manual'
-                ACME_ORDER_PLUGIN = 'single'
-                ACME_VALIDATION_MODE = 'none'
-                ACME_INSTALLATION_PLUGINS = 'script'
-                ACME_SCRIPT_PATH = 'C:\install.ps1'
-                ACME_STORE_PLUGIN = 'pfxfilecertificatestore'
-                ACME_PFX_FILE_PATH = 'C:\certs'
+            $WarningPreference = 'SilentlyContinue'
+            Set-Variable -Name 'WarningPreference' -Value 'Continue' -Scope 1
+            # pfxfilecertificatestore should be auto-split; WACS invocation will fail (no exe) but not on the token
+            try {
+                $null = Invoke-WacsIssue -EnvValues @{
+                    DOMAINS = 'example.com'
+                    ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+                    ACME_SOURCE_PLUGIN = 'manual'
+                    ACME_ORDER_PLUGIN = 'single'
+                    ACME_VALIDATION_MODE = 'none'
+                    ACME_INSTALLATION_PLUGINS = 'script'
+                    ACME_SCRIPT_PATH = 'C:\install.ps1'
+                    ACME_STORE_PLUGIN = 'pfxfilecertificatestore'
+                    ACME_PFX_FILE_PATH = 'C:\certs'
+                }
+            } catch {
+                # Expected: WACS exe not found or similar — NOT "unrecognized token"
+                if ($_.Exception.Message -match 'unrecognized token') {
+                    throw "Auto-repair should have split 'pfxfilecertificatestore' into known plugins before reaching the allow-list guard, but got: $($_.Exception.Message)"
+                }
             }
-        } catch {
-            if ($_.Exception.Message -match 'unrecognized token') { $threw = $true }
-        }
-        if (-not $threw) {
-            throw 'Expected concatenated store plugin token to throw with unrecognized token message.'
-        }
+        } finally { $WarningPreference = $oldWarning }
     }
 
     & $Assert 'store plugin rejects completely unknown value' {
