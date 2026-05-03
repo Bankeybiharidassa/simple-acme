@@ -370,10 +370,21 @@ function Get-RenewalSummarySafe {
 function Get-RenewalSummary {
     param([Parameter(Mandatory)][System.IO.FileInfo]$File)
 
+    $rawJson = $null
     try {
-        $renewal = Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        $rawJson = Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8
+        $renewal = $rawJson | ConvertFrom-Json
     } catch {
-        throw "Failed to parse renewal JSON '$($File.FullName)': $($_.Exception.Message)"
+        if ($null -eq $rawJson) { throw "Failed to parse renewal JSON '$($File.FullName)': $($_.Exception.Message)" }
+        try {
+            # Newtonsoft.Json $type discriminators cause ConvertFrom-Json to fail on PowerShell 5.x; strip and retry
+            $c = [regex]::Replace($rawJson, ',\s*"\$type"\s*:\s*"[^"]*"', '')
+            $c = [regex]::Replace($c,       '"\$type"\s*:\s*"[^"]*"\s*,\s*', '')
+            $c = [regex]::Replace($c,       '"\$type"\s*:\s*"[^"]*"', '')
+            $renewal = $c | ConvertFrom-Json
+        } catch {
+            throw "Failed to parse renewal JSON '$($File.FullName)': $($_.Exception.Message)"
+        }
     }
     if ($null -eq $renewal) {
         throw "Renewal JSON '$($File.FullName)' parsed as null."
@@ -962,7 +973,7 @@ function Invoke-WacsIssue {
         # to be present in a local Windows certificate store. Keep explicit pfxfile output but
         # ensure certificate store presence for post-install scripts (e.g. RDS deployment).
         $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
-        Write-CertificateLog -Level WARN -Message 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
+        Write-Warning 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
     }
     $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
     $timeoutSeconds = 300
