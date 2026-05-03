@@ -11,4 +11,11 @@ function Invoke-TestCsrExecutionPlan {
         $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='1' }
         if ((@($plan) -join ',') -ne 'ec,rsa') { throw 'Unexpected plan for ec/1' }
     }
+    & $Assert 'single-element plan does not unroll to string when indexed' {
+        # PowerShell unrolls single-element arrays to scalars on assignment.
+        # Without @(), $arr[0] on the string 'ec' returns 'e' (first char).
+        $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' }
+        $wrapped = @($plan)
+        if ($wrapped[0] -ne 'ec') { throw "Array unrolling bug: got '$($wrapped[0])' instead of 'ec'" }
+    }
 }
