@@ -682,7 +682,7 @@ function Get-CsrExecutionPlan {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
     $preferred = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec').Trim().ToLowerInvariant())
-    $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0').Trim() -eq '1')
+    $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '1').Trim() -eq '1')
     if ($preferred -notin @('ec','rsa')) { throw "Unsupported ACME_CSR_ALGORITHM value '$preferred'. Supported values: ec, rsa." }
     if ($preferred -eq 'ec' -and $fallbackEnabled) { return @('ec','rsa') }
     return @($preferred)
