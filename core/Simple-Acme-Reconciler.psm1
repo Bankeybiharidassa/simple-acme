@@ -952,9 +952,16 @@ function Invoke-WacsIssue {
     $validationMode = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_VALIDATION_MODE' -Default 'none'
     $args = @(
         '--accepttos','--source', [string]$sourcePlugin,'--order', [string]$orderPlugin,'--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'),
-        '--validation', [string]$validationMode,'--globalvalidation', [string]$validationMode,'--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
+        '--validation', [string]$validationMode,'--host', [string](Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     )
     $args += @('--store', ($storePlugins -join ','))
+    if ($storePlugins -contains 'pfxfile') {
+        $pfxFilePath = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PFX_FILE_PATH'
+        if ([string]::IsNullOrWhiteSpace([string]$pfxFilePath)) {
+            throw 'ACME_STORE_PLUGIN includes pfxfile, but ACME_PFX_FILE_PATH is empty.'
+        }
+        $args += @('--pfxfilepath', [string]$pfxFilePath)
+    }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }

@@ -11,6 +11,7 @@ $script:OptionalEnvDefaults = @{
     ACME_SOURCE_PLUGIN            = 'manual'
     ACME_ORDER_PLUGIN             = 'single'
     ACME_STORE_PLUGIN             = 'certificatestore'
+    ACME_PFX_FILE_PATH            = ''
     ACME_ACCOUNT_NAME             = ''
     ACME_VALIDATION_MODE          = 'none'
     ACME_WACS_RETRY_ATTEMPTS      = '3'
@@ -187,6 +188,13 @@ function Import-EnvFile {
                 if (-not $values.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$values[$key])) {
                     $missing += $key
                 }
+            }
+        }
+        $storePluginsRaw = if ($values.ContainsKey('ACME_STORE_PLUGIN')) { [string]$values.ACME_STORE_PLUGIN } else { [string]$script:OptionalEnvDefaults.ACME_STORE_PLUGIN }
+        $storePluginList = @($storePluginsRaw -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+        if ($storePluginList -contains 'pfxfile') {
+            if (-not $values.ContainsKey('ACME_PFX_FILE_PATH') -or [string]::IsNullOrWhiteSpace([string]$values['ACME_PFX_FILE_PATH'])) {
+                $missing += 'ACME_PFX_FILE_PATH'
             }
         }
         $missing = @($missing | Select-Object -Unique)

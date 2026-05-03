@@ -834,7 +834,7 @@ function Invoke-AcmeSettingsMenu {
                 $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
                 $storePlugin = if ($envValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$envValues.ACME_STORE_PLUGIN } else { 'certificatestore' }
                 $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store $storePlugin --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $csrAlgo"
+                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --host $([string]$envValues.DOMAINS) --store $storePlugin --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $csrAlgo"
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
                 if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
                 [Console]::WriteLine($line)
@@ -1501,6 +1501,12 @@ function Invoke-AcmeForm {
             $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
             $values.Store_CertificateStore_PrivateKeyExportable = 'false'
             $values.ACME_INSTALLATION_PLUGINS = 'script'
+            $pfxPath = ''
+            while ([string]::IsNullOrWhiteSpace($pfxPath)) {
+                $pfxPath = [string](Read-Host 'PFX output file path (e.g. C:\certs\certificate.pfx)')
+                $pfxPath = $pfxPath.Trim()
+            }
+            $values.ACME_PFX_FILE_PATH = $pfxPath
         }
 
         $values.ACME_RENEWAL_MODE = 'multi-endpoint'
@@ -1631,7 +1637,7 @@ function Invoke-AcmeForm {
 
     Start-ConsoleSection -Title 'Effective wacs command preview'
     $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
-    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
+    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
     [Console]::WriteLine($line)
