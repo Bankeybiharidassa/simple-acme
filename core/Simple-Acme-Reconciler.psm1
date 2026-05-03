@@ -682,7 +682,7 @@ function Get-CsrExecutionPlan {
     param([Parameter(Mandatory)][hashtable]$EnvValues)
 
     $preferred = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec').Trim().ToLowerInvariant())
-    $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0').Trim() -eq '1')
+    $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '1').Trim() -eq '1')
     if ($preferred -notin @('ec','rsa')) { throw "Unsupported ACME_CSR_ALGORITHM value '$preferred'. Supported values: ec, rsa." }
     if ($preferred -eq 'ec' -and $fallbackEnabled) { return @('ec','rsa') }
     return @($preferred)
@@ -943,6 +943,15 @@ function Invoke-WacsIssue {
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
     if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
+
+    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
+    if ($installationPlugins -contains 'script' -and -not ($storePlugins -contains 'certificatestore')) {
+        # Script installers commonly consume {CertThumbprint}, which requires the certificate
+        # to be present in a local Windows certificate store. Keep explicit pfxfile output but
+        # ensure certificate store presence for post-install scripts (e.g. RDS deployment).
+        $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
+        Write-CertificateLog -Level WARN -Message 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
+    }
     $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
@@ -968,7 +977,6 @@ function Invoke-WacsIssue {
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
-    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
     if ($installationPlugins -contains 'script') {
         $scriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
         if ([string]::IsNullOrWhiteSpace([string]$scriptPath)) {
@@ -1067,7 +1075,7 @@ function Write-ReconcileLog {
     Write-Host $serialized
     $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
     if ([string]::IsNullOrWhiteSpace($logDir)) {
-        $logDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' 'logs'))
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $PSScriptRoot '..') 'logs'))
     }
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     $logPath = Join-Path $logDir ("reconcile-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd'))
