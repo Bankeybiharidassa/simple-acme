@@ -19,6 +19,7 @@ $script:OptionalEnvDefaults = @{
     ACME_INSTALLATION_PLUGINS     = 'script'
     ACME_CSR_ALGORITHM            = 'ec'
     ACME_ALLOW_CSR_FALLBACK        = '1'
+    ACME_PRIVATEKEY_EXPORTABLE     = 'false'
     ACME_WACS_PATH                = ''
     ACME_WACS_SOURCE              = 'official-release'
     ACME_WACS_AUTO_UPDATE         = '0'
