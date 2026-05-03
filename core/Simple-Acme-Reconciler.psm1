@@ -428,8 +428,15 @@ function Get-NormalizedCsvValues {
         $InputText -split '[,;\s]+' |
             ForEach-Object {
                 $token = $_.Trim()
+<<<<<<< codex/update-get-normalizedcsvvalues-for-parser-safety-dyxcjs
+                $token = $token -replace '^"', ''
+                $token = $token -replace "^'", ''
+                $token = $token -replace '"$', ''
+                $token = $token -replace "'$", ''
+=======
                 $token = $token -replace "^[\"']", ''
                 $token = $token -replace "[\"']$", ''
+>>>>>>> main
                 $token.ToLowerInvariant()
             } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
