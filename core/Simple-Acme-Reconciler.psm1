@@ -275,7 +275,7 @@ function Find-PropertyValues {
         [Parameter(Mandatory)][string[]]$Names
     )
 
-    $matches = New-Object System.Collections.Generic.List[object]
+    $foundValues = New-Object System.Collections.Generic.List[object]
 
     function Visit-Node {
         param($Node)
@@ -284,7 +284,7 @@ function Find-PropertyValues {
         if ($Node -is [System.Collections.IDictionary]) {
             foreach ($key in $Node.Keys) {
                 if ($Names -contains [string]$key) {
-                    $matches.Add($Node[$key])
+                    $foundValues.Add($Node[$key])
                 }
                 Visit-Node -Node $Node[$key]
             }
@@ -294,7 +294,7 @@ function Find-PropertyValues {
         if ($Node -is [System.Management.Automation.PSCustomObject]) {
             foreach ($property in $Node.PSObject.Properties) {
                 if ($Names -contains [string]$property.Name) {
-                    $matches.Add($property.Value)
+                    $foundValues.Add($property.Value)
                 }
                 Visit-Node -Node $property.Value
             }
@@ -309,7 +309,7 @@ function Find-PropertyValues {
     }
 
     Visit-Node -Node $InputObject
-    return @($matches)
+    return @($foundValues)
 }
 
 function Get-RenewalHosts {
@@ -364,7 +364,12 @@ function Get-NestedValue {
 function Get-RenewalSummarySafe {
     param([Parameter(Mandatory)][System.IO.FileInfo]$File)
     try { return Get-RenewalSummary -File $File }
-    catch { Write-Warning "Skipping malformed renewal JSON '$($File.FullName)': $($_.Exception.Message)"; return $null }
+    catch {
+        $detail = $_.Exception.GetType().FullName
+        if ($null -ne $_.Exception.InnerException) { $detail += " - $($_.Exception.InnerException.Message)" }
+        Write-Warning "Skipping malformed renewal JSON '$($File.FullName)': $($_.Exception.Message) [$detail]"
+        return $null
+    }
 }
 
 function Get-RenewalSummary {
@@ -403,7 +408,7 @@ function Get-RenewalSummary {
     $csrCandidates = Find-PropertyValues -InputObject $renewal -Names @('CsrPlugin','Csr')
     $keyTypeCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyType','KeyAlgorithm','Algorithm')
 
-    $hosts = Get-RenewalHosts -Renewal $renewal
+    $hosts = try { Get-RenewalHosts -Renewal $renewal } catch { throw "Failed to extract hosts from '$($File.FullName)': $($_.Exception.Message) [$($_.Exception.GetType().FullName)]" }
 
     $normalizedValidationCandidates = @($validationCandidates | Where-Object { $_ -is [string] } | ForEach-Object { $_.Trim().ToLowerInvariant() })
     $normalizedStoreCandidates = @($storeCandidates | Where-Object { $_ -is [string] } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
