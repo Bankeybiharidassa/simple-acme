@@ -170,7 +170,7 @@ function Get-RenewalFiles {
         return @()
     }
 
-    return @(Get-ChildItem -LiteralPath $SimpleAcmeDir -Filter '*.renewal.json' -File -ErrorAction SilentlyContinue)
+    return @(Get-ChildItem -LiteralPath $SimpleAcmeDir -Filter '*.renewal.json' -File -Recurse -ErrorAction SilentlyContinue)
 }
 
 function Get-SimpleAcmeLogDirectories {
@@ -328,7 +328,19 @@ function Get-RenewalHosts {
                 if ($item -is [string]) {
                     $v = $item.Trim().ToLowerInvariant()
                     if (-not [string]::IsNullOrWhiteSpace($v)) { $hostValues.Add($v) }
+                } elseif ($item -is [System.Management.Automation.PSCustomObject]) {
+                    $valueProp = $item.PSObject.Properties['Value']
+                    if ($null -ne $valueProp -and $valueProp.Value -is [string]) {
+                        $v = ([string]$valueProp.Value).Trim().ToLowerInvariant()
+                        if (-not [string]::IsNullOrWhiteSpace($v)) { $hostValues.Add($v) }
+                    }
                 }
+            }
+        } elseif ($candidate -is [System.Management.Automation.PSCustomObject]) {
+            $valueProp = $candidate.PSObject.Properties['Value']
+            if ($null -ne $valueProp -and $valueProp.Value -is [string]) {
+                $v = ([string]$valueProp.Value).Trim().ToLowerInvariant()
+                if (-not [string]::IsNullOrWhiteSpace($v)) { $hostValues.Add($v) }
             }
         }
     }
@@ -998,7 +1010,7 @@ function Invoke-WacsIssue {
     Add-Content -LiteralPath $wrapperLog -Value ('env_path=' + [string]([Environment]::GetEnvironmentVariable('CERTIFICATE_ENV_FILE'))) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('wacs_path=' + [string](Resolve-WacsExecutable -EnvValues $EnvValues)) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('csr_selected=' + [string](Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec')) -Encoding UTF8
-    Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + $(if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '0') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
+    Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + $(if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '1') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
 
     $lastError = $null
     for ($idx = 0; $idx -lt (Get-SafeCount $csrAlgorithms); $idx++) {
