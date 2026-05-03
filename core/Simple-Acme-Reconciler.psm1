@@ -943,6 +943,15 @@ function Invoke-WacsIssue {
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
     if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
+
+    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
+    if ($installationPlugins -contains 'script' -and -not ($storePlugins -contains 'certificatestore')) {
+        # Script installers commonly consume {CertThumbprint}, which requires the certificate
+        # to be present in a local Windows certificate store. Keep explicit pfxfile output but
+        # ensure certificate store presence for post-install scripts (e.g. RDS deployment).
+        $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
+        Write-CertificateLog -Level WARN -Message 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
+    }
     $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
     $timeoutSeconds = 300
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
@@ -968,7 +977,6 @@ function Invoke-WacsIssue {
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
-    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
     if ($installationPlugins -contains 'script') {
         $scriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
         if ([string]::IsNullOrWhiteSpace([string]$scriptPath)) {
