@@ -372,6 +372,25 @@ function Get-RenewalSummarySafe {
     }
 }
 
+function Remove-MalformedRenewalFiles {
+    param([string]$SimpleAcmeDir = (Join-Path $env:ProgramData 'simple-acme'))
+    $files = @(Get-RenewalFiles -SimpleAcmeDir $SimpleAcmeDir)
+    $quarantined = 0
+    foreach ($file in $files) {
+        try { $null = Get-RenewalSummary -File $file; continue } catch {}
+        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $backupPath = $file.FullName + ".bad-$stamp"
+        try {
+            Rename-Item -LiteralPath $file.FullName -NewName ([System.IO.Path]::GetFileName($backupPath)) -Force
+            Write-Warning "Quarantined malformed renewal JSON to '$backupPath'."
+            $quarantined++
+        } catch {
+            Write-Warning "Failed to quarantine '$($file.FullName)': $($_.Exception.Message)"
+        }
+    }
+    return $quarantined
+}
+
 function Get-RenewalSummary {
     param([Parameter(Mandatory)][System.IO.FileInfo]$File)
 
@@ -1186,6 +1205,7 @@ function Invoke-SimpleAcmeReconcile {
 
     Set-SimpleAcmeSettings -EnvValues $EnvValues
 
+    $null = Remove-MalformedRenewalFiles
     $allRenewalFiles = Get-RenewalFiles
     $matching = @()
     foreach ($file in $allRenewalFiles) {
@@ -1292,6 +1312,7 @@ $FunctionsToExport.Add('Get-SafeCount')
 $FunctionsToExport.Add('Get-RenewalFiles')
 $FunctionsToExport.Add('Get-RenewalSummary')
 $FunctionsToExport.Add('Get-RenewalSummarySafe')
+$FunctionsToExport.Add('Remove-MalformedRenewalFiles')
 $FunctionsToExport.Add('Get-InstallationPlugins')
 $FunctionsToExport.Add('Get-RenewalIdForCancel')
 $FunctionsToExport.Add('Invoke-SimpleAcmeReconcile')
