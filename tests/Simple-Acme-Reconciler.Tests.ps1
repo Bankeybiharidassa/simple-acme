@@ -434,4 +434,124 @@ No version here
         $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM = 'ec'; ACME_ALLOW_CSR_FALLBACK = '1' }
         if (($plan -join ',') -ne 'ec,rsa') { throw "Expected ec,rsa fallback plan, got $($plan -join ',')" }
     }
+
+    & $Assert 'Compare-RenewalWithEnv matches when env has pfxfile,certificatestore' {
+        $summary = [pscustomobject]@{
+            Hosts = @('example.com')
+            BaseUri = 'https://acme.networking4all.com/dv'
+            EabKid = ''
+            SourcePlugin = 'manual'
+            OrderPlugin = 'single'
+            AccountName = ''
+            HasValidationNone = $true
+            HasScriptInstallation = $true
+            InstallationPlugins = @('script')
+            ScriptPaths = @('C:\deploy.ps1')
+            ScriptParameters = @('{CertThumbprint}')
+            StorePlugins = @('certificatestore','pfxfile')
+            CsrPlugin = $null
+            KeyType = $null
+        }
+        $envValues = @{
+            DOMAINS = 'example.com'
+            ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+            ACME_KID = ''
+            ACME_SCRIPT_PATH = 'C:\deploy.ps1'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_ACCOUNT_NAME = ''
+        }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
+        if (-not $result.Matches) { throw "Expected match but got mismatches: $($result.Mismatches -join ', ')" }
+    }
+
+    & $Assert 'Compare-RenewalWithEnv auto-adds certificatestore to expected when installation is script' {
+        $summary = [pscustomobject]@{
+            Hosts = @('example.com')
+            BaseUri = 'https://acme.networking4all.com/dv'
+            EabKid = ''
+            SourcePlugin = 'manual'
+            OrderPlugin = 'single'
+            AccountName = ''
+            HasValidationNone = $true
+            HasScriptInstallation = $true
+            InstallationPlugins = @('script')
+            ScriptPaths = @('C:\deploy.ps1')
+            ScriptParameters = @('{CertThumbprint}')
+            StorePlugins = @('certificatestore','pfxfile')
+            CsrPlugin = $null
+            KeyType = $null
+        }
+        $envValues = @{
+            DOMAINS = 'example.com'
+            ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+            ACME_KID = ''
+            ACME_SCRIPT_PATH = 'C:\deploy.ps1'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_STORE_PLUGIN = 'pfxfile'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_ACCOUNT_NAME = ''
+        }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
+        if (-not $result.Matches) { throw "Expected auto-inject of certificatestore to produce a match, but got mismatches: $($result.Mismatches -join ', ')" }
+    }
+
+    & $Assert 'Compare-RenewalWithEnv reports Store plugin mismatch when stores differ' {
+        $summary = [pscustomobject]@{
+            Hosts = @('example.com')
+            BaseUri = 'https://acme.networking4all.com/dv'
+            EabKid = ''
+            SourcePlugin = 'manual'
+            OrderPlugin = 'single'
+            AccountName = ''
+            HasValidationNone = $true
+            HasScriptInstallation = $false
+            InstallationPlugins = @()
+            ScriptPaths = @()
+            ScriptParameters = @()
+            StorePlugins = @('pemfiles')
+            CsrPlugin = $null
+            KeyType = $null
+        }
+        $envValues = @{
+            DOMAINS = 'example.com'
+            ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+            ACME_KID = ''
+            ACME_SCRIPT_PATH = ''
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_STORE_PLUGIN = 'certificatestore'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'iis'
+            ACME_ACCOUNT_NAME = ''
+        }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
+        if ($result.Matches) { throw 'Expected store mismatch to be detected.' }
+        if (-not ($result.Mismatches -contains 'Store plugin')) { throw "Expected 'Store plugin' in mismatches, got: $($result.Mismatches -join ', ')" }
+    }
+
+    & $Assert 'Invoke-WacsIssue throws when ACME_PFX_FILE_PATH is a file path with extension' {
+        $threw = $false
+        try {
+            $null = Invoke-WacsIssue -EnvValues @{
+                DOMAINS = 'example.com'
+                ACME_DIRECTORY = 'https://acme.networking4all.com/dv'
+                ACME_SOURCE_PLUGIN = 'manual'
+                ACME_ORDER_PLUGIN = 'single'
+                ACME_VALIDATION_MODE = 'none'
+                ACME_INSTALLATION_PLUGINS = 'script'
+                ACME_SCRIPT_PATH = 'C:\deploy.ps1'
+                ACME_STORE_PLUGIN = 'pfxfile'
+                ACME_PFX_FILE_PATH = 'C:\certs\certificate.pfx'
+            }
+        } catch {
+            if ($_.Exception.Message -match 'must be a directory path') { $threw = $true }
+        }
+        if (-not $threw) { throw 'Expected file-path ACME_PFX_FILE_PATH to throw with directory-required message.' }
+    }
 }

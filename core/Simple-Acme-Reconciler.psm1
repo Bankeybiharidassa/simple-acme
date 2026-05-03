@@ -504,7 +504,11 @@ function Compare-RenewalWithEnv {
     if ([string]$RenewalSummary.OrderPlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN')) {
         $mismatches.Add('Order plugin')
     }
-    $expectedStores = @('certificatestore')
+    $expectedStores = @(Get-NormalizedCsvValues -InputText (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore') | Sort-Object -Unique)
+    $compareInstallPlugins = Get-InstallationPlugins -EnvValues $EnvValues
+    if ($compareInstallPlugins -contains 'script' -and $expectedStores -notcontains 'certificatestore') {
+        $expectedStores = @($expectedStores + 'certificatestore' | Sort-Object -Unique)
+    }
     $actualStores = @($RenewalSummary.StorePlugins | Sort-Object -Unique)
     if (($expectedStores -join ',') -ne ($actualStores -join ',')) {
         $mismatches.Add('Store plugin')
@@ -1025,6 +1029,9 @@ function Invoke-WacsIssue {
         if ([string]::IsNullOrWhiteSpace([string]$pfxFilePath)) {
             throw 'ACME_STORE_PLUGIN includes pfxfile, but ACME_PFX_FILE_PATH is empty.'
         }
+        if ([System.IO.Path]::GetExtension([string]$pfxFilePath) -ne '') {
+            throw "ACME_PFX_FILE_PATH must be a directory path, not a file path. Got: '$pfxFilePath'. Remove the filename (e.g. use 'C:\certs' instead of 'C:\certs\certificate.pfx')."
+        }
         if (-not (Test-Path -LiteralPath ([string]$pfxFilePath) -PathType Container)) {
             New-Item -ItemType Directory -Path ([string]$pfxFilePath) -Force | Out-Null
         }
@@ -1191,6 +1198,7 @@ function Invoke-SimpleAcmeReconcile {
 
     if ((Get-SafeCount $matching) -eq 0) {
         if (-not $SkipWacs) {
+            $preIssuanceFilePaths = @($allRenewalFiles | ForEach-Object { [string]$_.FullName })
             Invoke-WacsIssue -EnvValues $EnvValues
             $allRenewalFiles = Get-RenewalFiles
         }
@@ -1203,9 +1211,14 @@ function Invoke-SimpleAcmeReconcile {
         }
 
         if ((Get-SafeCount $postMatch) -eq 0) {
-            Write-ReconcileLog -Action 'create' -Domains $domains -Result 'failure' -Message 'No matching renewal file found after issuance.'
-            if ((Get-SafeCount $allRenewalFiles) -gt 0) { throw 'No matching renewal file found after issuance; at least one renewal file may be malformed.' }
-            throw 'No matching renewal file found after issuance.'
+            $newFiles = @($allRenewalFiles | Where-Object { $preIssuanceFilePaths -notcontains [string]$_.FullName })
+            $malformedCount = @($allRenewalFiles | Where-Object {
+                $s = Get-RenewalSummarySafe -File $_
+                $null -eq $s
+            }).Count
+            $diagMsg = "No matching renewal file found after issuance. New files written by WACS: $($newFiles.Count). Total files: $($allRenewalFiles.Count). Unreadable/malformed: $malformedCount."
+            Write-ReconcileLog -Action 'create' -Domains $domains -Result 'failure' -Message $diagMsg
+            throw $diagMsg
         }
 
         $validation = Compare-RenewalWithEnv -RenewalSummary $postMatch[0] -EnvValues $EnvValues

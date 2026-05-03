@@ -1497,7 +1497,7 @@ function Invoke-AcmeForm {
             $values.Store_CertificateStore_PrivateKeyExportable = 'true'
         } else {
             $values.ACME_PRIVATE_KEY_STRATEGY = 'pfx-distribution'
-            $values.ACME_STORE_PLUGIN = 'pfxfile'
+            $values.ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
             $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
             $values.Store_CertificateStore_PrivateKeyExportable = 'false'
             $values.ACME_INSTALLATION_PLUGINS = 'script'
@@ -1505,6 +1505,10 @@ function Invoke-AcmeForm {
             while ([string]::IsNullOrWhiteSpace($pfxPath)) {
                 $pfxPath = [string](Read-Host 'PFX output directory (e.g. C:\certs)')
                 $pfxPath = $pfxPath.Trim()
+                if ([System.IO.Path]::GetExtension($pfxPath) -ne '') {
+                    Write-Warning 'Enter a directory path, not a file path (e.g. C:\certs, not C:\certs\certificate.pfx).'
+                    $pfxPath = ''
+                }
             }
             $values.ACME_PFX_FILE_PATH = $pfxPath
         }
@@ -1637,7 +1641,7 @@ function Invoke-AcmeForm {
 
     Start-ConsoleSection -Title 'Effective wacs command preview'
     $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
-    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
+    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --host $([string]$values.DOMAINS) --store $([string]$values.ACME_STORE_PLUGIN) --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
     [Console]::WriteLine($line)
