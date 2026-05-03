@@ -23,7 +23,7 @@ $normalized = Assert-CertThumbprint -CertThumbprint $NewCertThumbprint
 $found = Get-CertificateByThumbprint -Thumbprint $normalized
 if ($null -eq $found -or $null -eq $found.Certificate) { Write-Error "Certificate $normalized not found in store."; exit 1 }
 $cert = $found.Certificate
-if ($null -eq $cert.PrivateKey) { Write-Error 'Certificate has no private key.'; exit 1 }
+if (-not $cert.HasPrivateKey) { Write-Error 'Certificate has no private key.'; exit 1 }
 try { $null = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx) } catch { Write-Error "Private key is not exportable: $($_.Exception.Message)"; exit 1 }
 & (Join-Path $PSScriptRoot 'cert2rds.ps1') $normalized; if ($LASTEXITCODE -ne 0) { Write-Error "Local RDS gateway deployment failed (exit $LASTEXITCODE)."; exit 1 }
 $runtimeDir = Join-Path $installRoot 'runtime'; if (-not (Test-Path -LiteralPath $runtimeDir)) { New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null }

@@ -372,6 +372,25 @@ function Get-RenewalSummarySafe {
     }
 }
 
+function Remove-MalformedRenewalFiles {
+    param([string]$SimpleAcmeDir = (Join-Path $env:ProgramData 'simple-acme'))
+    $files = @(Get-RenewalFiles -SimpleAcmeDir $SimpleAcmeDir)
+    $quarantined = 0
+    foreach ($file in $files) {
+        try { $null = Get-RenewalSummary -File $file; continue } catch {}
+        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $backupPath = $file.FullName + ".bad-$stamp"
+        try {
+            Rename-Item -LiteralPath $file.FullName -NewName ([System.IO.Path]::GetFileName($backupPath)) -Force
+            Write-Warning "Quarantined malformed renewal JSON to '$backupPath'."
+            $quarantined++
+        } catch {
+            Write-Warning "Failed to quarantine '$($file.FullName)': $($_.Exception.Message)"
+        }
+    }
+    return $quarantined
+}
+
 function Get-RenewalSummary {
     param([Parameter(Mandatory)][System.IO.FileInfo]$File)
 
@@ -1186,6 +1205,7 @@ function Invoke-SimpleAcmeReconcile {
 
     Set-SimpleAcmeSettings -EnvValues $EnvValues
 
+    $null = Remove-MalformedRenewalFiles
     $allRenewalFiles = Get-RenewalFiles
     $matching = @()
     foreach ($file in $allRenewalFiles) {
@@ -1197,8 +1217,8 @@ function Invoke-SimpleAcmeReconcile {
     }
 
     if ((Get-SafeCount $matching) -eq 0) {
+        $preIssuanceFilePaths = @($allRenewalFiles | ForEach-Object { [string]$_.FullName })
         if (-not $SkipWacs) {
-            $preIssuanceFilePaths = @($allRenewalFiles | ForEach-Object { [string]$_.FullName })
             Invoke-WacsIssue -EnvValues $EnvValues
             $allRenewalFiles = Get-RenewalFiles
         }
@@ -1212,11 +1232,11 @@ function Invoke-SimpleAcmeReconcile {
 
         if ((Get-SafeCount $postMatch) -eq 0) {
             $newFiles = @($allRenewalFiles | Where-Object { $preIssuanceFilePaths -notcontains [string]$_.FullName })
-            $malformedCount = @($allRenewalFiles | Where-Object {
+            $malformedCount = (Get-SafeCount @($allRenewalFiles | Where-Object {
                 $s = Get-RenewalSummarySafe -File $_
                 $null -eq $s
-            }).Count
-            $diagMsg = "No matching renewal file found after issuance. New files written by WACS: $($newFiles.Count). Total files: $($allRenewalFiles.Count). Unreadable/malformed: $malformedCount."
+            }))
+            $diagMsg = "No matching renewal file found after issuance. New files written by WACS: $(Get-SafeCount $newFiles). Total files: $(Get-SafeCount $allRenewalFiles). Unreadable/malformed: $malformedCount."
             Write-ReconcileLog -Action 'create' -Domains $domains -Result 'failure' -Message $diagMsg
             throw $diagMsg
         }
@@ -1292,6 +1312,7 @@ $FunctionsToExport.Add('Get-SafeCount')
 $FunctionsToExport.Add('Get-RenewalFiles')
 $FunctionsToExport.Add('Get-RenewalSummary')
 $FunctionsToExport.Add('Get-RenewalSummarySafe')
+$FunctionsToExport.Add('Remove-MalformedRenewalFiles')
 $FunctionsToExport.Add('Get-InstallationPlugins')
 $FunctionsToExport.Add('Get-RenewalIdForCancel')
 $FunctionsToExport.Add('Invoke-SimpleAcmeReconcile')
