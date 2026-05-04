@@ -24,15 +24,50 @@ $found = Get-CertificateByThumbprint -Thumbprint $normalized
 if ($null -eq $found -or $null -eq $found.Certificate) { Write-Error "Certificate $normalized not found in store."; exit 1 }
 $cert = $found.Certificate
 if (-not $cert.HasPrivateKey) { Write-Error 'Certificate has no private key.'; exit 1 }
-try { $null = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx) } catch { Write-Error "Private key is not exportable: $($_.Exception.Message)"; exit 1 }
+$keyIsExportable = $false
+try { $null = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx); $keyIsExportable = $true } catch { }
 & (Join-Path $PSScriptRoot 'cert2rds.ps1') $normalized; if ($LASTEXITCODE -ne 0) { Write-Error "Local RDS gateway deployment failed (exit $LASTEXITCODE)."; exit 1 }
 $runtimeDir = Join-Path $installRoot 'runtime'; if (-not (Test-Path -LiteralPath $runtimeDir)) { New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null }
 Add-Type -AssemblyName System.Web
 $plainPassword = [System.Web.Security.Membership]::GeneratePassword(32,8)
 $securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
-$pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $securePassword)
 $pfxName = 'farm-{0}-{1}.pfx' -f $normalized.Substring(0,8),([System.IO.Path]::GetRandomFileName().Replace('.',''))
-$localPfxPath = Join-Path $runtimeDir $pfxName; [System.IO.File]::WriteAllBytes($localPfxPath,$pfxBytes); $pfxBytes=$null
+$localPfxPath = Join-Path $runtimeDir $pfxName
+if ($keyIsExportable) {
+  $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $securePassword)
+  [System.IO.File]::WriteAllBytes($localPfxPath, $pfxBytes); $pfxBytes = $null
+} else {
+  # WACS 2.3.6 may leave the cert store key non-exportable when replacing an existing cert
+  # even when PrivateKeyExportable=true in settings.json. Fall back to the WACS-produced PFX
+  # file (written by the pfxfile store step with no password).
+  $pfxSearchRoots = @((Join-Path $env:ProgramData 'simple-acme'), (Join-Path $env:ProgramData 'win-acme'))
+  $sourcePfx = $null
+  foreach ($root in $pfxSearchRoots) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+    $candidates = @(Get-ChildItem -Path $root -Filter '*.pfx' -Recurse -ErrorAction SilentlyContinue |
+      Where-Object {
+        try {
+          $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+            $_.FullName, '',
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+          $match = ($c.Thumbprint -eq $normalized); $c.Dispose(); $match
+        } catch { $false }
+      })
+    if ($candidates.Count -gt 0) { $sourcePfx = $candidates[0].FullName; break }
+  }
+  if ($null -eq $sourcePfx) {
+    Write-Error 'Private key is not exportable and no WACS-produced PFX file found for this thumbprint. Ensure ACME_PFX_FILE_PATH is set and the pfxfile store step ran successfully.'
+    exit 1
+  }
+  Write-DeployLog -Action 'pfx-fallback' -Target $sourcePfx -Result 'info' -Details @{ reason = 'cert store key non-exportable; reading from WACS PFX' }
+  $sourceCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+    $sourcePfx, '',
+    ([System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
+     [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet))
+  $pfxBytes = $sourceCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $securePassword)
+  $sourceCert.Dispose()
+  [System.IO.File]::WriteAllBytes($localPfxPath, $pfxBytes); $pfxBytes = $null
+}
 $failed=$false
 if ($null -eq $SessionCredential) {
   Write-Error 'SessionCredential or SessionCredentialFile is required for unattended operation.'
