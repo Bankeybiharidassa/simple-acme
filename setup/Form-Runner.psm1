@@ -97,7 +97,7 @@ function Get-GuidedPipelineTemplate {
             $base.ACME_VALIDATION_MODE = $ValidationMode
             $base.ACME_INSTALLATION_PLUGINS = 'script'
             $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1'
-            $base.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}'"
+            $base.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%'"
         }
         'mail' {
             $base.ACME_SOURCE_PLUGIN = 'manual'
@@ -1613,7 +1613,7 @@ function Invoke-AcmeForm {
         ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'deployment-targets.json') -Encoding UTF8
 
         $values.ACME_SCRIPT_PATH = 'Scripts\deploy-rds-farm.ps1'
-        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -SessionHosts '$([string]::Join(',', $sessionHosts))'"
+        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%' -SessionHosts '$([string]::Join(',', $sessionHosts))'"
         $values.ACME_PRIVATEKEY_EXPORTABLE = 'true'
         $values.TARGET_SYSTEM = 'rds-farm'
         $values.TARGET_LOCATION = 'cluster-farm'

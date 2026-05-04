@@ -6,7 +6,7 @@ param(
     [string]$CacheFile = '',
     [string]$PfxStorePath = '',
     [string]$PfxPassword = '',
-    [string]$SessionHosts = '',
+    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$SessionHosts,
     [string]$RemoteTempDirectory = 'C:\Windows\Temp\simple-acme-rds',
     [switch]$SkipLocalRdsBinding,
     [switch]$SkipSessionHosts
