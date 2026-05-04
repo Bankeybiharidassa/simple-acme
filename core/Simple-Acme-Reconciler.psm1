@@ -275,7 +275,7 @@ function Find-PropertyValues {
         [Parameter(Mandatory)][string[]]$Names
     )
 
-    $foundValues = New-Object System.Collections.Generic.List[object]
+    $foundValues = [System.Collections.ArrayList]::new()
 
     function Visit-Node {
         param($Node)
@@ -284,7 +284,7 @@ function Find-PropertyValues {
         if ($Node -is [System.Collections.IDictionary]) {
             foreach ($key in $Node.Keys) {
                 if ($Names -contains [string]$key) {
-                    $foundValues.Add($Node[$key])
+                    [void]$foundValues.Add([object]$Node[$key])
                 }
                 Visit-Node -Node $Node[$key]
             }
@@ -294,7 +294,7 @@ function Find-PropertyValues {
         if ($Node -is [System.Management.Automation.PSCustomObject]) {
             foreach ($property in $Node.PSObject.Properties) {
                 if ($Names -contains [string]$property.Name) {
-                    $foundValues.Add($property.Value)
+                    [void]$foundValues.Add([object]$property.Value)
                 }
                 Visit-Node -Node $property.Value
             }
@@ -316,7 +316,7 @@ function Get-RenewalHosts {
     param([Parameter(Mandatory)]$Renewal)
 
     $hostValues = New-Object System.Collections.Generic.List[string]
-    $hostCandidates = Find-PropertyValues -InputObject $Renewal -Names @('Host','Hosts','Identifiers','Identifier')
+    $hostCandidates = Find-PropertyValues -InputObject $Renewal -Names @('Host','Hosts','Identifiers','Identifier','AlternativeNames','CommonName')
     foreach ($candidate in $hostCandidates) {
         if ($candidate -is [string]) {
             foreach ($part in ($candidate -split ',')) {
@@ -417,22 +417,57 @@ function Get-RenewalSummary {
     $storeCandidates = $null; $installationCandidates = $null; $accountCandidates = $null
     $sourceCandidates = $null; $orderCandidates = $null; $renewalIdCandidates = $null
     $scriptCandidates = $null; $scriptParameterCandidates = $null; $csrCandidates = $null; $keyTypeCandidates = $null
+    # WACS 2.3.6 uses $schema instead of Newtonsoft $type discriminators and uses a different
+    # schema: no SourcePlugin/OrderPlugin fields, domains in TargetPluginOptions.AlternativeNames,
+    # stores in StorePluginOptions[*] (structural), installs in InstallationPluginOptions[*].
+    $isNewFormat = ($null -ne $renewal.PSObject.Properties['$schema'])
+
     try {
         $baseUriCandidates = Find-PropertyValues -InputObject $renewal -Names @('BaseUri')
         $kidCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyIdentifier','Kid','EabKeyIdentifier')
         $validationCandidates = Find-PropertyValues -InputObject $renewal -Names @('Plugin','Name','ValidationPlugin')
-        $storeCandidates = Find-PropertyValues -InputObject $renewal -Names @('StorePlugin','StoreType','Store')
-        $installationCandidates = Find-PropertyValues -InputObject $renewal -Names @('InstallationPlugin','InstallationPlugins','Installation')
+        $storeCandidates = [System.Collections.ArrayList]@(Find-PropertyValues -InputObject $renewal -Names @('StorePlugin','StoreType','Store'))
+        $installationCandidates = [System.Collections.ArrayList]@(Find-PropertyValues -InputObject $renewal -Names @('InstallationPlugin','InstallationPlugins','Installation'))
         $accountCandidates = Find-PropertyValues -InputObject $renewal -Names @('Account','AccountName')
         $sourceCandidates = Find-PropertyValues -InputObject $renewal -Names @('SourcePlugin','Source')
         $orderCandidates = Find-PropertyValues -InputObject $renewal -Names @('OrderPlugin','Order')
         $renewalIdCandidates = Find-PropertyValues -InputObject $renewal -Names @('Id','RenewalId')
-        $scriptCandidates = Find-PropertyValues -InputObject $renewal -Names @('Script','ScriptFileName')
-        $scriptParameterCandidates = Find-PropertyValues -InputObject $renewal -Names @('ScriptParameters','Parameters')
+        $scriptCandidates = [System.Collections.ArrayList]@(Find-PropertyValues -InputObject $renewal -Names @('Script','ScriptFileName'))
+        $scriptParameterCandidates = [System.Collections.ArrayList]@(Find-PropertyValues -InputObject $renewal -Names @('ScriptParameters','Parameters'))
         $csrCandidates = Find-PropertyValues -InputObject $renewal -Names @('CsrPlugin','Csr')
         $keyTypeCandidates = Find-PropertyValues -InputObject $renewal -Names @('KeyType','KeyAlgorithm','Algorithm')
     } catch {
         throw "Failed to traverse property values in '$($File.FullName)': $($_.Exception.Message) [$($_.Exception.GetType().FullName)]"
+    }
+
+    if ($isNewFormat) {
+        # Derive store plugin names from StorePluginOptions structure:
+        #   entry with a non-empty Path property → pfxfile; entry without Path → certificatestore
+        $spoRaw = $renewal.PSObject.Properties['StorePluginOptions']
+        if ($null -ne $spoRaw -and $spoRaw.Value -is [System.Collections.IEnumerable]) {
+            foreach ($spo in $spoRaw.Value) {
+                $pathProp = $spo.PSObject.Properties['Path']
+                if ($null -ne $pathProp -and -not [string]::IsNullOrWhiteSpace([string]$pathProp.Value)) {
+                    [void]$storeCandidates.Add([object]'pfxfile')
+                } else {
+                    [void]$storeCandidates.Add([object]'certificatestore')
+                }
+            }
+        }
+        # Derive installation plugin names from InstallationPluginOptions structure:
+        #   entry with a Script property → script (also capture Script/ScriptParameters values)
+        $ipoRaw = $renewal.PSObject.Properties['InstallationPluginOptions']
+        if ($null -ne $ipoRaw -and $ipoRaw.Value -is [System.Collections.IEnumerable]) {
+            foreach ($ipo in $ipoRaw.Value) {
+                $scriptProp = $ipo.PSObject.Properties['Script']
+                if ($null -ne $scriptProp -and -not [string]::IsNullOrWhiteSpace([string]$scriptProp.Value)) {
+                    [void]$installationCandidates.Add([object]'script')
+                    [void]$scriptCandidates.Add([object]$scriptProp.Value)
+                    $paramProp = $ipo.PSObject.Properties['ScriptParameters']
+                    if ($null -ne $paramProp) { [void]$scriptParameterCandidates.Add([object]$paramProp.Value) }
+                }
+            }
+        }
     }
 
     $hosts = try { Get-RenewalHosts -Renewal $renewal } catch { throw "Failed to extract hosts from '$($File.FullName)': $($_.Exception.Message) [$($_.Exception.GetType().FullName)]" }
@@ -448,10 +483,18 @@ function Get-RenewalSummary {
         throw "Renewal JSON '$($File.FullName)' did not contain a usable renewal identifier."
     }
     if ([string]::IsNullOrWhiteSpace([string]$resolvedSourcePlugin)) {
-        throw "Renewal JSON '$($File.FullName)' did not contain source plugin metadata."
+        if ($isNewFormat) {
+            $resolvedSourcePlugin = 'manual'
+        } else {
+            throw "Renewal JSON '$($File.FullName)' did not contain source plugin metadata."
+        }
     }
     if ([string]::IsNullOrWhiteSpace([string]$resolvedOrderPlugin)) {
-        throw "Renewal JSON '$($File.FullName)' did not contain order plugin metadata."
+        if ($isNewFormat) {
+            $resolvedOrderPlugin = 'single'
+        } else {
+            throw "Renewal JSON '$($File.FullName)' did not contain order plugin metadata."
+        }
     }
 
     [pscustomobject]@{
@@ -692,11 +735,27 @@ function Set-SimpleAcmeSettings {
         $targetSystem = (Get-EnvValue -EnvValues $EnvValues -Key 'TARGET_SYSTEM')
         $targetLocation = (Get-EnvValue -EnvValues $EnvValues -Key 'TARGET_LOCATION')
         $explicitExportable = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PRIVATEKEY_EXPORTABLE')
-        if ($targetSystem -eq 'rds' -or $targetLocation -eq 'cluster-farm' -or $targetLocation -eq 'another-server' -or $explicitExportable -eq 'true') {
+        $storeExplicit = (Get-EnvValue -EnvValues $EnvValues -Key 'Store_CertificateStore_PrivateKeyExportable')
+        if ($targetSystem -eq 'rds' -or $targetLocation -eq 'cluster-farm' -or $targetLocation -eq 'another-server' -or $explicitExportable -eq 'true' -or $storeExplicit -eq 'true') {
             $requiresExportable = $true
         }
     }
     $settings.Store.CertificateStore.PrivateKeyExportable = $requiresExportable
+    Write-Verbose "Set-SimpleAcmeSettings: writing PrivateKeyExportable=$requiresExportable to '$settingsPath'"
+
+    # WACS 2.3.x reads the PFX output path from settings.json (Store.PfxFile.DefaultPath) on
+    # scheduled renewals — it does not re-read --pfxfilepath from the command line. Writing this
+    # here ensures the path persists across renewals even if it was not stored in the renewal JSON.
+    if ($null -ne $EnvValues) {
+        $pfxFilePath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PFX_FILE_PATH')
+        if (-not [string]::IsNullOrWhiteSpace($pfxFilePath)) {
+            if (-not $settings.Store.ContainsKey('PfxFile') -or $null -eq $settings.Store.PfxFile) {
+                $settings.Store.PfxFile = @{}
+            }
+            $settings.Store.PfxFile.DefaultPath = [string]$pfxFilePath
+            Write-Verbose "Set-SimpleAcmeSettings: writing Store.PfxFile.DefaultPath='$pfxFilePath' to '$settingsPath'"
+        }
+    }
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 12), $utf8NoBom)
