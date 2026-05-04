@@ -1,0 +1,479 @@
+﻿<#
+File: deploy-rds-farm.ps1
+Purpose:
+- Called by wacs.exe/simple-acme as custom installation script.
+- Binds issued certificate to local RDS roles.
+- Copies the PFX to remote RDS Session Hosts using current-user PowerShell remoting.
+- Imports the PFX on each Session Host into LocalMachine\My.
+- Binds the imported certificate to the Session Host RDP-Tcp listener.
+
+Aligned with install.cmd parameters:
+- -CertThumbprint
+- -CachePassword
+- -CacheFile
+- -PfxStorePath
+- -PfxPassword
+- -SessionHosts
+
+Expected install.cmd scriptparameters:
+--scriptparameters "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%' -SessionHosts '%SESSION_HOSTS%'"
+#>
+
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$CertThumbprint,
+
+    [Parameter(Mandatory = $false)]
+    [string]$CachePassword = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$CacheFile = "",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string]$PfxStorePath = "C:\certs",
+
+    [Parameter(Mandatory = $false)]
+    [string]$PfxPassword = "",
+
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SessionHosts,
+
+    [Parameter(Mandatory = $false)]
+    [string[]]$RdsRoles = @("RDGateway", "RDWebAccess", "RDRedirector", "RDPublishing"),
+
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string]$RemoteTempDirectory = "C:\Windows\Temp\simple-acme-rds",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipLocalRdsBinding,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipSessionHosts
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+function Write-Step {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    Write-Host "[deploy-rds-farm] $Message"
+}
+
+function Normalize-Thumbprint {
+    param([Parameter(Mandatory = $true)][string]$Thumbprint)
+    return ($Thumbprint -replace "\s", "").ToUpperInvariant()
+}
+
+function Assert-Admin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "This script must run elevated as Administrator."
+    }
+}
+
+function Assert-FileReadable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "PFX/cache file not found: $Path"
+    }
+
+    $item = Get-Item -LiteralPath $Path
+    if ($item.Length -lt 1024) {
+        throw "PFX/cache file is unexpectedly small: $Path ($($item.Length) bytes)"
+    }
+}
+
+function Get-SessionHostList {
+    param([Parameter(Mandatory = $true)][string]$Csv)
+
+    [string[]]$hosts = @(
+        $Csv.Split(',') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
+    )
+
+    if ($hosts.Length -lt 1) {
+        throw "SessionHosts is empty after parsing. Use for example: rdsh01,rdsh02"
+    }
+
+    return $hosts
+}
+
+function Get-LocalCertificateByThumbprint {
+    param([Parameter(Mandatory = $true)][string]$Thumbprint)
+
+    $normalized = Normalize-Thumbprint $Thumbprint
+    $storesToSearch = @(
+        "Cert:\LocalMachine\My",
+        "Cert:\LocalMachine\WebHosting"
+    )
+
+    foreach ($storePath in $storesToSearch) {
+        if (-not (Test-Path -LiteralPath $storePath)) {
+            continue
+        }
+
+        $cert = Get-ChildItem -Path $storePath |
+            Where-Object { (Normalize-Thumbprint $_.Thumbprint) -eq $normalized } |
+            Select-Object -First 1
+
+        if ($null -ne $cert) {
+            if (-not $cert.HasPrivateKey) {
+                throw "Certificate $normalized exists in $storePath but has no private key."
+            }
+
+            return [pscustomobject]@{
+                Certificate = $cert
+                StorePath   = $storePath
+            }
+        }
+    }
+
+    throw "Certificate with thumbprint $normalized not found in Cert:\LocalMachine\My or Cert:\LocalMachine\WebHosting."
+}
+
+function Resolve-DeploymentPfx {
+    param(
+        [string]$PreferredCacheFile,
+        [string]$PreferredCachePassword,
+        [Parameter(Mandatory = $true)][string]$StorePath,
+        [string]$StorePassword
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredCacheFile) -and (Test-Path -LiteralPath $PreferredCacheFile -PathType Leaf)) {
+        $effectiveCachePassword = $PreferredCachePassword
+        if ([string]::IsNullOrWhiteSpace($effectiveCachePassword)) {
+            throw "CacheFile was provided, but CachePassword is empty."
+        }
+
+        Assert-FileReadable -Path $PreferredCacheFile
+        return [pscustomobject]@{
+            Path     = $PreferredCacheFile
+            Password = $effectiveCachePassword
+            Source   = "wacs-cache"
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $StorePath -PathType Container)) {
+        throw "CacheFile is empty/unusable and PfxStorePath does not exist: $StorePath"
+    }
+
+    $candidate = Get-ChildItem -LiteralPath $StorePath -Filter "*.pfx" -File |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $candidate) {
+        throw "CacheFile is empty/unusable and no .pfx file was found in PfxStorePath: $StorePath"
+    }
+
+    $effectivePassword = $StorePassword
+    if ([string]::IsNullOrWhiteSpace($effectivePassword)) {
+        $effectivePassword = $PreferredCachePassword
+    }
+
+    if ([string]::IsNullOrWhiteSpace($effectivePassword)) {
+        throw "PFX password is empty. Set -PfxPassword from install.cmd."
+    }
+
+    Assert-FileReadable -Path $candidate.FullName
+    return [pscustomobject]@{
+        Path     = $candidate.FullName
+        Password = $effectivePassword
+        Source   = "pfxfile-store"
+    }
+}
+
+function Ensure-CertificateInMyStore {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory = $true)]
+        [string]$StorePath
+    )
+
+    $normalized = Normalize-Thumbprint $Certificate.Thumbprint
+
+    $existingInMy = Get-ChildItem -Path Cert:\LocalMachine\My |
+        Where-Object { (Normalize-Thumbprint $_.Thumbprint) -eq $normalized } |
+        Select-Object -First 1
+
+    if ($null -ne $existingInMy) {
+        if (-not $existingInMy.HasPrivateKey) {
+            throw "Certificate $normalized exists in LocalMachine\My but has no private key."
+        }
+
+        return [pscustomobject]@{
+            Certificate = $existingInMy
+            StorePath   = "Cert:\LocalMachine\My"
+        }
+    }
+
+    if ($StorePath -eq "Cert:\LocalMachine\My") {
+        throw "Certificate $normalized was reported in LocalMachine\My but could not be reloaded from that store."
+    }
+
+    Write-Step "Certificate $normalized is in $StorePath. Copying it into Cert:\LocalMachine\My for RDS binding."
+
+    try {
+        $sourcePath = Join-Path $StorePath $normalized
+        Copy-Item -LiteralPath $sourcePath -Destination "Cert:\LocalMachine\My" -ErrorAction Stop
+    }
+    catch {
+        throw "Could not copy certificate $normalized from $StorePath to Cert:\LocalMachine\My. Details: $($_.Exception.Message)"
+    }
+
+    $copied = Get-ChildItem -Path Cert:\LocalMachine\My |
+        Where-Object { (Normalize-Thumbprint $_.Thumbprint) -eq $normalized } |
+        Select-Object -First 1
+
+    if ($null -eq $copied) {
+        throw "Certificate $normalized was copied to LocalMachine\My but could not be found afterwards."
+    }
+
+    if (-not $copied.HasPrivateKey) {
+        throw "Certificate $normalized was copied to LocalMachine\My but has no private key there."
+    }
+
+    return [pscustomobject]@{
+        Certificate = $copied
+        StorePath   = "Cert:\LocalMachine\My"
+    }
+}
+
+function Set-LocalRdsCertificateBindings {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CertificateStorePath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Roles
+    )
+
+    $normalizedCert = Ensure-CertificateInMyStore -Certificate $Certificate -StorePath $CertificateStorePath
+    $thumbprintForRds = Normalize-Thumbprint $normalizedCert.Certificate.Thumbprint
+
+    Write-Step "Binding local RDS roles to certificate thumbprint $thumbprintForRds"
+
+    try {
+        Import-Module RemoteDesktop -ErrorAction Stop
+    }
+    catch {
+        throw "Could not import RemoteDesktop module. Install RDS management tools or run this on the RDS management/gateway server. Details: $($_.Exception.Message)"
+    }
+
+    foreach ($role in $Roles) {
+        try {
+            Set-RDCertificate -Role $role -Thumbprint $thumbprintForRds -Force -ErrorAction Stop
+            Write-Step "Bound local RDS role: $role"
+        }
+        catch {
+            $message = $_.Exception.Message
+
+            if ($role -eq "RDGateway" -and $message -like "*Could not restart the service TSGateway*") {
+                Write-Warning "RDS role '$role' appears to be bound, but TSGateway restart timed out. Continuing with session host deployment. Details: $message"
+                continue
+            }
+
+            throw
+        }
+    }
+}
+
+$RemoteInstallScript = {
+    param(
+        [Parameter(Mandatory = $true)][string]$RemotePfxPath,
+        [Parameter(Mandatory = $true)][string]$PfxPassword,
+        [Parameter(Mandatory = $true)][string]$ExpectedThumbprint
+    )
+
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+
+    function Normalize-RemoteThumbprint {
+        param([Parameter(Mandatory = $true)][string]$Thumbprint)
+        return ($Thumbprint -replace "\s", "").ToUpperInvariant()
+    }
+
+    if (-not (Test-Path -LiteralPath $RemotePfxPath -PathType Leaf)) {
+        throw "Remote PFX file not found: $RemotePfxPath"
+    }
+
+    $securePassword = ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force
+
+    $imported = Import-PfxCertificate `
+        -FilePath $RemotePfxPath `
+        -CertStoreLocation Cert:\LocalMachine\My `
+        -Password $securePassword `
+        -Exportable:$false `
+        -ErrorAction Stop
+
+    $expected = Normalize-RemoteThumbprint $ExpectedThumbprint
+    $cert = $imported |
+        Where-Object { (Normalize-RemoteThumbprint $_.Thumbprint) -eq $expected } |
+        Select-Object -First 1
+
+    if ($null -eq $cert) {
+        $cert = Get-ChildItem Cert:\LocalMachine\My |
+            Where-Object { (Normalize-RemoteThumbprint $_.Thumbprint) -eq $expected } |
+            Select-Object -First 1
+    }
+
+    if ($null -eq $cert) {
+        throw "Imported certificate thumbprint mismatch. Expected $expected."
+    }
+
+    if (-not $cert.HasPrivateKey) {
+        throw "Imported certificate $expected has no private key."
+    }
+
+    $rdpSettings = Get-WmiObject `
+        -Namespace root\cimv2\TerminalServices `
+        -Class Win32_TSGeneralSetting `
+        -Filter "TerminalName='RDP-tcp'" `
+        -ErrorAction Stop
+
+    if ($null -eq $rdpSettings) {
+        throw "Could not find Win32_TSGeneralSetting for TerminalName='RDP-tcp'."
+    }
+
+    try {
+        $rdpSettings.SSLCertificateSHA1Hash = $expected
+        $null = $rdpSettings.Put()
+    }
+    catch {
+        throw "Could not bind certificate $expected to RDP-Tcp using Win32_TSGeneralSetting.Put(). Details: $($_.Exception.Message)"
+    }
+
+    Start-Sleep -Seconds 2
+
+    $verifySettings = Get-WmiObject `
+        -Namespace root\cimv2\TerminalServices `
+        -Class Win32_TSGeneralSetting `
+        -Filter "TerminalName='RDP-tcp'" `
+        -ErrorAction Stop
+
+    $actual = Normalize-RemoteThumbprint $verifySettings.SSLCertificateSHA1Hash
+    if ($actual -ne $expected) {
+        throw "RDP-Tcp binding verification failed. Expected $expected but got $actual."
+    }
+
+    Remove-Item -LiteralPath $RemotePfxPath -Force -ErrorAction SilentlyContinue
+
+    return [pscustomobject]@{
+        ComputerName = $env:COMPUTERNAME
+        Thumbprint   = $expected
+        BoundTo      = "RDP-tcp"
+        Status       = "OK"
+    }
+}
+
+function Deploy-ToSessionHost {
+    param(
+        [Parameter(Mandatory = $true)][string]$ComputerName,
+        [Parameter(Mandatory = $true)][string]$LocalPfxPath,
+        [Parameter(Mandatory = $true)][string]$PfxPassword,
+        [Parameter(Mandatory = $true)][string]$Thumbprint,
+        [Parameter(Mandatory = $true)][string]$RemoteDirectory
+    )
+
+    Write-Step "Opening PowerShell remoting session to $ComputerName as current user"
+
+    $session = $null
+    try {
+        $session = New-PSSession -ComputerName $ComputerName -Authentication Negotiate -ErrorAction Stop
+
+        Invoke-Command -Session $session -ScriptBlock {
+            param([Parameter(Mandatory = $true)][string]$Directory)
+            New-Item -Path $Directory -ItemType Directory -Force | Out-Null
+        } -ArgumentList $RemoteDirectory -ErrorAction Stop
+
+        $remotePfxPath = Join-Path $RemoteDirectory ("rds-cert-{0}.pfx" -f ([guid]::NewGuid().ToString("N")))
+
+        Write-Step "Copying PFX to ${ComputerName}:$remotePfxPath"
+        Copy-Item -LiteralPath $LocalPfxPath -Destination $remotePfxPath -ToSession $session -Force -ErrorAction Stop
+
+        Write-Step "Importing and binding certificate on $ComputerName"
+        $result = Invoke-Command `
+            -Session $session `
+            -ScriptBlock $RemoteInstallScript `
+            -ArgumentList $remotePfxPath, $PfxPassword, $Thumbprint `
+            -ErrorAction Stop
+
+        return $result
+    }
+    finally {
+        if ($null -ne $session) {
+            Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+try {
+    Assert-Admin
+
+    $normalizedThumbprint = Normalize-Thumbprint $CertThumbprint
+    Write-Step "Starting deployment for certificate thumbprint $normalizedThumbprint"
+
+    $deploymentPfx = Resolve-DeploymentPfx `
+        -PreferredCacheFile $CacheFile `
+        -PreferredCachePassword $CachePassword `
+        -StorePath $PfxStorePath `
+        -StorePassword $PfxPassword
+
+    Write-Step "Using deployment PFX from $($deploymentPfx.Source): $($deploymentPfx.Path)"
+
+    $localCertResult = Get-LocalCertificateByThumbprint -Thumbprint $normalizedThumbprint
+    $localCert = $localCertResult.Certificate
+    Write-Step "Validated local certificate in $($localCertResult.StorePath): Subject='$($localCert.Subject)', NotAfter='$($localCert.NotAfter)'"
+
+    if (-not $SkipLocalRdsBinding) {
+        Set-LocalRdsCertificateBindings -Certificate $localCert -CertificateStorePath $localCertResult.StorePath -Roles $RdsRoles
+    }
+    else {
+        Write-Step "Skipping local RDS binding by request."
+    }
+
+    if ($SkipSessionHosts) {
+        Write-Step "Skipping session host deployment by request."
+    }
+    else {
+        [string[]]$hosts = @(Get-SessionHostList -Csv $SessionHosts)
+        Write-Step "Deploying certificate to session hosts: $($hosts -join ', ')"
+
+        $results = @()
+        foreach ($hostName in $hosts) {
+            try {
+                $results += Deploy-ToSessionHost `
+                    -ComputerName $hostName `
+                    -LocalPfxPath $deploymentPfx.Path `
+                    -PfxPassword $deploymentPfx.Password `
+                    -Thumbprint $normalizedThumbprint `
+                    -RemoteDirectory $RemoteTempDirectory
+            }
+            catch {
+                throw "Session host deployment failed for '$hostName': $($_.Exception.Message)"
+            }
+        }
+
+        $results | Format-Table -AutoSize
+    }
+
+    Write-Step "RDS certificate deployment completed successfully."
+    exit 0
+}
+catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}

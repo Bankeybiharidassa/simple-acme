@@ -1,0 +1,4 @@
+Enable-PSRemoting -Force
+
+Set-Item WSMan:\localhost\Service\Auth\Kerberos $true
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "target-host"

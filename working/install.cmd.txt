@@ -1,0 +1,130 @@
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+
+REM ============================================================================
+REM install.cmd
+REM ============================================================================
+REM Purpose:
+REM - Central entry point for requesting/renewing a wildcard certificate with
+REM   wacs.exe / simple-acme.
+REM - Defines the RDS farm deployment variables in one place.
+REM - Calls deploy-rds-farm.ps1 as the custom installation script.
+REM
+REM Alignment with deploy-rds-farm.ps1:
+REM - SESSION_HOSTS  -> -SessionHosts
+REM - PFX_FILE_PATH  -> --pfxfilepath and -PfxStorePath
+REM - PFX_PASSWORD   -> --pfxpassword and -PfxPassword
+REM - {CertThumbprint}, {CachePassword}, {CacheFile} are provided by wacs.
+REM
+REM Required files in this directory layout:
+REM - install.cmd
+REM - wacs.exe
+REM - Scripts\deploy-rds-farm.ps1
+REM ============================================================================
+
+REM ----------------------------------------------------------------------------
+REM Operator-configurable values
+REM ----------------------------------------------------------------------------
+
+set "BASE_URI=https://test-acme.networking4all.com/dv-wildcard"
+set "CERT_HOST=DOMAIN"
+
+REM Comma-separated RDS Session Hosts. No spaces required.
+set "SESSION_HOSTS=sessionhost,sessionhost2"
+
+REM Persistent PFX output directory used by wacs pfxfile store.
+REM deploy-rds-farm.ps1 also uses this as -PfxStorePath when {CacheFile} is empty.
+set "PFX_FILE_PATH=C:\certs"
+
+REM Strong password for the persistent PFX file.
+REM Keep install.cmd protected if this password is stored here.
+set "PFX_PASSWORD=<PFX_PASSWORD>"
+
+REM External Account Binding values.
+set "EAB_KEY_IDENTIFIER=<KID>"
+set "EAB_KEY=<SECRET>"
+
+REM Path values.
+set "WACS_EXE=%~dp0wacs.exe"
+set "DEPLOY_SCRIPT=%~dp0Scripts\\deploy-rds-farm.ps1"
+if not exist "%DEPLOY_SCRIPT%" set "DEPLOY_SCRIPT=%~dp0deploy-rds-farm.ps1"
+
+REM ----------------------------------------------------------------------------
+REM Preflight checks
+REM ----------------------------------------------------------------------------
+
+if not exist "%WACS_EXE%" (
+    echo ERROR: wacs.exe not found: "%WACS_EXE%"
+    exit /b 1
+)
+
+if not exist "%DEPLOY_SCRIPT%" (
+    echo ERROR: deploy script not found: "%DEPLOY_SCRIPT%"
+    exit /b 1
+)
+
+if "%EAB_KEY%"=="<hidden>" (
+    echo ERROR: EAB_KEY is still set to ^<hidden^>. Edit install.cmd first.
+    exit /b 1
+)
+
+if "%PFX_PASSWORD%"=="CHANGE_ME_STRONG_PFX_PASSWORD" (
+    echo ERROR: PFX_PASSWORD still has the placeholder value. Edit install.cmd first.
+    exit /b 1
+)
+
+if "%SESSION_HOSTS%"=="" (
+    echo ERROR: SESSION_HOSTS is empty. Define at least one session host.
+    exit /b 1
+)
+
+if not exist "%PFX_FILE_PATH%" (
+    mkdir "%PFX_FILE_PATH%"
+    if errorlevel 1 (
+        echo ERROR: Could not create PFX_FILE_PATH: "%PFX_FILE_PATH%"
+        exit /b 1
+    )
+)
+
+REM Syntax check for the PowerShell deployment script.
+echo Using deploy script: "%DEPLOY_SCRIPT%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$null = [scriptblock]::Create((Get-Content -Raw -LiteralPath '%DEPLOY_SCRIPT%')); 'Syntax OK'"
+if errorlevel 1 (
+    echo ERROR: PowerShell syntax check failed for "%DEPLOY_SCRIPT%"
+    exit /b 1
+)
+
+REM ----------------------------------------------------------------------------
+REM Request/renew certificate and deploy to local RDS roles + remote Session Hosts
+REM ----------------------------------------------------------------------------
+
+echo Starting wacs certificate request and RDS farm deployment...
+
+"%WACS_EXE%" ^
+  --accepttos ^
+  --source manual ^
+  --order single ^
+  --baseuri "%BASE_URI%" ^
+  --validation none ^
+  --host "%CERT_HOST%" ^
+  --store pfxfile,certificatestore ^
+  --certificatestore My ^
+  --pfxfilepath "%PFX_FILE_PATH%" ^
+  --pfxpassword "%PFX_PASSWORD%" ^
+  --installation script ^
+  --script "%DEPLOY_SCRIPT%" ^
+  --scriptparameters "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%' -SessionHosts '%SESSION_HOSTS%'" ^
+  --csr rsa ^
+  --eab-key-identifier "%EAB_KEY_IDENTIFIER%" ^
+  --eab-key "%EAB_KEY%" ^
+  --nocache
+
+set "WACS_EXIT=%ERRORLEVEL%"
+
+if not "%WACS_EXIT%"=="0" (
+    echo ERROR: wacs/deployment failed with exit code %WACS_EXIT%.
+    exit /b %WACS_EXIT%
+)
+
+echo Completed successfully.
+exit /b 0
