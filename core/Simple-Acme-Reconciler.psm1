@@ -1114,7 +1114,18 @@ function Invoke-WacsIssue {
             New-Item -ItemType Directory -Path ([string]$pfxFilePath) -Force | Out-Null
         }
         $args += @('--pfxfilepath', [string]$pfxFilePath)
+        $pfxPassword = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PFX_PASSWORD'
+        if (-not [string]::IsNullOrWhiteSpace([string]$pfxPassword)) {
+            $args += @('--pfxpassword', [string]$pfxPassword)
+        }
     }
+    if ($storePlugins -contains 'certificatestore') {
+        $certStoreLocation = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CERT_STORE_LOCATION' -Default 'My'
+        if (-not [string]::IsNullOrWhiteSpace([string]$certStoreLocation)) {
+            $args += @('--certificatestore', [string]$certStoreLocation)
+        }
+    }
+    $args += @('--nocache')
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID'))) { $args += @('--eab-key-identifier', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) }
     if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_REQUIRES_EAB') -eq '1' -and -not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET'))) { $args += @('--eab-key', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_HMAC_SECRET')) }
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }

@@ -12,6 +12,8 @@ $script:OptionalEnvDefaults = @{
     ACME_ORDER_PLUGIN             = 'single'
     ACME_STORE_PLUGIN             = 'certificatestore'
     ACME_PFX_FILE_PATH            = ''
+    ACME_PFX_PASSWORD             = ''
+    ACME_CERT_STORE_LOCATION      = 'My'
     ACME_ACCOUNT_NAME             = ''
     ACME_VALIDATION_MODE          = 'none'
     ACME_WACS_RETRY_ATTEMPTS      = '3'
@@ -271,7 +273,7 @@ function Write-CredentialStore {
     param([Parameter(Mandatory)][string]$ConfigDir,[Parameter(Mandatory)][hashtable]$Values)
     if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
     $out = [ordered]@{}
-    foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','ACME_API_KEY')) {
+    foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','ACME_API_KEY','ACME_PFX_PASSWORD')) {
         if ($Values.ContainsKey($k) -and -not [string]::IsNullOrWhiteSpace([string]$Values[$k])) {
             $out[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
         }

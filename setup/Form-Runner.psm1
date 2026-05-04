@@ -97,7 +97,7 @@ function Get-GuidedPipelineTemplate {
             $base.ACME_VALIDATION_MODE = $ValidationMode
             $base.ACME_INSTALLATION_PLUGINS = 'script'
             $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'deploy-rds-farm.ps1'
-            $base.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%'"
+            $base.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}'"
         }
         'mail' {
             $base.ACME_SOURCE_PLUGIN = 'manual'
@@ -1021,7 +1021,7 @@ function Save-SecurePlatformConfig {
 
     if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
 
-    $secretKeys  = @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')
+    $secretKeys  = @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY','ACME_PFX_PASSWORD')
     $allowedPlainKeys = @('DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR')
     $credMap = @{}
     foreach ($k in $secretKeys) {
@@ -1511,6 +1511,15 @@ function Invoke-AcmeForm {
                 }
             }
             $values.ACME_PFX_FILE_PATH = $pfxPath
+            $pfxPasswordInput = ''
+            while ($pfxPasswordInput.Length -lt 8) {
+                $pfxPasswordInput = [string](Read-Host 'PFX file password (min 8 chars, stored encrypted)')
+                $pfxPasswordInput = $pfxPasswordInput.Trim()
+                if ($pfxPasswordInput.Length -lt 8) {
+                    Write-Warning 'PFX password must be at least 8 characters.'
+                }
+            }
+            $values.ACME_PFX_PASSWORD = $pfxPasswordInput
         }
 
         $values.ACME_RENEWAL_MODE = 'multi-endpoint'
@@ -1567,7 +1576,7 @@ function Invoke-AcmeForm {
             break
         }
     }
-    if (-not $values.ContainsKey('ACME_ALLOW_CSR_FALLBACK') -or [string]::IsNullOrWhiteSpace([string]$values.ACME_ALLOW_CSR_FALLBACK)) { $values.ACME_ALLOW_CSR_FALLBACK = '0' }
+    if (-not $values.ContainsKey('ACME_ALLOW_CSR_FALLBACK') -or [string]::IsNullOrWhiteSpace([string]$values.ACME_ALLOW_CSR_FALLBACK)) { $values.ACME_ALLOW_CSR_FALLBACK = '1' }
     $values.TARGET_SYSTEM = $target
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
@@ -1613,7 +1622,10 @@ function Invoke-AcmeForm {
         ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'deployment-targets.json') -Encoding UTF8
 
         $values.ACME_SCRIPT_PATH = 'Scripts\deploy-rds-farm.ps1'
-        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '%PFX_FILE_PATH%' -PfxPassword '%PFX_PASSWORD%' -SessionHosts '$([string]::Join(',', $sessionHosts))'"
+        $resolvedPfxDir = [string]$values.ACME_PFX_FILE_PATH
+        $resolvedPfxPwd = [string]$values.ACME_PFX_PASSWORD
+        $resolvedSessionHosts = [string]::Join(',', $sessionHosts)
+        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '$resolvedPfxDir' -PfxPassword '$resolvedPfxPwd' -SessionHosts '$resolvedSessionHosts'"
         $values.ACME_PRIVATEKEY_EXPORTABLE = 'true'
         $values.TARGET_SYSTEM = 'rds-farm'
         $values.TARGET_LOCATION = 'cluster-farm'
@@ -1641,7 +1653,13 @@ function Invoke-AcmeForm {
 
     Start-ConsoleSection -Title 'Effective wacs command preview'
     $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
-    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --host $([string]$values.DOMAINS) --store $([string]$values.ACME_STORE_PLUGIN) --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
+    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation $([string]$values.ACME_VALIDATION_MODE) --host $([string]$values.DOMAINS) --store $([string]$values.ACME_STORE_PLUGIN)"
+    if ($values.ACME_STORE_PLUGIN -match 'certificatestore') { $line += ' --certificatestore My' }
+    if ($values.ACME_STORE_PLUGIN -match 'pfxfile') {
+        $line += " --pfxfilepath $([string]$values.ACME_PFX_FILE_PATH)"
+        if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_PFX_PASSWORD)) { $line += ' --pfxpassword <hidden>' }
+    }
+    $line += " --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM) --nocache"
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
     if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
     [Console]::WriteLine($line)
@@ -1660,7 +1678,8 @@ function Invoke-AcmeForm {
     Assert-ProviderDirectoryConsistency -Values $values
     Assert-AcmeSetupValues -Values $values
 
-    Write-EnvFile -Values $values -Path $resolvedEnvFilePath
+    $plainEnvValues = @{}; foreach ($k in $values.Keys) { if ($k -ne 'ACME_PFX_PASSWORD') { $plainEnvValues[$k] = $values[$k] } }
+    Write-EnvFile -Values $plainEnvValues -Path $resolvedEnvFilePath
     $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { '' }
     if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $values }
