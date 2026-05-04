@@ -554,4 +554,78 @@ No version here
         }
         if (-not $threw) { throw 'Expected file-path ACME_PFX_FILE_PATH to throw with directory-required message.' }
     }
+
+    & $Assert 'Get-RenewalSummary handles WACS 2.3.6 format without throwing' {
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        try {
+            $json = @'
+{
+  "$schema": "https://simple-acme.com/schema/renewal.json",
+  "Id": "NJ9mrLwBdk6d121A48zNvQ",
+  "TargetPluginOptions": {
+    "CommonName": "*.example.com",
+    "AlternativeNames": ["*.example.com"],
+    "Plugin": "e239db3b-0000-0000-0000-000000000000"
+  },
+  "StorePluginOptions": [
+    { "Path": "c:\\certs", "PfxPassword": null, "Plugin": "2a2c576f-0000-0000-0000-000000000000" },
+    { "Plugin": "e30adc8e-0000-0000-0000-000000000000" }
+  ],
+  "InstallationPluginOptions": [
+    { "Script": "Scripts\\deploy-rds-farm.ps1", "ScriptParameters": "{CertThumbprint}", "Plugin": "3bb22c70-0000-0000-0000-000000000000" }
+  ],
+  "History": []
+}
+'@
+            $path = Join-Path $tmpDir 'NJ9mrLwBdk6d121A48zNvQ.renewal.json'
+            [System.IO.File]::WriteAllText($path, $json, [System.Text.Encoding]::UTF8)
+            $file = Get-Item -LiteralPath $path
+            $summary = Get-RenewalSummary -File $file
+            if ($summary.RenewalId -ne 'NJ9mrLwBdk6d121A48zNvQ') { throw "Wrong RenewalId: $($summary.RenewalId)" }
+            if ($summary.SourcePlugin -ne 'manual') { throw "Expected SourcePlugin 'manual', got: $($summary.SourcePlugin)" }
+            if ($summary.OrderPlugin -ne 'single') { throw "Expected OrderPlugin 'single', got: $($summary.OrderPlugin)" }
+            if (-not ($summary.StorePlugins -contains 'pfxfile')) { throw "Expected 'pfxfile' in StorePlugins: $($summary.StorePlugins -join ',')" }
+            if (-not ($summary.StorePlugins -contains 'certificatestore')) { throw "Expected 'certificatestore' in StorePlugins: $($summary.StorePlugins -join ',')" }
+            if (-not ($summary.InstallationPlugins -contains 'script')) { throw "Expected 'script' in InstallationPlugins: $($summary.InstallationPlugins -join ',')" }
+            if (-not ($summary.ScriptPaths -contains 'Scripts\deploy-rds-farm.ps1')) { throw "Expected script path, got: $($summary.ScriptPaths -join ',')" }
+            if (-not ($summary.ScriptParameters -contains '{CertThumbprint}')) { throw "Expected '{CertThumbprint}' in ScriptParameters." }
+            if (-not ($summary.Hosts -contains '*.example.com')) { throw "Expected '*.example.com' in Hosts: $($summary.Hosts -join ',')" }
+        } finally {
+            Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    & $Assert 'Compare-RenewalWithEnv matches for WACS 2.3.6 renewal with correct env' {
+        $summary = [pscustomobject]@{
+            Hosts = @('*.example.com')
+            BaseUri = 'https://acme-v02.api.letsencrypt.org/directory'
+            EabKid = ''
+            SourcePlugin = 'manual'
+            OrderPlugin = 'single'
+            AccountName = ''
+            HasValidationNone = $true
+            HasScriptInstallation = $true
+            InstallationPlugins = @('script')
+            ScriptPaths = @('C:\scripts\deploy-rds-farm.ps1')
+            ScriptParameters = @('{CertThumbprint}')
+            StorePlugins = @('certificatestore','pfxfile')
+            CsrPlugin = $null
+            KeyType = $null
+        }
+        $envValues = @{
+            DOMAINS = '*.example.com'
+            ACME_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory'
+            ACME_KID = ''
+            ACME_SCRIPT_PATH = 'C:\scripts\deploy-rds-farm.ps1'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_ACCOUNT_NAME = ''
+        }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
+        if (-not $result.Matches) { throw "Expected match but got mismatches: $($result.Mismatches -join ', ')" }
+    }
 }
