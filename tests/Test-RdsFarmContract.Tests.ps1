@@ -36,6 +36,7 @@ function Invoke-TestRdsFarmContract {
   if ($txt -notmatch "-CertThumbprint '\{CertThumbprint\}'") { throw 'Missing CertThumbprint placeholder for rds-farm.' }
   if ($txt -notmatch "-CachePassword '\{CachePassword\}'") { throw 'Missing CachePassword placeholder for rds-farm.' }
   if ($txt -notmatch "-CacheFile '\{CacheFile\}'") { throw 'Missing CacheFile placeholder for rds-farm.' }
-  if ($txt -notmatch "-SessionHosts '\$\(\[string\]::Join\(',', \$sessionHosts\)\)'") { throw 'Missing SessionHosts emission from selected session hosts.' }
+  if ($txt -notmatch 'resolvedSessionHosts\s*=\s*\[string\]::Join') { throw 'Missing session hosts CSV assembly into $resolvedSessionHosts.' }
+  if ($txt -notmatch '-SessionHosts ''\$resolvedSessionHosts''') { throw 'Missing -SessionHosts emission using $resolvedSessionHosts.' }
  }
 }

@@ -1,0 +1,15 @@
+wacs.exe ^
+  --baseuri https://test-acme.networking4all.com/dv ^
+  --eab-key-identifier <KID> ^
+  --eab-key <SECRET> ^
+  --source manual ^
+  --host <DOMAIN> ^
+  --validation none ^
+  --csr ec ^
+  --store certificatestore ^
+  --certificatestore My ^
+  --installation iis,script ^
+  --siteid 1 ^
+  --script ".\Scripts\cert2rds.ps1" ^
+  --scriptparameters "{CertThumbprint}" ^
+  --accepttos
