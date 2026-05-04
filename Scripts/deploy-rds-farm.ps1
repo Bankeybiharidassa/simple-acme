@@ -24,10 +24,6 @@ function Resolve-HostsFromTargets {
   return @($targets.sessionHosts | Where-Object { $_.enabled -eq $true } | ForEach-Object { [string]$_.computerName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 $normalized = Normalize-Thumbprint $CertThumbprint
-if (-not $SkipLocalRdsBinding) {
-  & (Join-Path $PSScriptRoot 'cert2rds.ps1') $normalized
-  if ($LASTEXITCODE -ne 0) { throw "Local RDS gateway deployment failed (exit $LASTEXITCODE)." }
-}
 if ($SkipSessionHosts) { exit 0 }
 $hosts = @()
 if (-not [string]::IsNullOrWhiteSpace($SessionHosts)) { $hosts = @($SessionHosts.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique) }
