@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)]
     [string]$CertThumbprint,
     [string]$ConfigDir = $env:CERTIFICATE_CONFIG_DIR,
+    [string]$ConfigFile = '',
     [string]$RenewalId = ''
 )
 
@@ -9,7 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '../core/connector-core.psm1') -Force
 
-$mapping = Resolve-RenewalMapping -ConfigDir $ConfigDir -RenewalId $RenewalId
+$resolvedConfigDir = if ($PSBoundParameters.ContainsKey('ConfigDir')) { [string]$ConfigDir } else { Resolve-ConnectorConfigDir -ConfigFile $ConfigFile -FallbackConfigDir $ConfigDir }
+$mapping = Resolve-RenewalMapping -ConfigDir $resolvedConfigDir -RenewalId $RenewalId
 $endpoints = @($mapping.endpoints)
 if ($endpoints.Count -lt 1) { throw 'Kemp connector requires at least one endpoint in mappings.json.' }
 

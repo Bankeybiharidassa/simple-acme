@@ -42,3 +42,24 @@ Describe 'Connector thumbprint contract and script signature drift' {
         $rootParams | Should -Be $connectorParams
     }
 }
+
+Describe 'External connector ConfigFile fallback contract' {
+    It 'exports shared deployment config helpers' {
+        Import-Module (Join-Path $PSScriptRoot '../Scripts/core/connector-core.psm1') -Force
+        foreach ($name in @('Read-ConnectorDeploymentConfigFile','Resolve-ConnectorConfigValue','Resolve-ConnectorConfigDir')) {
+            Get-Command -Name $name -CommandType Function | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'adds ConfigFile support to mapping-backed external connectors' {
+        foreach ($scriptName in @('cert2fw.ps1','cert2waf.ps1','cert2mail.ps1','cert2kemp.ps1')) {
+            $path = Join-Path $PSScriptRoot ("../Scripts/connectors/$scriptName")
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+            $params = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+            $params | Should -Contain 'ConfigFile'
+            $text = Get-Content -LiteralPath $path -Raw
+            $text | Should -Match 'Resolve-ConnectorConfigDir'
+            $text | Should -Match "PSBoundParameters\.ContainsKey\('ConfigDir'\)"
+        }
+    }
+}
