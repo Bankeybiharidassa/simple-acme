@@ -1335,8 +1335,10 @@ function Invoke-SimpleAcmeReconcile {
     if (-not $SkipWacs) {
         $renewalId = Get-RenewalIdForCancel -RenewalSummary $current
         $cancelPath = $current.File.FullName
-        # Regression guard: keep cancellation by renewal id (`--cancel --id <renewal-id>`).
-        Invoke-WacsWithRetry -Args @('--cancel', '--id', $renewalId) -EnvValues $EnvValues
+        # Regression guard: keep cancellation by renewal id (`--cancel --id <renewal-id>`),
+        # but bind the cancel command to the configured ACME directory so non-default providers
+        # (for example Networking4All test/prod endpoints) do not fall back to Let's Encrypt.
+        Invoke-WacsWithRetry -Args @('--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'), '--cancel', '--id', $renewalId) -EnvValues $EnvValues
         Wait-RenewalFileRemoval -Path $cancelPath
         Start-Sleep -Seconds 2
         Invoke-WacsIssue -EnvValues $EnvValues

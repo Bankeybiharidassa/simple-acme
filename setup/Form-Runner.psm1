@@ -1043,6 +1043,17 @@ function Save-SecurePlatformConfig {
 }
 
 
+
+function Resolve-SetupConfigDir {
+    param([hashtable]$Values = @{})
+
+    $configDir = ''
+    if ($null -ne $Values -and $Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { $configDir = [string]$Values.CERTIFICATE_CONFIG_DIR }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'config' }
+    return [System.IO.Path]::GetFullPath($configDir)
+}
+
 function ConvertTo-DeploymentEnvValue {
     param([string]$Value)
 
@@ -1427,6 +1438,7 @@ function Invoke-AcmeForm {
 
     $values = @{}
     foreach ($k in $curr.Keys) { $values[$k] = [string]$curr[$k] }
+    $values.CERTIFICATE_CONFIG_DIR = Resolve-SetupConfigDir -Values $values
     $domains = Read-DomainsInput
     if ($domains -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
@@ -1658,7 +1670,8 @@ function Invoke-AcmeForm {
         $resolvedPfxDir = [string]$values.ACME_PFX_FILE_PATH
         $resolvedSessionHosts = [string]::Join(',', $sessionHosts)
         $deploymentConfigPath = Join-Path (Join-Path $repoRoot 'runtime\deployment') 'rds-farm.env'
-        $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+        $configDir = Resolve-SetupConfigDir -Values $values
+        $values.CERTIFICATE_CONFIG_DIR = $configDir
         $deploymentConfig = [ordered]@{
             TARGET_TYPE = 'rds-farm'
             HOSTS = $resolvedSessionHosts
@@ -1726,9 +1739,9 @@ function Invoke-AcmeForm {
 
     $plainEnvValues = @{}; foreach ($k in $values.Keys) { if ($k -ne 'ACME_PFX_PASSWORD') { $plainEnvValues[$k] = $values[$k] } }
     Write-EnvFile -Values $plainEnvValues -Path $resolvedEnvFilePath
-    $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { '' }
-    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
-    if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $values }
+    $configDir = Resolve-SetupConfigDir -Values $values
+    $values.CERTIFICATE_CONFIG_DIR = $configDir
+    Save-SecurePlatformConfig -ConfigDir $configDir -Values $values
     $reloaded = Read-EffectiveSavedEnvValues -EnvFilePath $resolvedEnvFilePath -ConfigDir $configDir
     Assert-ProviderDirectoryConsistency -Values $reloaded
     Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
