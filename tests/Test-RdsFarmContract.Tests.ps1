@@ -9,7 +9,7 @@ function Invoke-TestRdsFarmContract {
   $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
   if ($errors.Count -gt 0) { throw "Parser errors in deploy-rds-farm.ps1: $($errors.Count)" }
   $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
-  $expected = @('CertThumbprint','CachePassword','CacheFile','PfxStorePath','PfxPassword','SessionHosts')
+  $expected = @('CertThumbprint','CachePassword','CacheFile','PfxStorePath','PfxPassword','SessionHosts','ConfigFile')
   foreach ($name in $expected) { if ($paramNames -notcontains $name) { throw "Missing required parameter: $name" } }
  }
 
@@ -37,6 +37,6 @@ function Invoke-TestRdsFarmContract {
   if ($txt -notmatch "-CachePassword '\{CachePassword\}'") { throw 'Missing CachePassword placeholder for rds-farm.' }
   if ($txt -notmatch "-CacheFile '\{CacheFile\}'") { throw 'Missing CacheFile placeholder for rds-farm.' }
   if ($txt -notmatch 'resolvedSessionHosts\s*=\s*\[string\]::Join') { throw 'Missing session hosts CSV assembly into $resolvedSessionHosts.' }
-  if ($txt -notmatch '-SessionHosts ''\$resolvedSessionHosts''') { throw 'Missing -SessionHosts emission using $resolvedSessionHosts.' }
+  if ($txt -notmatch '-ConfigFile \$quotedDeploymentConfigPath') { throw 'Missing -ConfigFile emission using $quotedDeploymentConfigPath.' }
  }
 }
