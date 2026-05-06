@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)]
     [string]$CertThumbprint,
     [string]$ConfigDir = $env:CERTIFICATE_CONFIG_DIR,
+    [string]$ConfigFile = '',
     [string]$RenewalId = ''
 )
 
@@ -9,7 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '../core/connector-core.psm1') -Force
 
-$mapping = Resolve-RenewalMapping -ConfigDir $ConfigDir -RenewalId $RenewalId
+$resolvedConfigDir = if ($PSBoundParameters.ContainsKey('ConfigDir')) { [string]$ConfigDir } else { Resolve-ConnectorConfigDir -ConfigFile $ConfigFile -FallbackConfigDir $ConfigDir }
+$mapping = Resolve-RenewalMapping -ConfigDir $resolvedConfigDir -RenewalId $RenewalId
 $endpoints = if ($mapping.endpoints) { @($mapping.endpoints) } else { @([pscustomobject]@{ host = $env:COMPUTERNAME; method = 'local' }) }
 $stateDir = Join-Path $PSScriptRoot '..\..\runtime\connector-state'
 if (-not (Test-Path -LiteralPath $stateDir)) { New-Item -ItemType Directory -Path $stateDir -Force | Out-Null }

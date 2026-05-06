@@ -1,10 +1,11 @@
 Set-StrictMode -Version Latest
 function Invoke-TestRdsFarmPfxFlow {
  param([scriptblock]$Assert)
- & $Assert 'password generation uses SecureString pattern' {
+ & $Assert 'RDS farm PFX password is resolved from wacs cache or secure config reference' {
   $txt = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Scripts\deploy-rds-farm.ps1') -Raw
-  if ($txt -notmatch 'GeneratePassword\(32,\s*8\)') { throw 'Missing GeneratePassword call.' }
-  if ($txt -notmatch 'ConvertTo-SecureString') { throw 'Missing SecureString conversion.' }
+  if ($txt -notmatch 'CachePassword') { throw 'Missing CachePassword support.' }
+  if ($txt -notmatch 'Resolve-DeploymentSecret') { throw 'Missing secure deployment secret resolution.' }
+  if ($txt -notmatch 'PFX_PASSWORD_REF') { throw 'Missing PFX_PASSWORD_REF support.' }
  }
  & $Assert 'deploy-rds-sessionhost exits non-zero when PFX path missing' {
   $script = Join-Path $PSScriptRoot '..\Scripts\deploy-rds-sessionhost.ps1'

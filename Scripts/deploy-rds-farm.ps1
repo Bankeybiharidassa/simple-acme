@@ -6,8 +6,9 @@ param(
     [string]$CacheFile = '',
     [string]$PfxStorePath = '',
     [string]$PfxPassword = '',
-    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$SessionHosts,
-    [string]$RemoteTempDirectory = 'C:\Windows\Temp\simple-acme-rds',
+    [string]$SessionHosts = '',
+    [string]$RemoteTempDirectory = '',
+    [string]$ConfigFile = '',
     [switch]$SkipLocalRdsBinding,
     [switch]$SkipSessionHosts
 )
@@ -16,6 +17,35 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'core\connector-core.psm1') -Force
 function Write-DeployLog { param([string]$Action,[string]$Target,[string]$Result,[hashtable]$Details=@{}) Write-ConnectorLog -Component 'deploy-rds-farm' -Action $Action -Target $Target -Result $Result -Details $Details -EmitConsole }
 function Normalize-Thumbprint { param([string]$Thumbprint) (($Thumbprint -replace '\s','').ToUpperInvariant()) }
+
+
+function Resolve-DeploymentSecret {
+  param([hashtable]$Config,[string]$PlainKey,[string]$ReferenceKey)
+  $plainKeyName = $PlainKey.ToUpperInvariant()
+  if ($Config.ContainsKey($plainKeyName) -and -not [string]::IsNullOrWhiteSpace([string]$Config[$plainKeyName])) { return [string]$Config[$plainKeyName] }
+  $referenceKeyName = $ReferenceKey.ToUpperInvariant()
+  if (-not $Config.ContainsKey($referenceKeyName) -or [string]::IsNullOrWhiteSpace([string]$Config[$referenceKeyName])) { return '' }
+  $secretName = [string]$Config[$referenceKeyName]
+  $configDir = Resolve-ConnectorConfigValue -Config $Config -Keys @('CERTIFICATE_CONFIG_DIR','CONFIG_DIR')
+  if ([string]::IsNullOrWhiteSpace($configDir)) { throw "Deployment config references secret '$secretName' but CERTIFICATE_CONFIG_DIR is empty." }
+  $credentialPath = Join-Path $configDir 'credentials.sec'
+  if (-not (Test-Path -LiteralPath $credentialPath)) { throw "Deployment config references secret '$secretName' but credentials.sec was not found at '$credentialPath'. Re-run setup to save secure credentials." }
+  Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Crypto.psm1') -Force
+  $credentialMap = Get-Content -LiteralPath $credentialPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $property = $credentialMap.PSObject.Properties[$secretName]
+  if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) { throw "Secret '$secretName' was not found in '$credentialPath'. Re-run setup or rotate the PFX password." }
+  return (Unprotect-DpapiValue -CiphertextBase64 ([string]$property.Value) -Scope LocalMachine)
+}
+function ConvertTo-HostList {
+  param([string]$Value)
+  if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
+  $trimmed = $Value.Trim()
+  if ($trimmed.StartsWith('[')) {
+    try { return @($trimmed | ConvertFrom-Json | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique) }
+    catch { throw "HOSTS in deployment config must be CSV or a JSON string array. $($_.Exception.Message)" }
+  }
+  return @($Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+}
 function Resolve-HostsFromTargets {
   $installRoot = Split-Path $PSScriptRoot -Parent
   $targetsPath = Join-Path $installRoot 'deployment-targets.json'
@@ -25,10 +55,15 @@ function Resolve-HostsFromTargets {
 }
 $normalized = Normalize-Thumbprint $CertThumbprint
 if ($SkipSessionHosts) { exit 0 }
-$hosts = @()
-if (-not [string]::IsNullOrWhiteSpace($SessionHosts)) { $hosts = @($SessionHosts.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique) }
+$config = Read-ConnectorDeploymentConfigFile -Path $ConfigFile
+if (-not $PSBoundParameters.ContainsKey('SessionHosts')) { $SessionHosts = Resolve-ConnectorConfigValue -Config $config -Keys @('HOSTS','SESSION_HOSTS') -Fallback $SessionHosts }
+if (-not $PSBoundParameters.ContainsKey('PfxStorePath')) { $PfxStorePath = Resolve-ConnectorConfigValue -Config $config -Keys @('PFX_STORE_PATH','PFXSTOREPATH') -Fallback $PfxStorePath }
+if (-not $PSBoundParameters.ContainsKey('PfxPassword')) { $PfxPassword = Resolve-DeploymentSecret -Config $config -PlainKey 'PFX_PASSWORD' -ReferenceKey 'PFX_PASSWORD_REF' }
+if (-not $PSBoundParameters.ContainsKey('RemoteTempDirectory')) { $RemoteTempDirectory = Resolve-ConnectorConfigValue -Config $config -Keys @('REMOTE_TEMP_DIRECTORY','REMOTE_TEMP_DIR') -Fallback $RemoteTempDirectory }
+if ([string]::IsNullOrWhiteSpace($RemoteTempDirectory)) { $RemoteTempDirectory = 'C:\Windows\Temp\simple-acme-rds' }
+$hosts = ConvertTo-HostList -Value $SessionHosts
 if ($hosts.Count -eq 0) { $hosts = Resolve-HostsFromTargets }
-if ($hosts.Count -eq 0) { throw 'No session hosts provided. Pass -SessionHosts or configure deployment-targets.json.' }
+if ($hosts.Count -eq 0) { throw 'No session hosts provided. Pass -SessionHosts, set HOSTS in -ConfigFile, or configure deployment-targets.json.' }
 if (-not [string]::IsNullOrWhiteSpace($PfxStorePath) -and -not (Test-Path -LiteralPath $PfxStorePath)) { New-Item -ItemType Directory -Path $PfxStorePath -Force | Out-Null }
 $pfxPath = $CacheFile
 $plainPassword = $CachePassword
@@ -39,7 +74,7 @@ if ([string]::IsNullOrWhiteSpace($pfxPath) -or -not (Test-Path -LiteralPath $pfx
   $pfxPath = $candidate.FullName
   if ([string]::IsNullOrWhiteSpace($plainPassword)) { $plainPassword = $PfxPassword }
 }
-if ([string]::IsNullOrWhiteSpace($plainPassword)) { throw 'No PFX password available. Provide -CachePassword or -PfxPassword.' }
+if ([string]::IsNullOrWhiteSpace($plainPassword)) { throw 'No PFX password available. Provide -CachePassword, -PfxPassword, or PFX_PASSWORD in -ConfigFile.' }
 $failed=$false
 foreach($hostName in $hosts){
   $session=$null

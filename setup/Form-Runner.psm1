@@ -1042,6 +1042,38 @@ function Save-SecurePlatformConfig {
     if (-not (Test-Path -LiteralPath $mappingCompatPath)) { '[]' | Set-Content -LiteralPath $mappingCompatPath -Encoding UTF8 }
 }
 
+
+function ConvertTo-DeploymentEnvValue {
+    param([string]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -match "`r|`n") { throw 'Deployment config values must be single-line strings.' }
+    return [string]$Value
+}
+
+function Write-ExternalDeploymentConfigFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Values
+    )
+
+    $directory = Split-Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($key in $Values.Keys) {
+        $name = [string]$key
+        if ($name -notmatch '^[A-Z0-9_]+$') { throw "Invalid deployment config key '$name'. Keys must be uppercase A-Z, 0-9, or underscore." }
+        $value = ConvertTo-DeploymentEnvValue -Value ([string]$Values[$key])
+        $lines.Add(('{0}={1}' -f $name, $value))
+    }
+    [System.IO.File]::WriteAllLines($Path, [string[]]$lines.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function ConvertTo-SingleQuotedPowerShellArgument {
+    param([string]$Value)
+    return ("'{0}'" -f ([string]$Value).Replace("'", "''"))
+}
+
 function Save-RenewalMapping {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
@@ -1619,13 +1651,27 @@ function Invoke-AcmeForm {
         foreach ($sh in $sessionHosts) {
             $deployment.sessionHosts += [ordered]@{name=$sh;type='rds-session-host';computerName=$sh;method='powershell-remoting';script='Scripts\deploy-rds-sessionhost.ps1';username=$remoteUser;enabled=$true}
         }
-        ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'deployment-targets.json') -Encoding UTF8
+        $repoRoot = Split-Path $PSScriptRoot -Parent
+        ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path $repoRoot 'deployment-targets.json') -Encoding UTF8
 
         $values.ACME_SCRIPT_PATH = 'Scripts\deploy-rds-farm.ps1'
         $resolvedPfxDir = [string]$values.ACME_PFX_FILE_PATH
-        $resolvedPfxPwd = [string]$values.ACME_PFX_PASSWORD
         $resolvedSessionHosts = [string]::Join(',', $sessionHosts)
-        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -PfxStorePath '$resolvedPfxDir' -PfxPassword '$resolvedPfxPwd' -SessionHosts '$resolvedSessionHosts'"
+        $deploymentConfigPath = Join-Path (Join-Path $repoRoot 'runtime\deployment') 'rds-farm.env'
+        $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+        $deploymentConfig = [ordered]@{
+            TARGET_TYPE = 'rds-farm'
+            HOSTS = $resolvedSessionHosts
+            PFX_STORE_PATH = $resolvedPfxDir
+            PFX_PASSWORD_REF = 'ACME_PFX_PASSWORD'
+            CERTIFICATE_CONFIG_DIR = $configDir
+            REMOTE_TEMP_DIRECTORY = 'C:\Windows\Temp\simple-acme-helper'
+            REMOTE_USER = $remoteUser
+            UPDATED_UTC = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-ExternalDeploymentConfigFile -Path $deploymentConfigPath -Values $deploymentConfig
+        $quotedDeploymentConfigPath = ConvertTo-SingleQuotedPowerShellArgument -Value $deploymentConfigPath
+        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -ConfigFile $quotedDeploymentConfigPath"
         $values.ACME_PRIVATEKEY_EXPORTABLE = 'true'
         $values.TARGET_SYSTEM = 'rds-farm'
         $values.TARGET_LOCATION = 'cluster-farm'
