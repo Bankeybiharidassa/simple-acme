@@ -97,6 +97,18 @@ Describe 'ACME provider state handling' {
             { Import-EnvFile -Path $envPath -Force } | Should -Throw '*ACME_SCRIPT_PATH*'
         }
 
+        It 'Resolve-SetupConfigDir defaults to the repository config directory when none is configured' {
+            $oldConfigDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR')
+            try {
+                [Environment]::SetEnvironmentVariable('CERTIFICATE_CONFIG_DIR', '')
+                $resolved = Resolve-SetupConfigDir -Values @{}
+                $expected = Join-Path (Split-Path $PSScriptRoot -Parent) 'config'
+                $resolved | Should -Be ([System.IO.Path]::GetFullPath($expected))
+            } finally {
+                [Environment]::SetEnvironmentVariable('CERTIFICATE_CONFIG_DIR', $oldConfigDir)
+            }
+        }
+
         It 'Get-Networking4AllAcmeDirectory builds test DV endpoint' {
             $url = Get-Networking4AllAcmeDirectory -Environment test -Product dv
             $url | Should -Be 'https://test-acme.networking4all.com/dv'

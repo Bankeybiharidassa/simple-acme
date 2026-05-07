@@ -193,13 +193,17 @@ function Invoke-InitialAcmeReconcilePrompt {
     [Console]::WriteLine([string]$envValues.ACME_DIRECTORY)
     [Console]::WriteLine('')
     [Console]::WriteLine('Effective wacs command preview:')
-    $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
-    $storePlugin = if ($envValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$envValues.ACME_STORE_PLUGIN } else { 'certificatestore' }
-    $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-    $commandPreview = ('wacs.exe --accepttos --source manual --order single --baseuri {0} --validation none --host {1} --store {2} --installation script --script {3} --scriptparameters "{4}" --csr {5}' -f [string]$envValues.ACME_DIRECTORY, [string]$envValues.DOMAINS, $storePlugin, [string]$envValues.ACME_SCRIPT_PATH, $scriptParameters, $csrAlgo)
-    [Console]::WriteLine($commandPreview)
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { [Console]::WriteLine('--eab-key-identifier <set>') }
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { [Console]::WriteLine('--eab-key <hidden>') }
+    try {
+        Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
+        $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+        $previewArgs = Get-WacsIssueArguments -EnvValues $envValues -CsrAlgorithm $csrAlgo
+        $maskedPreviewArgs = Get-MaskedWacsArgumentsText -Args $previewArgs
+        [Console]::WriteLine(('wacs.exe ' + (ConvertTo-WacsCommandLineText -Args $maskedPreviewArgs)))
+    } catch {
+        [Console]::WriteLine(('Cannot build WACS command preview: ' + $_.Exception.Message))
+        Wait-ForOperatorReturn
+        return
+    }
     [Console]::WriteLine('')
 
     Write-SetupDebugLog -Message "Initial reconcile prompt displayed to operator."

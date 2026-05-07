@@ -207,6 +207,11 @@ Describe 'WACS version detection policy' {
         $captured[$baseUriIndex + 1] | Should -Be 'https://test-acme.networking4all.com/dv'
     }
 
+    It 'keeps cancel commands bound to configured ACME_DIRECTORY baseuri' {
+        $reconciler = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\core\Simple-Acme-Reconciler.psm1')
+        $reconciler | Should -Match "Invoke-WacsWithRetry -Args @\('--baseuri', \(Get-EnvValue -EnvValues \$EnvValues -Key 'ACME_DIRECTORY'\), '--cancel', '--id', \$renewalId\)"
+    }
+
     It 'does not require version parsing for issuance output analysis' {
         $analysis = Get-WacsOutputAnalysis -OutputLines @(
             ' Running in mode: unattended',
