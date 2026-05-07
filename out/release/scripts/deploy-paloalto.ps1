@@ -103,13 +103,36 @@ function Invoke-WithRetry {
     }
 }
 
+
+function Initialize-DpapiSupport {
+    $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+    $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+    if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+
+    $assemblies = @('System.Security', 'System.Security.Cryptography.ProtectedData')
+    foreach ($assembly in $assemblies) {
+        try {
+            Add-Type -AssemblyName $assembly -ErrorAction Stop
+        } catch {
+            # Continue trying known assembly names before reporting a single actionable error.
+        }
+
+        $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+        $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+        if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+    }
+
+    throw 'Windows DPAPI support is unavailable. Run this command in Windows PowerShell 5.1 or install the System.Security.Cryptography.ProtectedData assembly.'
+}
+
 function Unprotect-DpapiValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CiphertextBase64,
-        [ValidateSet('LocalMachine', 'CurrentUser')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
+    Initialize-DpapiSupport
     $entropy = [System.Text.Encoding]::UTF8.GetBytes('certificate-dpapi-entropy-v1')
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
     $bytes = [Convert]::FromBase64String($CiphertextBase64)
@@ -138,11 +161,15 @@ function Resolve-ApiKey {
 
     $raw = Get-Content -Path $EncryptedFile -Raw -Encoding UTF8
     $payload = $raw | ConvertFrom-Json
-    if (-not $payload.ciphertext -or -not $payload.scope) {
-        throw 'Invalid encrypted API key file. Expected JSON with ciphertext and scope.'
+    if (-not $payload.ciphertext) {
+        throw 'Invalid encrypted API key file. Expected JSON with ciphertext.'
+    }
+    $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
+    if ($scope -ne 'LocalMachine') {
+        throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine."
     }
 
-    return Unprotect-DpapiValue -CiphertextBase64 $payload.ciphertext -Scope $payload.scope
+    return Unprotect-DpapiValue -CiphertextBase64 $payload.ciphertext -Scope 'LocalMachine'
 }
 
 function Invoke-PanApi {
@@ -181,7 +208,7 @@ function Invoke-PanApi {
             $boundary = [System.Guid]::NewGuid().ToString('N')
             $crlf = "`r`n"
             $header = "--$boundary$crlf" +
-                "Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$crlf" +
+                "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"$crlf" +
                 "Content-Type: application/octet-stream$crlf$crlf"
             $footer = "$crlf--$boundary--$crlf"
             $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
@@ -277,8 +304,8 @@ function Upload-Certificate {
 
     Write-StructuredLog -Action 'upload-certificate' -Target $Firewall -Result 'info' -Details @{ certName = $CertName }
 
-    $certQuery = @{ type = 'import'; category = 'certificate'; certificate-name = $CertName; format = 'pem' }
-    $keyQuery = @{ type = 'import'; category = 'private-key'; certificate-name = $CertName; format = 'pem'; passphrase = '' }
+    $certQuery = @{ type = 'import'; category = 'certificate'; 'certificate-name' = $CertName; format = 'pem' }
+    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = '' }
 
     $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
     $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds
