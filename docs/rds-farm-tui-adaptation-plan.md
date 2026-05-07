@@ -114,7 +114,7 @@ Each connector should document required keys and validation rules.
 4. Add negative tests for missing required external details.
 
 ### Phase 5 — Docs and runbooks
-1. Update `README.md` / `install.md` with "external target renewal resilience" model.
+1. Update `README.md` / `install.md` with “external target renewal resilience” model.
 2. Document per-target config file locations and key sets.
 3. Add secret rotation and backup/restore guidance.
 
