@@ -535,6 +535,50 @@ No version here
         if (-not ($result.Mismatches -contains 'Store plugin')) { throw "Expected 'Store plugin' in mismatches, got: $($result.Mismatches -join ', ')" }
     }
 
+    & $Assert 'Get-WacsIssueArguments includes all required PFX distribution command line switches' {
+        $args = Get-WacsIssueArguments -EnvValues @{
+            DOMAINS = '*.itsecured.nl'
+            ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv-wildcard'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_SCRIPT_PATH = 'C:\certificaat\Scripts\deploy-rds-farm.ps1'
+            ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -ConfigFile 'C:\certificaat\runtime\deployment\rds-farm.env'"
+            ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+            ACME_PFX_FILE_PATH = 'C:\certs'
+            ACME_PFX_PASSWORD = 'secret-password'
+            ACME_REQUIRES_EAB = '1'
+            ACME_KID = 'kid'
+            ACME_HMAC_SECRET = 'hmac'
+            ACME_TARGET_SYSTEM = 'rds-farm'
+        } -CsrAlgorithm 'ec'
+        foreach ($required in @('--pfxfilepath','C:\certs','--pfxpassword','secret-password','--certificatestore','My','--eab-key-identifier','kid','--eab-key','hmac','--csr','ec')) {
+            if ($args -notcontains $required) { throw "Missing required WACS argument '$required'. Actual: $($args -join ' ')" }
+        }
+        $masked = Get-MaskedWacsArgumentsText -Args $args
+        if ($masked -contains 'secret-password') { throw 'PFX password was not masked.' }
+        if ($masked -contains 'hmac') { throw 'EAB HMAC was not masked.' }
+    }
+
+    & $Assert 'Get-WacsIssueArguments requires PFX password for RDS farm PFX distribution' {
+        $threw = $false
+        try {
+            $null = Get-WacsIssueArguments -EnvValues @{
+                DOMAINS = '*.itsecured.nl'
+                ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv-wildcard'
+                ACME_INSTALLATION_PLUGINS = 'script'
+                ACME_SCRIPT_PATH = 'C:\certificaat\Scripts\deploy-rds-farm.ps1'
+                ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+                ACME_PFX_FILE_PATH = 'C:\certs'
+                ACME_TARGET_SYSTEM = 'rds-farm'
+            } -CsrAlgorithm 'ec'
+        } catch {
+            if ($_.Exception.Message -match 'ACME_PFX_PASSWORD is empty') { $threw = $true }
+        }
+        if (-not $threw) { throw 'Expected missing ACME_PFX_PASSWORD to throw for RDS farm PFX distribution.' }
+    }
+
     & $Assert 'Invoke-WacsIssue throws when ACME_PFX_FILE_PATH is a file path with extension' {
         $threw = $false
         try {

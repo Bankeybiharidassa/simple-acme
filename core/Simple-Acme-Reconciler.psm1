@@ -815,9 +815,16 @@ function Get-MaskedWacsArgumentsText {
     for ($i = 0; $i -lt (Get-SafeCount $argList); $i++) {
         $arg = [string]$argList[$i]
 
-        if ($arg -eq '--eab-key' -and $i -lt ((Get-SafeCount $argList) - 1)) {
-            $masked.Add('--eab-key')
+        if (($arg -eq '--eab-key' -or $arg -eq '--pfxpassword') -and $i -lt ((Get-SafeCount $argList) - 1)) {
+            $masked.Add($arg)
             $masked.Add('<hidden>')
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--eab-key-identifier' -and $i -lt ((Get-SafeCount $argList) - 1)) {
+            $masked.Add($arg)
+            $masked.Add('<set>')
             $i++
             continue
         }
@@ -1055,8 +1062,27 @@ WACS entered interactive menu. The generated command is incomplete.
     }
 }
 
-function Invoke-WacsIssue {
-    param([Parameter(Mandatory)][hashtable]$EnvValues)
+
+function ConvertTo-WacsCommandLineText {
+    param([AllowNull()][string[]]$Args)
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($arg in @($Args | ForEach-Object { [string]$_ })) {
+        if ($arg -match '[\s"]') {
+            $parts.Add(('"{0}"' -f $arg.Replace('"','\"')))
+        } else {
+            $parts.Add($arg)
+        }
+    }
+    return ($parts -join ' ')
+}
+
+function Get-WacsIssueArguments {
+    param(
+        [Parameter(Mandatory)][hashtable]$EnvValues,
+        [string]$CsrAlgorithm = '',
+        [switch]$EnsurePfxDirectory
+    )
 
     $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
     $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
@@ -1065,7 +1091,6 @@ function Invoke-WacsIssue {
     $repairedPlugins = [System.Collections.Generic.List[string]]::new()
     foreach ($token in $storePlugins) {
         if ($validStorePlugins -contains $token) { $repairedPlugins.Add($token); continue }
-        # Greedy decomposition: 'pfxfilecertificatestore' -> 'pfxfile','certificatestore'
         $remaining = $token; $parts = [System.Collections.Generic.List[string]]::new(); $ok = $true
         while ($remaining.Length -gt 0 -and $ok) {
             $hit = @($validStorePlugins | Where-Object { $remaining.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
@@ -1073,7 +1098,7 @@ function Invoke-WacsIssue {
         }
         if ($ok -and $parts.Count -gt 1) {
             Write-Warning "ACME_STORE_PLUGIN token '$token' looks like plugin names concatenated without a comma separator. Auto-correcting to: $($parts -join ', '). Fix your config: ACME_STORE_PLUGIN=$($parts -join ',')."
-            foreach ($p in $parts) { $repairedPlugins.Add($p) }
+            foreach ($part in $parts) { $repairedPlugins.Add($part) }
         } else { $repairedPlugins.Add($token) }
     }
     $storePlugins = @($repairedPlugins | Sort-Object -Unique)
@@ -1084,16 +1109,10 @@ function Invoke-WacsIssue {
 
     $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
     if ($installationPlugins -contains 'script' -and -not ($storePlugins -contains 'certificatestore')) {
-        # Script installers commonly consume {CertThumbprint}, which requires the certificate
-        # to be present in a local Windows certificate store. Keep explicit pfxfile output but
-        # ensure certificate store presence for post-install scripts (e.g. RDS deployment).
         $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
         Write-Warning 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
     }
-    $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
-    $timeoutSeconds = 300
-    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
-    if ($timeoutSeconds -lt 30) { $timeoutSeconds = 30 }
+
     $sourcePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual'
     $orderPlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN' -Default 'single'
     $validationMode = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_VALIDATION_MODE' -Default 'none'
@@ -1110,11 +1129,15 @@ function Invoke-WacsIssue {
         if ([System.IO.Path]::GetExtension([string]$pfxFilePath) -ne '') {
             throw "ACME_PFX_FILE_PATH must be a directory path, not a file path. Got: '$pfxFilePath'. Remove the filename (e.g. use 'C:\certs' instead of 'C:\certs\certificate.pfx')."
         }
-        if (-not (Test-Path -LiteralPath ([string]$pfxFilePath) -PathType Container)) {
+        if ($EnsurePfxDirectory -and -not (Test-Path -LiteralPath ([string]$pfxFilePath) -PathType Container)) {
             New-Item -ItemType Directory -Path ([string]$pfxFilePath) -Force | Out-Null
         }
         $args += @('--pfxfilepath', [string]$pfxFilePath)
         $pfxPassword = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PFX_PASSWORD'
+        $requiresPfxPassword = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_PRIVATE_KEY_STRATEGY') -eq 'pfx-distribution' -or (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_TARGET_SYSTEM') -eq 'rds-farm' -or (Get-EnvValue -EnvValues $EnvValues -Key 'TARGET_SYSTEM') -eq 'rds-farm')
+        if ([string]::IsNullOrWhiteSpace([string]$pfxPassword) -and $requiresPfxPassword) {
+            throw 'ACME_STORE_PLUGIN includes pfxfile for PFX distribution, but ACME_PFX_PASSWORD is empty.'
+        }
         if (-not [string]::IsNullOrWhiteSpace([string]$pfxPassword)) {
             $args += @('--pfxpassword', [string]$pfxPassword)
         }
@@ -1131,14 +1154,23 @@ function Invoke-WacsIssue {
     if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME'))) { $args += @('--account', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) }
     if ($installationPlugins -contains 'script') {
         $scriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
-        if ([string]::IsNullOrWhiteSpace([string]$scriptPath)) {
-            throw 'ACME_INSTALLATION_PLUGINS includes script, but ACME_SCRIPT_PATH is empty.'
-        }
+        if ([string]::IsNullOrWhiteSpace([string]$scriptPath)) { throw 'ACME_INSTALLATION_PLUGINS includes script, but ACME_SCRIPT_PATH is empty.' }
         $scriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
         $args += @('--installation', 'script','--script', [string]$scriptPath, '--scriptparameters', [string]$scriptParams)
     } elseif ($installationPlugins -contains 'iis') {
         $args += @('--installation', 'iis')
     }
+    if (-not [string]::IsNullOrWhiteSpace($CsrAlgorithm)) { $args += @('--csr', [string]$CsrAlgorithm) }
+    return @($args)
+}
+
+function Invoke-WacsIssue {
+    param([Parameter(Mandatory)][hashtable]$EnvValues)
+
+    $csrAlgorithms = @(Get-CsrExecutionPlan -EnvValues $EnvValues)
+    $timeoutSeconds = 300
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '300'), [ref]$timeoutSeconds)
+    if ($timeoutSeconds -lt 30) { $timeoutSeconds = 30 }
 
     $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'logs'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
@@ -1155,7 +1187,7 @@ function Invoke-WacsIssue {
     $lastError = $null
     for ($idx = 0; $idx -lt (Get-SafeCount $csrAlgorithms); $idx++) {
         $algorithm = [string]$csrAlgorithms[$idx]
-        $commandArgs = $args + @('--csr', $algorithm)
+        $commandArgs = Get-WacsIssueArguments -EnvValues $EnvValues -CsrAlgorithm $algorithm -EnsurePfxDirectory
         $maskedArgs = Get-MaskedWacsArgumentsText -Args $commandArgs
         $attemptNumber = $idx + 1
         Add-Content -LiteralPath $wrapperLog -Value ('attempt=' + $attemptNumber) -Encoding UTF8
@@ -1393,6 +1425,9 @@ $FunctionsToExport.Add('Get-WacsVersion')
 $FunctionsToExport.Add('Get-WacsOutputAnalysis')
 $FunctionsToExport.Add('Invoke-WacsWithRetry')
 $FunctionsToExport.Add('Invoke-WacsIssue')
+$FunctionsToExport.Add('Get-MaskedWacsArgumentsText')
+$FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
+$FunctionsToExport.Add('Get-WacsIssueArguments')
 $FunctionsToExport.Add('Get-NormalizedCsvValues')
 $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')

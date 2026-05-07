@@ -193,21 +193,17 @@ function Invoke-InitialAcmeReconcilePrompt {
     [Console]::WriteLine([string]$envValues.ACME_DIRECTORY)
     [Console]::WriteLine('')
     [Console]::WriteLine('Effective wacs command preview:')
-    $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
-    $storePlugin = if ($envValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$envValues.ACME_STORE_PLUGIN } else { 'certificatestore' }
-    $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-    $commandPreview = ('wacs.exe --accepttos --source manual --order single --baseuri {0} --validation none --host {1} --store {2}' -f [string]$envValues.ACME_DIRECTORY, [string]$envValues.DOMAINS, $storePlugin)
-    if ($storePlugin -match 'certificatestore') { $commandPreview += ' --certificatestore My' }
-    if ($storePlugin -match 'pfxfile') {
-        if ($envValues.ContainsKey('ACME_PFX_FILE_PATH') -and -not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_PFX_FILE_PATH)) {
-            $commandPreview += (' --pfxfilepath {0}' -f [string]$envValues.ACME_PFX_FILE_PATH)
-        }
-        if ($envValues.ContainsKey('ACME_PFX_PASSWORD') -and -not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_PFX_PASSWORD)) { $commandPreview += ' --pfxpassword <hidden>' }
+    try {
+        Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
+        $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+        $previewArgs = Get-WacsIssueArguments -EnvValues $envValues -CsrAlgorithm $csrAlgo
+        $maskedPreviewArgs = Get-MaskedWacsArgumentsText -Args $previewArgs
+        [Console]::WriteLine(('wacs.exe ' + (ConvertTo-WacsCommandLineText -Args $maskedPreviewArgs)))
+    } catch {
+        [Console]::WriteLine(('Cannot build WACS command preview: ' + $_.Exception.Message))
+        Wait-ForOperatorReturn
+        return
     }
-    $commandPreview += (' --installation script --script {0} --scriptparameters "{1}" --csr {2} --nocache' -f [string]$envValues.ACME_SCRIPT_PATH, $scriptParameters, $csrAlgo)
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { $commandPreview += ' --eab-key-identifier <set>' }
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { $commandPreview += ' --eab-key <hidden>' }
-    [Console]::WriteLine($commandPreview)
     [Console]::WriteLine('')
 
     Write-SetupDebugLog -Message "Initial reconcile prompt displayed to operator."
