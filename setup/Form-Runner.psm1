@@ -1043,17 +1043,6 @@ function Save-SecurePlatformConfig {
 }
 
 
-
-function Resolve-SetupConfigDir {
-    param([hashtable]$Values = @{})
-
-    $configDir = ''
-    if ($null -ne $Values -and $Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { $configDir = [string]$Values.CERTIFICATE_CONFIG_DIR }
-    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
-    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'config' }
-    return [System.IO.Path]::GetFullPath($configDir)
-}
-
 function ConvertTo-DeploymentEnvValue {
     param([string]$Value)
 
@@ -1670,8 +1659,7 @@ function Invoke-AcmeForm {
         $resolvedPfxDir = [string]$values.ACME_PFX_FILE_PATH
         $resolvedSessionHosts = [string]::Join(',', $sessionHosts)
         $deploymentConfigPath = Join-Path (Join-Path $repoRoot 'runtime\deployment') 'rds-farm.env'
-        $configDir = Resolve-SetupConfigDir -Values $values
-        $values.CERTIFICATE_CONFIG_DIR = $configDir
+        $configDir = if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
         $deploymentConfig = [ordered]@{
             TARGET_TYPE = 'rds-farm'
             HOSTS = $resolvedSessionHosts
