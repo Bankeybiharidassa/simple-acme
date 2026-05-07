@@ -102,13 +102,36 @@ function Invoke-WithRetry {
     }
 }
 
+
+function Initialize-DpapiSupport {
+    $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+    $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+    if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+
+    $assemblies = @('System.Security', 'System.Security.Cryptography.ProtectedData')
+    foreach ($assembly in $assemblies) {
+        try {
+            Add-Type -AssemblyName $assembly -ErrorAction Stop
+        } catch {
+            # Continue trying known assembly names before reporting a single actionable error.
+        }
+
+        $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+        $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+        if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+    }
+
+    throw 'Windows DPAPI support is unavailable. Run this command in Windows PowerShell 5.1 or install the System.Security.Cryptography.ProtectedData assembly.'
+}
+
 function Unprotect-DpapiValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CiphertextBase64,
-        [ValidateSet('CurrentUser', 'LocalMachine')][string]$Scope = 'LocalMachine'
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
+    Initialize-DpapiSupport
     $entropy = [System.Text.Encoding]::UTF8.GetBytes('simple-acme-sophos-connector-v1')
     $cipherBytes = [Convert]::FromBase64String($CiphertextBase64)
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
@@ -128,7 +151,8 @@ function Resolve-EncryptedPassword {
         $payload = $raw | ConvertFrom-Json
         if (-not $payload.ciphertext) { throw 'Password JSON must contain ciphertext.' }
         $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
-        return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope $scope
+        if ($scope -ne 'LocalMachine') { throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine." }
+        return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope 'LocalMachine'
     }
 
     return Unprotect-DpapiValue -CiphertextBase64 $PasswordInput -Scope 'LocalMachine'
@@ -168,7 +192,7 @@ function Invoke-SophosApi {
         return [xml]'<Response APIVersion="1805.1"><Status code="200">Configuration applied successfully.</Status></Response>'
     }
 
-    $apiUri = "https://$Firewall:4444/webconsole/APIController"
+    $apiUri = "https://${Firewall}:4444/webconsole/APIController"
 
     $result = Invoke-WithRetry -Operation "Sophos API call" -ScriptBlock {
         Invoke-RestMethod -Uri $apiUri -Method Post -Body $requestXml -ContentType 'application/xml' -TimeoutSec $TimeoutSeconds

@@ -23,12 +23,35 @@ function ConvertTo-SecureStringValue {
     return ConvertTo-SecureString -String $PlainText -AsPlainText -Force
 }
 
+
+function Initialize-DpapiSupport {
+    $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+    $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+    if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+
+    $assemblies = @('System.Security', 'System.Security.Cryptography.ProtectedData')
+    foreach ($assembly in $assemblies) {
+        try {
+            Add-Type -AssemblyName $assembly -ErrorAction Stop
+        } catch {
+            # Continue trying known assembly names before reporting a single actionable error.
+        }
+
+        $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+        $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+        if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+    }
+
+    throw 'Windows DPAPI support is unavailable. Run this command in Windows PowerShell 5.1 or install the System.Security.Cryptography.ProtectedData assembly.'
+}
+
 function Protect-DpapiValue {
     param(
         [Parameter(Mandatory)][string]$Plaintext,
         [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
+    Initialize-DpapiSupport
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($Plaintext)
     $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $script:DpapiEntropy, $scopeEnum)
@@ -42,6 +65,7 @@ function Unprotect-DpapiValue {
     )
 
     try {
+        Initialize-DpapiSupport
         $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
         $bytes = [Convert]::FromBase64String($CiphertextBase64)
         $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $script:DpapiEntropy, $scopeEnum)

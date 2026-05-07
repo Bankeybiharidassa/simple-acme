@@ -32,6 +32,27 @@ function Invoke-TestDpapiScope {
         }
     }
 
+
+    & $Assert 'DPAPI type loader is available before runtime protection calls' {
+        $targets = @(
+            (Join-Path $PSScriptRoot '..\core\Crypto.psm1'),
+            (Join-Path $PSScriptRoot '..\Scripts\deploy-paloalto.ps1'),
+            (Join-Path $PSScriptRoot '..\Scripts\deploy-sophos.ps1')
+        )
+        foreach ($path in $targets) {
+            $raw = Get-Content -LiteralPath $path -Raw
+            if ($raw -notmatch 'function\s+Initialize-DpapiSupport') {
+                throw "Initialize-DpapiSupport function was not found in runtime file: $path"
+            }
+            if ($raw -notmatch 'Add-Type\s+-AssemblyName\s+\$assembly') {
+                throw "DPAPI assembly loader was not found in runtime file: $path"
+            }
+            if ($raw -notmatch 'Initialize-DpapiSupport[\s\S]*DataProtectionScope\]::\$Scope') {
+                throw "DPAPI support is not initialized before scope resolution in runtime file: $path"
+            }
+        }
+    }
+
     & $Assert 'docs do not instruct CurrentUser DPAPI for runtime secrets' {
         $docTargets = @(
             (Join-Path $PSScriptRoot '..\README.md'),

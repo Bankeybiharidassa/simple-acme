@@ -103,6 +103,28 @@ function Invoke-WithRetry {
     }
 }
 
+
+function Initialize-DpapiSupport {
+    $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+    $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+    if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+
+    $assemblies = @('System.Security', 'System.Security.Cryptography.ProtectedData')
+    foreach ($assembly in $assemblies) {
+        try {
+            Add-Type -AssemblyName $assembly -ErrorAction Stop
+        } catch {
+            # Continue trying known assembly names before reporting a single actionable error.
+        }
+
+        $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+        $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+        if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+    }
+
+    throw 'Windows DPAPI support is unavailable. Run this command in Windows PowerShell 5.1 or install the System.Security.Cryptography.ProtectedData assembly.'
+}
+
 function Unprotect-DpapiValue {
     [CmdletBinding()]
     param(
@@ -110,6 +132,7 @@ function Unprotect-DpapiValue {
         [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
     )
 
+    Initialize-DpapiSupport
     $entropy = [System.Text.Encoding]::UTF8.GetBytes('certificate-dpapi-entropy-v1')
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
     $bytes = [Convert]::FromBase64String($CiphertextBase64)
