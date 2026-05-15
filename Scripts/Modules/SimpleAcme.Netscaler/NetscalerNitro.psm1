@@ -155,6 +155,15 @@ function Get-NetscalerWebExceptionBody {
     $null
 }
 
+function Protect-NetscalerErrorText {
+    [CmdletBinding()]
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $safe = $Text -replace '(?i)("?(?:password|passplain|secret)"?\s*[:=]\s*)"[^"\r\n]*"', '$1"***"'
+    $safe -replace '(?i)((?:password|passplain|secret)\s*[:=]\s*)\S+', '$1***'
+}
+
 function Assert-NetscalerNitroResponse {
     [CmdletBinding()]
     param(
@@ -167,7 +176,7 @@ function Assert-NetscalerNitroResponse {
     $names = @($Response.PSObject.Properties.Name)
     if ($names -contains 'errorcode') {
         $errorCode = [int]$Response.errorcode
-        $message = if ($names -contains 'message') { [string]$Response.message } else { 'NITRO returned an error.' }
+        $message = if ($names -contains 'message') { Protect-NetscalerErrorText -Text ([string]$Response.message) } else { 'NITRO returned an error.' }
         $severity = if ($names -contains 'severity') { [string]$Response.severity } else { '' }
         if ($errorCode -ne 0) {
             throw "NetScaler NITRO $Method $Path returned errorcode ${errorCode}: $message"
@@ -230,21 +239,26 @@ function Invoke-NetscalerNitroRequest {
             } catch {
                 $attempt++
                 $statusCode = 0
-                if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-                    $statusCode = [int]$_.Exception.Response.StatusCode
+                $exceptionProperties = @($_.Exception.PSObject.Properties.Name)
+                if ($exceptionProperties -contains 'Response' -and $null -ne $_.Exception.Response) {
+                    $responseProperties = @($_.Exception.Response.PSObject.Properties.Name)
+                    if ($responseProperties -contains 'StatusCode' -and $null -ne $_.Exception.Response.StatusCode) {
+                        $statusCode = [int]$_.Exception.Response.StatusCode
+                    }
                 }
                 if ($_.Exception.Message -match '^NetScaler NITRO .* returned errorcode') { throw }
                 $retryable = ($statusCode -eq 0 -or $statusCode -eq 408 -or $statusCode -eq 429 -or $statusCode -ge 500)
                 if ($attempt -gt $RetryCount -or -not $retryable) {
-                    $message = $_.Exception.Message
+                    $message = Protect-NetscalerErrorText -Text $_.Exception.Message
                     $bodyText = Get-NetscalerWebExceptionBody -Exception $_.Exception
                     if (-not [string]::IsNullOrWhiteSpace($bodyText)) {
+                        $safeBodyText = Protect-NetscalerErrorText -Text $bodyText
                         try {
                             $errorPayload = $bodyText | ConvertFrom-Json -ErrorAction Stop
                             Assert-NetscalerNitroResponse -Response $errorPayload -Method $Method -Path $Path
-                            if ($errorPayload.PSObject.Properties.Name -contains 'message') { $message = [string]$errorPayload.message }
+                            if ($errorPayload.PSObject.Properties.Name -contains 'message') { $message = Protect-NetscalerErrorText -Text ([string]$errorPayload.message) }
                         } catch {
-                            $message = '{0} Response body: {1}' -f $message, $bodyText
+                            $message = '{0} Response body: {1}' -f $message, $safeBodyText
                         }
                     }
                     throw "NetScaler NITRO $Method $Path failed: $message"
@@ -297,24 +311,36 @@ function Get-NetscalerHAState {
     try {
         $response = Invoke-NetscalerNitroRequest -Method GET -Path '/stat/hanode'
     } catch {
-        return [pscustomobject]@{ HAConfigured = $false; HAMasterState = 'UNKNOWN'; Raw = $null }
+        return [pscustomobject]@{ HAConfigured = $false; HAMasterState = 'UNKNOWN'; Raw = $null; Ambiguous = $true }
     }
 
     $nodes = @($response.hanode)
-    $selected = @($nodes | Select-Object -First 1)
-    $state = 'UNKNOWN'
-    $status = 'NO'
-    if ($selected.Count -gt 0) {
-        $node = $selected[0]
-        if ($node.PSObject.Properties.Name -contains 'hacurmasterstate') { $state = [string]$node.hacurmasterstate }
-        elseif ($node.PSObject.Properties.Name -contains 'hamasterstate') { $state = [string]$node.hamasterstate }
-        if ($node.PSObject.Properties.Name -contains 'hacurstatus') { $status = [string]$node.hacurstatus }
+    if ($nodes.Count -eq 0) {
+        return [pscustomobject]@{ HAConfigured = $false; HAMasterState = 'UNKNOWN'; Raw = $nodes; Ambiguous = $false }
     }
 
+    $configuredStatuses = @()
+    $states = @()
+    foreach ($node in $nodes) {
+        $names = @($node.PSObject.Properties.Name)
+        if ($names -contains 'hacurstatus') { $configuredStatuses += ([string]$node.hacurstatus).Trim().ToUpperInvariant() }
+        if ($names -contains 'hacurmasterstate') { $states += ([string]$node.hacurmasterstate).Trim().ToUpperInvariant() }
+        elseif ($names -contains 'hamasterstate') { $states += ([string]$node.hamasterstate).Trim().ToUpperInvariant() }
+    }
+
+    $haConfigured = ($nodes.Count -gt 1) -or (@($configuredStatuses | Where-Object { $_ -eq 'YES' }).Count -gt 0)
+    if (@($configuredStatuses | Where-Object { $_ -eq 'NO' }).Count -eq $nodes.Count -and $nodes.Count -eq 1) { $haConfigured = $false }
+
+    $primaryStates = @($states | Where-Object { $_ -eq 'PRIMARY' })
+    $nonEmptyStates = @($states | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $masterState = if ($primaryStates.Count -eq 1) { 'PRIMARY' } elseif ($nonEmptyStates.Count -gt 0) { [string]$nonEmptyStates[0] } else { 'UNKNOWN' }
+    $ambiguous = $haConfigured -and ($primaryStates.Count -ne 1 -or @($nonEmptyStates | Select-Object -Unique).Count -gt 1)
+
     [pscustomobject]@{
-        HAConfigured  = ($status -eq 'YES' -or $nodes.Count -gt 1)
-        HAMasterState = $state
+        HAConfigured  = [bool]$haConfigured
+        HAMasterState = $masterState
         Raw           = $nodes
+        Ambiguous     = [bool]$ambiguous
     }
 }
 
@@ -327,8 +353,10 @@ function Assert-NetscalerPrimary {
         [bool]$RequirePrimary = $true
     )
 
-    if ($RequirePrimary -and $HAState.HAConfigured -and $HAState.HAMasterState -ne 'PRIMARY') {
-        throw "NetScaler HA node is '$($HAState.HAMasterState)', not PRIMARY. Re-run against the PRIMARY node or disable RequirePrimary explicitly."
+    $names = @($HAState.PSObject.Properties.Name)
+    $ambiguous = ($names -contains 'Ambiguous') -and [bool]$HAState.Ambiguous
+    if ($RequirePrimary -and $HAState.HAConfigured -and ($ambiguous -or $HAState.HAMasterState -ne 'PRIMARY')) {
+        throw "NetScaler HA state is '$($HAState.HAMasterState)' (ambiguous=$ambiguous), not safely PRIMARY. Re-run against the PRIMARY node or disable RequirePrimary explicitly."
     }
 }
 
@@ -438,13 +466,35 @@ function Get-NetscalerSslVServerCertBindings {
     }
 }
 
+function Test-NetscalerTruthyValue {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    ([string]$Value).Trim() -match '^(?i:true|yes|1)$'
+}
+
+function Test-NetscalerFalseyValue {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return -not [bool]$Value }
+    ([string]$Value).Trim() -match '^(?i:false|no|0)$'
+}
+
 function Test-NetscalerServerCertificateBinding {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][object]$Binding)
 
-    $isCa = ($Binding.PSObject.Properties.Name -contains 'ca') -and ([string]$Binding.ca -match '^(true|YES)$')
-    $isSni = ($Binding.PSObject.Properties.Name -contains 'snicert') -and ([string]$Binding.snicert -match '^(true|YES)$')
-    (-not $isCa -and -not $isSni)
+    $names = @($Binding.PSObject.Properties.Name)
+    if (-not ($names -contains 'ca') -or -not ($names -contains 'snicert')) { return $false }
+    $isCa = Test-NetscalerTruthyValue -Value $Binding.ca
+    $isSni = Test-NetscalerTruthyValue -Value $Binding.snicert
+    $caKnownFalse = Test-NetscalerFalseyValue -Value $Binding.ca
+    $sniKnownFalse = Test-NetscalerFalseyValue -Value $Binding.snicert
+    (-not $isCa -and -not $isSni -and $caKnownFalse -and $sniKnownFalse)
 }
 
 function Set-NetscalerSslVServerCertBinding {
@@ -529,4 +579,4 @@ function Test-NetscalerDeploymentVerification {
     'Partial'
 }
 
-Export-ModuleMember -Function ConvertFrom-NetscalerSecureString,Resolve-NetscalerPassword,New-NetscalerNitroBaseUri,Connect-NetscalerNitroSession,Disconnect-NetscalerNitroSession,Invoke-NetscalerNitroRequest,Test-NetscalerLocalCertificateFiles,Get-NetscalerHAState,Assert-NetscalerPrimary,Send-NetscalerSslFile,Get-NetscalerSslCertKey,Set-NetscalerSslCertKey,Get-NetscalerSslVServerCertBindings,Test-NetscalerServerCertificateBinding,Set-NetscalerSslVServerCertBinding,Save-NetscalerConfig,Sync-NetscalerHA,Test-NetscalerDeploymentVerification
+Export-ModuleMember -Function ConvertFrom-NetscalerSecureString,Resolve-NetscalerPassword,New-NetscalerNitroBaseUri,Assert-NetscalerNitroResponse,Connect-NetscalerNitroSession,Disconnect-NetscalerNitroSession,Invoke-NetscalerNitroRequest,Test-NetscalerLocalCertificateFiles,Get-NetscalerHAState,Assert-NetscalerPrimary,Send-NetscalerSslFile,Get-NetscalerSslCertKey,Set-NetscalerSslCertKey,Get-NetscalerSslVServerCertBindings,Test-NetscalerTruthyValue,Test-NetscalerFalseyValue,Test-NetscalerServerCertificateBinding,Set-NetscalerSslVServerCertBinding,Save-NetscalerConfig,Sync-NetscalerHA,Test-NetscalerDeploymentVerification

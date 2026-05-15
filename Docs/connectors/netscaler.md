@@ -2,192 +2,146 @@
 
 ## Architecture
 
-`simple-acme` remains the ACME owner. It performs issuance, renewal lifecycle management, and ARI-aware renewal decisions. NetScaler / Citrix ADC is only a deployment target for certificate material that `simple-acme` has already obtained.
+`simple-acme` owns the ACME account, issuance, renewal, and ARI lifecycle. NetScaler / Citrix ADC is a deployment target only: this connector uploads certificate material that `simple-acme` already obtained and then updates the ADC NITRO configuration.
 
-This connector does **not** implement ACME issuance on NetScaler and does **not** use NetScaler Console or `acme.sh` as the primary ACME flow. NetScaler-native ACME and NetScaler Console workflows exist in the product ecosystem, but they are separate from this connector by design.
+The connector deliberately does **not** implement ACME issuance on NetScaler, does **not** use NetScaler Console as the primary flow, and does **not** call `acme.sh` on the appliance.
 
-## Public source verification
+## Public NITRO source map
 
-The NITRO resources used by this connector are mapped in [`netscaler-source-map.json`](netscaler-source-map.json). The map records the endpoint/resource, implementation function, source URL, confidence, and remaining notes for:
+NITRO resources are tracked in [`netscaler-source-map.json`](netscaler-source-map.json). Every endpoint used by the module is mapped to an implementation function, source URL, confidence level, and notes. The unit tests parse this JSON and check that code-used resources have source-map coverage.
 
-- login / logout
-- `systemfile` upload
-- `sslcertkey` add and cert/key change
-- `sslvserver_sslcertkey_binding` read/add/delete
-- `hanode` statistics
-- `nsconfig` save
-- `hasync`
+No live NetScaler appliance was available in this environment, so `LiveNetScalerValidated` remains `false` and integration tests are opt-in only.
 
-No live NetScaler validation was available when this connector was implemented. The production logic is based on official public NITRO documentation, and integration tests are opt-in for operators who have a real appliance.
+## Requirements and permissions
 
-## Requirements
+Supported runtime: Windows PowerShell 5.1 or PowerShell 7.
 
-- Windows PowerShell 5.1 or PowerShell 7 where practical.
-- Network access from the runner to the NetScaler NSIP / management endpoint.
-- A NetScaler account with permission to:
-  - log in through NITRO,
-  - upload files to `/nsconfig/ssl/` through `systemfile`,
-  - read/add/change `sslcertkey`,
-  - read/add/delete SSL vServer certkey bindings,
-  - read `hanode` statistics,
-  - save configuration with `nsconfig?action=save`,
-  - run `hasync` when HA sync is enabled.
-- PEM certificate and PEM private key files already produced by the `simple-acme` issuance flow.
+Required ADC permissions:
 
-## Secret handling
+- `login` / `logout` NITRO session access.
+- `systemfile` upload to `/nsconfig/ssl/`.
+- Read/add/update `sslcertkey`.
+- Read/add/delete `sslvserver_sslcertkey_binding` for the target SSL vServer.
+- Read `hanode` statistics when HA detection is enabled.
+- `nsconfig?action=save` when saving is enabled.
+- `hasync?action=Force` when HA sync is enabled.
 
-Use `-Password` with a `SecureString` or `-PasswordSecretName`. `-PasswordSecretName` uses Microsoft SecretManagement `Get-Secret` when available. If SecretManagement is not installed, it falls back to an environment variable named from the secret, for example `netscaler-adc01` becomes `SIMPLE_ACME_SECRET_NETSCALER_ADC01`.
+Supported certificate inputs are PEM certificate, PEM private key, and optional PEM chain files. PFX conversion and ACME issuance are outside this connector.
 
-The connector does not introduce a new `.env` model and does not log password or private-key material.
+## Runtime flow
+
+Normal execution follows this order:
+
+1. Validate parameters and local certificate/key/chain paths.
+2. Resolve the NetScaler password from `SecureString`, SecretManagement, or the documented environment fallback.
+3. Connect to NITRO.
+4. Detect HA and fail safe if primary-node enforcement is enabled.
+5. Read current `sslcertkey` and SSL vServer binding state.
+6. Upload certificate/key/chain files to `/nsconfig/ssl/`.
+7. Create or update the `sslcertkey`.
+8. Bind the requested certkey to the SSL vServer, optionally replacing safe old server cert bindings.
+9. Verify certkey and binding state.
+10. Save configuration only after verification passes.
+11. Sync HA only after verification passes and HA is configured.
+12. Run final verification after save/sync when either occurred.
+13. Logout in `finally`.
+14. Return a structured result.
+
+The script does not save configuration if deployment verification fails.
+
+## `-WhatIf` behavior
+
+`-WhatIf` is **connected planning**:
+
+- The script still validates local files.
+- The script still resolves credentials and logs in so safe read-only checks can run.
+- HA detection and current certkey/binding reads still run.
+- Mutating functions receive `-WhatIf` and emit PowerShell WhatIf messages.
+- No mutating NITRO calls are made for `systemfile`, `sslcertkey` changes, binding changes, save, or HA sync.
+- Verification is reported as `Planned`, not `Passed`, because the appliance was not changed.
+
+Use `-WhatIf` to preview intended operations and HA/read-only state; remove it only after reviewing the planned actions.
 
 ## HA behavior
 
-Defaults are conservative:
+Defaults are conservative: HA detection and `RequirePrimary` are enabled. If HA is not configured, deployment continues. If HA is configured and exactly one node reports `PRIMARY`, deployment continues. If the node is `SECONDARY`, state is unknown, or multiple records make the primary state ambiguous, the connector fails safe when `RequirePrimary` is true.
 
-- HA detection is enabled.
-- Primary-node enforcement is enabled.
-- If HA is not configured, deployment continues normally.
-- If HA is configured and the local node reports `PRIMARY`, deployment continues.
-- If HA is configured and the local node is not `PRIMARY`, deployment aborts by default.
+Use `-NoDetectHA` only when you intentionally cannot query HA. Use `-RequirePrimary:$false` only with an explicit change-control reason.
 
-HA is detected from `GET /nitro/v1/stat/hanode`, specifically the documented `hacurstatus` and `hacurmasterstate` fields. The connector does not infer HA state from hostnames.
+## Binding replacement behavior
 
-`-NoDetectHA` disables HA detection. `-RequirePrimary:$false` disables the primary-node gate, but this should be used only with a deliberate operator reason.
+The connector reads `sslvserver_sslcertkey_binding` before modifying bindings.
 
-## File upload
+- Existing requested certkey binding is not duplicated.
+- Missing requested binding is added once.
+- `-ReplaceExistingServerCertificate` removes only bindings whose metadata explicitly identifies them as non-CA and non-SNI server certificate bindings.
+- CA bindings are preserved.
+- SNI bindings are preserved.
+- Missing CA/SNI metadata is treated conservatively and preserved.
 
-The connector validates all local files before any mutating API call. It uploads the certificate, private key, and optional chain file to `/nsconfig/ssl/` with the documented `systemfile` resource using base64 `filecontent` and `fileencoding = BASE64`.
+The compatibility alias `-ReplaceServerCertificate` maps to `-ReplaceExistingServerCertificate`.
 
-The upload path uses `POST /nitro/v1/config/systemfile?override=yes`. The official `systemfile` documentation describes the `override` query parameter, but operators should live-test overwrite behavior on their target firmware before first production use.
+## Secret and key-password handling
 
-## sslcertkey management
+The NetScaler login password can be provided with `-Password` as `SecureString` or with `-PasswordSecretName`. SecretManagement is used when available; otherwise the fallback environment variable is `SIMPLE_ACME_SECRET_<NAME>` with non-alphanumeric characters converted to underscores and upper-cased.
 
-`CertKeyName` is always explicit. The connector first queries the requested `sslcertkey`:
+`-KeyPassword` accepts a `SecureString`. The plaintext must briefly exist as a PowerShell string for JSON serialization to NITRO and cannot be securely erased because .NET strings are immutable; the connector avoids logging it and clears the local payload hashtable entry in `finally` after the request path.
 
-- Missing certkey: add `sslcertkey` with `certkey`, `cert`, `key`, and `inform = PEM`.
-- Existing certkey: use the documented `sslcertkey?action=update` change operation to point the certkey at the uploaded certificate/key material.
+## TLS certificate validation option
 
-Optional chain support is implemented by passing `cacert` when `-ChainPath` is supplied. Key-password support is available through `-KeyPassword` as a `SecureString`; the plaintext is materialized only for JSON payload creation and is cleared from the local payload hashtable after the request path completes.
-
-## SSL vServer binding behavior
-
-The connector uses `sslvserver_sslcertkey_binding`, which is reliable for querying all certificate bindings on one SSL vServer before modifying anything.
-
-Behavior:
-
-- Query existing bindings first.
-- If `CertKeyName` is already bound, do not duplicate it.
-- If missing, bind `CertKeyName` to `VServerName`.
-- `-ReplaceExistingServerCertificate` optionally removes old server certificate bindings before binding the new certkey.
-
-Replacement safety rules:
-
-- CA bindings are preserved when documented `ca` metadata indicates a CA binding.
-- SNI bindings are preserved when documented `snicert` metadata indicates an SNI binding.
-- Replacement is not the default.
-
-The old `-ReplaceServerCertificate` parameter name is accepted as an alias for compatibility.
-
-## Save and HA sync
-
-`-SaveConfig` defaults to enabled. The connector saves only after upload, sslcertkey management, vServer binding, and verification have succeeded.
-
-`-SyncHA` defaults to enabled, but sync is attempted only when HA is detected. The `hasync` payload defaults to:
-
-```json
-{
-  "hasync": {
-    "save": "YES",
-    "force": "NO"
-  }
-}
-```
-
-`force` is set to `YES` only when the operator explicitly supplies `-SyncHAForce`.
-
-Use `-NoSaveConfig` or `-NoSyncHA` to suppress those actions.
-
-## Example usage
-
-```powershell
-.\Scripts\cert2netscaler.ps1 `
-  -NetScalerHost 'adc01.example.local' `
-  -Username 'svc-simple-acme' `
-  -PasswordSecretName 'netscaler-adc01' `
-  -CertKeyName 'wildcard_example_com_2026' `
-  -CertPath 'C:\certs\wildcard.crt' `
-  -KeyPath 'C:\certs\wildcard.key' `
-  -ChainPath 'C:\certs\chain.crt' `
-  -VServerName 'ssl_vsrv_gateway' `
-  -DetectHA `
-  -RequirePrimary `
-  -SyncHA `
-  -SaveConfig `
-  -WhatIf
-```
-
-Remove `-WhatIf` after reviewing the planned actions.
-
-Lab/bootstrap-only options:
-
-```powershell
-.\Scripts\cert2netscaler.ps1 `
-  -NetScalerHost 'adc01.example.local' `
-  -UseHttp `
-  -SkipCertificateCheck `
-  -Username 'svc-simple-acme' `
-  -Password (Read-Host -Prompt 'NetScaler password' -AsSecureString) `
-  -CertKeyName 'wildcard_example_com_2026' `
-  -CertPath 'C:\certs\wildcard.crt' `
-  -KeyPath 'C:\certs\wildcard.key' `
-  -VServerName 'ssl_vsrv_gateway'
-```
-
-Prefer HTTPS with a trusted management certificate in production.
+`-SkipCertificateCheck` changes the process-global `[Net.ServicePointManager]::ServerCertificateValidationCallback` while a request runs and restores the previous callback in `finally`. This is for lab/bootstrap use only. Production should use HTTPS with a trusted management certificate.
 
 ## Return object
 
-The script returns:
+The script returns the existing compatibility fields plus planning metadata:
 
 ```powershell
-[pscustomobject]@{
-    Host               = '<target host>'
-    CertKeyName        = '<certkey name>'
-    VServerName        = '<SSL vServer>'
-    HAConfigured       = $true_or_false
-    HAMasterState      = '<PRIMARY|SECONDARY|...>'
-    Saved              = $true_or_false
-    HASynced           = $true_or_false
-    Changed            = $true_or_false
-    VerificationStatus = 'Passed|Failed|Partial|NotRun'
+Host, CertKeyName, VServerName, HAConfigured, HAMasterState,
+Saved, HASynced, Changed, VerificationStatus,
+Mode, PlannedActions, ExecutedActions, SkippedActions, Warnings,
+SourceMapVersion, LiveNetScalerValidated
+```
+
+`Mode` is `Execute` or `WhatIfConnected`. `VerificationStatus` is `Passed`, `Failed`, `Partial`, `NotRun`, or `Planned`.
+
+## Testing
+
+Run parser checks:
+
+```powershell
+$files = @(
+  'Scripts/cert2netscaler.ps1',
+  'Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1',
+  'Scripts/Modules/SimpleAcme.Netscaler/SimpleAcme.Netscaler.psd1'
+)
+foreach ($f in $files) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors) | Out-Null
+  if ($errors.Count -gt 0) { throw $errors }
 }
 ```
 
-## Rollback
+Run unit tests:
 
-The connector does not guess rollback targets. To roll back safely:
+```powershell
+Import-Module Pester
+Invoke-Pester -Path Tests/Netscaler -Output Detailed
+```
 
-1. Identify the previously known-good certkey and certificate/key files.
-2. Re-run the connector with that previous certificate material and certkey name, or manually bind the previous certkey in NetScaler.
-3. Verify the SSL vServer binding.
-4. Save configuration.
-5. Sync HA if applicable.
+Live integration tests are skipped unless all of these variables are set:
 
-If `-ReplaceExistingServerCertificate` was not used, previous server certificate bindings remain available for manual recovery.
+- `NETSCALER_HOST`
+- `NETSCALER_USER`
+- `NETSCALER_PASSWORD`
+- `NETSCALER_TEST_VSERVER`
 
-## Troubleshooting
-
-- **Login fails:** verify NITRO access, management endpoint, account permissions, and whether HTTPS certificate trust requires `-SkipCertificateCheck` for a lab.
-- **HA aborts:** connect to the node reporting `PRIMARY`, or intentionally run with `-RequirePrimary:$false` only if your change plan allows it.
-- **File upload fails:** verify permissions for `systemfile` and available space under `/nsconfig/ssl/`.
-- **sslcertkey update fails:** verify the certificate and key match, the filenames exist under `/nsconfig/ssl/`, and encrypted-key handling is compatible with the target firmware.
-- **Binding replacement does not remove an old cert:** inspect binding metadata; CA and SNI bindings are intentionally preserved.
-- **Configuration disappears after reboot:** ensure `SaveConfig` was not disabled and review `nsconfig?action=save` permissions.
+They must not be counted as live validation unless they actually run against an appliance.
 
 ## Known limitations
 
-- No live-device validation was performed in this environment.
-- The connector handles PEM certificate/key deployment only.
-- It does not issue certificates and does not manage ACME accounts, orders, ARI, or DNS challenges on NetScaler.
-- `systemfile` overwrite behavior and binding metadata casing should be confirmed on the target firmware before first production rollout.
-- Integration tests are disabled by default and require explicit `NETSCALER_*` variables.
+- No live NetScaler validation was performed in this environment.
+- PEM certificate/key deployment only.
+- No ACME account/order/challenge/ARI lifecycle on NetScaler.
+- NITRO behavior can vary by firmware; first production rollout should be manually validated on the target version.
+- `-SkipCertificateCheck` is process-global during each web request despite reliable restoration.

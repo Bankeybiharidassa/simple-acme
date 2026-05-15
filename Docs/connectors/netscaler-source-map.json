@@ -7,7 +7,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Connect-NetscalerNitroSession",
-    "notes": "Official basic operations documentation describes the login API object, POST /nitro/v1/config/login, JSON payload with login.username and login.password, and cookie-based session authentication."
+    "notes": "Official basic operations documentation describes the login API object, POST /nitro/v1/config/login, JSON payload with login.username and login.password, and cookie-based session authentication.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/logout",
@@ -17,7 +18,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Disconnect-NetscalerNitroSession",
-    "notes": "Official basic operations documentation describes POST /nitro/v1/config/logout with a logout object and the NITRO_AUTH_TOKEN cookie."
+    "notes": "Official basic operations documentation describes POST /nitro/v1/config/logout with a logout object and the NITRO_AUTH_TOKEN cookie.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/systemfile?override=yes",
@@ -27,7 +29,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Send-NetscalerSslFile",
-    "notes": "Official systemfile documentation verifies filename, filecontent in Base64 format, filelocation, fileencoding, POST add, and the override query parameter. Live appliance validation is still required for version-specific overwrite behavior and permissions."
+    "notes": "Official systemfile documentation verifies filename, filecontent in Base64 format, filelocation, fileencoding, POST add, and the override query parameter. Live appliance validation is still required for version-specific overwrite behavior and permissions.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "GET /nitro/v1/config/sslcertkey/{certkey}",
@@ -37,7 +40,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Get-NetscalerSslCertKey",
-    "notes": "Official sslcertkey documentation lists GET and GET ALL operations for the certificate key resource."
+    "notes": "Official sslcertkey documentation lists GET and GET ALL operations for the certificate key resource.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/sslcertkey",
@@ -47,7 +51,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Set-NetscalerSslCertKey",
-    "notes": "Official sslcertkey add operation documents certkey, cert, key, inform, password/passplain-related fields, and cacert. The connector supports PEM and optional chain by passing cacert."
+    "notes": "Official sslcertkey add operation documents certkey, cert, key, inform, password/passplain-related fields, and cacert. The connector supports PEM and optional chain by passing cacert.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/sslcertkey?action=update",
@@ -57,7 +62,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Set-NetscalerSslCertKey",
-    "notes": "Official sslcertkey documentation labels this operation as change and shows URL /config/sslcertkey?action=update with POST and cert/key replacement fields."
+    "notes": "Official sslcertkey documentation labels this operation as change and shows URL /config/sslcertkey?action=update with POST and cert/key replacement fields.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "GET /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}",
@@ -67,7 +73,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Get-NetscalerSslVServerCertBindings",
-    "notes": "Official binding resource documents vservername, certkeyname, ca, snicert, GET, ADD, and DELETE behavior."
+    "notes": "Official binding resource documents vservername, certkeyname, ca, snicert, GET, ADD, and DELETE behavior.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "PUT /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}",
@@ -77,7 +84,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Set-NetscalerSslVServerCertBinding",
-    "notes": "Official add operation uses PUT and payload sslvserver_sslcertkey_binding with vservername and certkeyname."
+    "notes": "Official add operation uses PUT and payload sslvserver_sslcertkey_binding with vservername and certkeyname.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "DELETE /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}?args=certkeyname:{certkey}",
@@ -87,7 +95,8 @@
     "confidence": "medium",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Set-NetscalerSslVServerCertBinding",
-    "notes": "Official binding documentation verifies DELETE with certkeyname args and exposes ca/snicert fields. Preservation logic is local policy based on those documented metadata fields and still needs live validation against appliance output formatting."
+    "notes": "Official binding documentation verifies DELETE with certkeyname args and exposes ca/snicert fields. Preservation logic is local policy based on those documented metadata fields and still needs live validation against appliance output formatting.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "GET /nitro/v1/stat/hanode",
@@ -97,7 +106,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Get-NetscalerHAState",
-    "notes": "Official hanode statistics documentation verifies hacurstatus YES/NO and hacurmasterstate values including PRIMARY and SECONDARY."
+    "notes": "Official hanode statistics documentation verifies hacurstatus YES/NO and hacurmasterstate values including PRIMARY and SECONDARY.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/nsconfig?action=save",
@@ -107,7 +117,8 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Save-NetscalerConfig",
-    "notes": "Official basic operations documentation and nsconfig API documentation verify saving configurations via nsconfig action=save."
+    "notes": "Official basic operations documentation and nsconfig API documentation verify saving configurations via nsconfig action=save.",
+    "source_map_version": "2026-05-15-runtime-validation"
   },
   {
     "endpoint_or_resource": "POST /nitro/v1/config/hasync?action=Force",
@@ -117,6 +128,7 @@
     "confidence": "high",
     "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
     "implementation_function": "Sync-NetscalerHA",
-    "notes": "Official hasync documentation verifies force and save properties and the Force action URL. The connector only sends force=YES when -SyncHAForce is set."
+    "notes": "Official hasync documentation verifies force and save properties and the Force action URL. The connector only sends force=YES when -SyncHAForce is set.",
+    "source_map_version": "2026-05-15-runtime-validation"
   }
 ]
