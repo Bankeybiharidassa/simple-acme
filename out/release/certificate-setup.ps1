@@ -1,9 +1,97 @@
+[CmdletBinding()]
+param(
+    [switch]$EnableDebugFileLog
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:tuiModule = $null
+$script:SetupLogEnabled = $false
+$script:SetupLogPath = $null
+$script:SetupTranscriptPath = $null
+$script:SetupTranscriptEnabled = $false
+
+function Initialize-SetupDebugLogging {
+    $debugRequested = $EnableDebugFileLog -or $PSBoundParameters.ContainsKey('Debug') -or $DebugPreference -ne [System.Management.Automation.ActionPreference]::SilentlyContinue
+    if (-not $debugRequested) { return }
+
+    $configuredRoot = if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_LOG_DIR)) { [string]$env:CERTIFICATE_LOG_DIR } else { Join-Path $PSScriptRoot 'logs' }
+    try {
+        $logRoot = [System.IO.Path]::GetFullPath($configuredRoot)
+    } catch {
+        throw "Unable to resolve debug log directory path '$configuredRoot'. $($_.Exception.Message)"
+    }
+
+    if (-not (Test-Path -LiteralPath $logRoot)) {
+        try {
+            New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+        } catch {
+            throw "Unable to create debug log directory '$logRoot'. Verify the path and ensure the current user has write permission. $($_.Exception.Message)"
+        }
+    }
+
+    $script:SetupLogPath = Join-Path $logRoot ("certificate-setup-debug-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
+    try {
+        "[$((Get-Date).ToUniversalTime().ToString('o'))] Setup debug logging started." | Set-Content -LiteralPath $script:SetupLogPath -Encoding UTF8
+    } catch {
+        throw "Unable to write setup debug log '$script:SetupLogPath'. Verify write permissions for '$logRoot'. $($_.Exception.Message)"
+    }
+
+    $script:SetupLogEnabled = $true
+    $script:SetupTranscriptPath = Join-Path $logRoot ("certificate-setup-transcript-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
+    try {
+        Start-Transcript -LiteralPath $script:SetupTranscriptPath -Append -ErrorAction Stop | Out-Null
+        $script:SetupTranscriptEnabled = $true
+    } catch {
+        $script:SetupTranscriptEnabled = $false
+        Add-Content -LiteralPath $script:SetupLogPath -Value ("[{0}] Warning: unable to start transcript. {1}" -f (Get-Date).ToUniversalTime().ToString('o'), $_.Exception.Message) -Encoding UTF8
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS')))) {
+        # preserve explicit operator value
+    } else {
+        [Environment]::SetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS', '1', 'Process')
+    }
+    [Console]::WriteLine(('Setup debug file log: {0}' -f $script:SetupLogPath))
+    if ($script:SetupTranscriptEnabled) {
+        [Console]::WriteLine(('Setup transcript log: {0}' -f $script:SetupTranscriptPath))
+    }
+}
+
+function Stop-SetupDebugLogging {
+    if ($script:SetupTranscriptEnabled) {
+        try { Stop-Transcript | Out-Null } catch {}
+        $script:SetupTranscriptEnabled = $false
+    }
+}
+
+function Write-SetupDebugLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    if (-not $script:SetupLogEnabled) { return }
+    $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('o'), $Message
+    try {
+        Add-Content -LiteralPath $script:SetupLogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch [System.IO.IOException] {
+        $fallbackPath = [string]$script:SetupLogPath + '.fallback'
+        try {
+            Add-Content -LiteralPath $fallbackPath -Value $line -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            # Debug logging must never terminate setup execution.
+        }
+    } catch {
+        # Debug logging must never terminate setup execution.
+    }
+}
+
+Initialize-SetupDebugLogging
+Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScriptRoot'"
 
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
+$netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
 $envLoaderModulePath = Join-Path $PSScriptRoot 'core/Env-Loader.psm1'
 
@@ -44,6 +132,7 @@ Run this script from a full repository checkout and confirm the module file exis
 }
 
 $tuiModule = Import-Module $tuiEngineModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $tuiEngineModulePath"
 if ($null -eq $tuiModule) {
     throw "Unable to import required TUI module from path: $tuiEngineModulePath"
 }
@@ -51,6 +140,7 @@ Assert-SetupCommandAvailable -CommandName 'Show-TuiMenu' -ExpectedModulePath $tu
 Assert-SetupCommandAvailable -CommandName 'Show-TuiStatus' -ExpectedModulePath $tuiEngineModulePath -ModuleInfo $tuiModule
 
 $formRunnerModule = Import-Module $formRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $formRunnerModulePath"
 if ($null -eq $formRunnerModule) {
     throw "Unable to import required setup module from path: $formRunnerModulePath"
 }
@@ -62,16 +152,30 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-PolicyViewer' -ExpectedModuleP
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceForm' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ManageCertificatesMenu' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ViewLogsDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-AcmeTuiDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+
+$netScalerRunnerModule = Import-Module $netScalerRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $netScalerRunnerModulePath"
+if ($null -eq $netScalerRunnerModule) {
+    throw "Unable to import required NetScaler setup module from path: $netScalerRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDeploymentForm' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDiagnostics' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Convert-NetScalerFormValuesToArguments' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Test-NetScalerTuiWiring' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $schedulerModulePath"
 if ($null -eq $schedulerModule) {
     throw "Unable to import required scheduler module from path: $schedulerModulePath"
 }
 Assert-SetupCommandAvailable -CommandName 'Ensure-OrchestratorScheduledTask' -ExpectedModulePath $schedulerModulePath -ModuleInfo $schedulerModule
 Import-Module $envLoaderModulePath -Force -Global | Out-Null
+Write-SetupDebugLog -Message "Imported module: $envLoaderModulePath"
 . "$PSScriptRoot/setup/Menu-Tree.ps1"
+Write-SetupDebugLog -Message "Loaded menu tree."
 
 function Invoke-InitialAcmeReconcilePrompt {
     param(
@@ -79,11 +183,17 @@ function Invoke-InitialAcmeReconcilePrompt {
         [Parameter(Mandatory)][string]$EnvFilePath
     )
 
+    Write-SetupDebugLog -Message "Initial reconcile prompt started. env_file='$EnvFilePath'"
     $envValues = Import-EnvFile -Path $EnvFilePath -Force
+    if ($envValues.ContainsKey('__ENV_IMPORT_SUMMARY')) {
+        $summary = $envValues['__ENV_IMPORT_SUMMARY']
+        Write-SetupDebugLog -Message ("Env import summary for initial reconcile: applied={0}; skipped={1}" -f $summary.AppliedCount, $summary.SkippedCount)
+    }
 
     try {
         Assert-ProviderDirectoryConsistency -Values $envValues
     } catch {
+        Write-SetupDebugLog -Message ("Provider directory consistency check failed: " + $_.Exception.Message)
         [Console]::WriteLine('')
         [Console]::WriteLine($_.Exception.Message)
         Wait-ForOperatorReturn
@@ -95,23 +205,50 @@ function Invoke-InitialAcmeReconcilePrompt {
     [Console]::WriteLine([string]$envValues.ACME_DIRECTORY)
     [Console]::WriteLine('')
     [Console]::WriteLine('Effective wacs command preview:')
-    [Console]::WriteLine(("wacs.exe --accepttos --source manual --order single --baseuri {0} --validation none --globalvalidation none --host {1}" -f [string]$envValues.ACME_DIRECTORY, [string]$envValues.DOMAINS))
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { [Console]::WriteLine('--eab-key-identifier <set>') }
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { [Console]::WriteLine('--eab-key <hidden>') }
+    try {
+        Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
+        $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+        $previewLine = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
+        [Console]::WriteLine($previewLine)
+    } catch {
+        [Console]::WriteLine(('Cannot build WACS command preview: ' + $_.Exception.Message))
+        Wait-ForOperatorReturn
+        return
+    }
     [Console]::WriteLine('')
 
+    Write-SetupDebugLog -Message "Initial reconcile prompt displayed to operator."
     [Console]::WriteLine('')
     $answer = [string](Read-Host 'Run initial ACME reconcile now? [Y/N]')
-    if ($answer.Trim().ToLowerInvariant() -notin @('y','yes')) {
+    $normalizedAnswer = $answer.Trim().ToLowerInvariant()
+    $willProceed = $normalizedAnswer -in @('y','yes')
+    Write-SetupDebugLog -Message ("Initial reconcile prompt response captured. raw='{0}' normalized='{1}' decision='{2}'" -f $answer, $normalizedAnswer, $(if ($willProceed) { 'proceed' } else { 'skip' }))
+    if (-not $willProceed) {
+        Write-SetupDebugLog -Message 'Initial reconcile skipped by operator choice.'
         [Console]::WriteLine('')
         [Console]::WriteLine('Skipped ACME reconcile. Run certificate-simple-acme-reconcile.ps1 later to bootstrap issuance.')
         Wait-ForOperatorReturn
         return
     }
 
+    $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
+    if ([string]::IsNullOrWhiteSpace($logDir)) {
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path $RootDir 'logs'))
+    }
+    $transcriptEnabled = ([Environment]::GetEnvironmentVariable('CERTIFICATE_TRANSCRIPT_LOGGING') -eq '1')
+    Write-SetupDebugLog -Message ("Initial reconcile log directory resolved: '{0}'" -f $logDir)
+    Write-SetupDebugLog -Message "Reconcile log pattern: reconcile-YYYYMMDD.log"
+    if ($transcriptEnabled) {
+        Write-SetupDebugLog -Message "Reconcile transcript logging is enabled. Pattern: reconcile-transcript-YYYYMMDD-HHMMSS.log"
+    } else {
+        Write-SetupDebugLog -Message 'Reconcile transcript logging is disabled. To enable set CERTIFICATE_TRANSCRIPT_LOGGING=1.'
+    }
+
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
+        Write-SetupDebugLog -Message ("Starting initial reconcile. domains='{0}' acme_directory='{1}' script_path='{2}'" -f [string]$envValues.DOMAINS, [string]$envValues.ACME_DIRECTORY, [string]$envValues.ACME_SCRIPT_PATH)
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
+        Write-SetupDebugLog -Message ("Initial reconcile completed successfully. action='{0}' completed_utc='{1}'" -f [string]$action, (Get-Date).ToUniversalTime().ToString('o'))
         [Console]::WriteLine('')
         [Console]::WriteLine("ACME reconcile completed successfully (action=$action).")
         if ([Environment]::GetEnvironmentVariable('CERTIFICATE_VERBOSE_DIAGNOSTICS') -eq '1') {
@@ -119,8 +256,21 @@ function Invoke-InitialAcmeReconcilePrompt {
         }
         Invoke-PostSetupValidation -RootDir $RootDir -EnvValues $envValues
     } catch {
+        Write-SetupDebugLog -Message ("Initial reconcile failed: " + $_.Exception.Message)
+        if ($_.InvocationInfo) {
+            Write-SetupDebugLog -Message ("Failure invocation context: script='{0}' line='{1}' command='{2}'" -f $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.Line)
+        } else {
+            Write-SetupDebugLog -Message 'Failure invocation context unavailable.'
+        }
+        if ($_.ScriptStackTrace) {
+            Write-SetupDebugLog -Message ('Failure stack trace: ' + $_.ScriptStackTrace)
+        } else {
+            Write-SetupDebugLog -Message 'Failure stack trace unavailable.'
+        }
+
+        $failurePhase = 'initial reconcile'
         [Console]::WriteLine('')
-        [Console]::WriteLine('ACME reconcile failed: ' + $_.Exception.Message)
+        [Console]::WriteLine(('ACME reconcile failed during {0}: ' -f $failurePhase) + $_.Exception.Message)
         if ($_.InvocationInfo) {
             [Console]::WriteLine('Script: ' + $_.InvocationInfo.ScriptName)
             [Console]::WriteLine('Line: ' + $_.InvocationInfo.ScriptLineNumber)
@@ -131,9 +281,19 @@ function Invoke-InitialAcmeReconcilePrompt {
             [Console]::WriteLine($_.ScriptStackTrace)
         }
         [Console]::WriteLine('See wrapper log:')
-        [Console]::WriteLine('C:\certificaat\logs\reconcile-YYYYMMDD-HHMMSS.log')
+        [Console]::WriteLine('See reconcile-*.log in the logs\ directory next to this script.')
         Write-ReconcileDiagnostics -Context 'simple-acme diagnostics'
         Wait-ForOperatorReturn
+    } finally {
+        $latestReconcileLog = $null
+        if (Test-Path -LiteralPath $logDir) {
+            $latestReconcileLog = Get-ChildItem -LiteralPath $logDir -Filter 'reconcile-*.log' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTimeUtc -Descending |
+                Select-Object -First 1
+        }
+        $latestPath = if ($null -eq $latestReconcileLog) { '(not found)' } else { [string]$latestReconcileLog.FullName }
+        Write-SetupDebugLog -Message ("Latest reconcile log discovered: {0}" -f $latestPath)
+        Write-SetupDebugLog -Message ("Reconcile transcript status: {0}" -f $(if ($transcriptEnabled) { 'enabled' } else { 'disabled (set CERTIFICATE_TRANSCRIPT_LOGGING=1 to enable)' }))
     }
 }
 
@@ -188,6 +348,7 @@ function Invoke-OrchestratorTaskRegistration {
 }
 
 $envPath = Resolve-BootstrapEnvPath -ProjectRoot $PSScriptRoot
+Write-SetupDebugLog -Message "Resolved env path: $envPath"
 [Console]::WriteLine('Active bootstrap env:')
 [Console]::WriteLine($envPath)
 if ($env:CERTIFICATE_ENV_FILE) {
@@ -196,12 +357,14 @@ if ($env:CERTIFICATE_ENV_FILE) {
 
 . "$PSScriptRoot/config.ps1"
 Initialize-CertificateConfig -AllowIncomplete | Out-Null
+Write-SetupDebugLog -Message "Certificate config initialized."
 
 $configDir = if ($env:CERTIFICATE_CONFIG_DIR) { $env:CERTIFICATE_CONFIG_DIR } else { Join-Path $PSScriptRoot 'config' }
 if (-not (Test-Path -LiteralPath $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
 
 $menuStack = @($CertificateMenuTree)
 while ($menuStack.Count -gt 0) {
+    Write-SetupDebugLog -Message "Rendering menu: $($menuStack[$menuStack.Count - 1].Title)"
     $currentMenu = $menuStack[$menuStack.Count - 1]
     $selected = Show-TuiMenu -Menu $currentMenu -DisableSubmenuRecursion
 
@@ -215,6 +378,7 @@ while ($menuStack.Count -gt 0) {
     if ($null -eq $menuItem) { continue }
 
     if ($menuItem.Type -eq 'submenu') {
+        Write-SetupDebugLog -Message "Opening submenu: $selected"
         if ($selected -eq 'advanced') {
             [Console]::WriteLine('')
             [Console]::WriteLine('These features are experimental phase-2 deployment/orchestrator functions.')
@@ -231,20 +395,31 @@ while ($menuStack.Count -gt 0) {
     Clear-TuiScreen
     switch ($selected) {
         'setup-new'      {
+            Write-SetupDebugLog -Message "Executing action: setup-new"
             $result = Invoke-AcmeForm -EnvFilePath $envPath
-            if ($null -ne $result) {
+            if ($null -eq $result) {
+                Write-SetupDebugLog -Message 'setup-new outcome: canceled-before-save (Invoke-AcmeForm returned null).'
+            } elseif ([string]$result.Status -eq 'saved') {
+                Write-SetupDebugLog -Message ("setup-new outcome: saved (target='{0}' domains='{1}'). Reconcile prompt will be shown." -f [string]$result.TargetSystem, [string]$result.Domains)
                 Invoke-InitialAcmeReconcilePrompt -RootDir $PSScriptRoot -EnvFilePath $envPath
+            } else {
+                Write-SetupDebugLog -Message ("setup-new outcome: unexpected-result-status='{0}'. Reconcile prompt will be skipped." -f [string]$result.Status)
             }
         }
         'manage-certs'   { Invoke-ManageCertificatesMenu -ConfigDir $configDir }
         'acme'           {
+            Write-SetupDebugLog -Message "Executing action: acme"
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
-        'logs-diagnostics' { Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
-        'task-register'  { Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
-        'policies'       { Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
-        'policies-view'  { Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }
-        'backup-create'  { & "$PSScriptRoot/certificate-backup.ps1" -OutputPath (Join-Path $PSScriptRoot ("certificate-{0}.certbak" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))) }
+        'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
+        'acme-tui-diagnostics' { Write-SetupDebugLog -Message "Executing action: acme-tui-diagnostics"; Invoke-AcmeTuiDiagnostics -ProjectRoot $PSScriptRoot }
+        'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
+        'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
+        'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'task-register'  { Write-SetupDebugLog -Message "Executing action: task-register"; Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
+        'policies'       { Write-SetupDebugLog -Message "Executing action: policies"; Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
+        'policies-view'  { Write-SetupDebugLog -Message "Executing action: policies-view"; Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }
+        'backup-create'  { Write-SetupDebugLog -Message "Executing action: backup-create"; & "$PSScriptRoot/certificate-backup.ps1" -OutputPath (Join-Path $PSScriptRoot ("certificate-{0}.certbak" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))) }
         'backup-restore' {
             $path = Read-Host 'Backup path'
             if ($path) { & "$PSScriptRoot/certificate-restore.ps1" -BackupPath $path }
@@ -276,3 +451,5 @@ while ($menuStack.Count -gt 0) {
     }
     Clear-TuiScreen
 }
+
+Stop-SetupDebugLogging

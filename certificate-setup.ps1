@@ -152,6 +152,7 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-PolicyViewer' -ExpectedModuleP
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceForm' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ManageCertificatesMenu' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ViewLogsDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-AcmeTuiDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
@@ -207,9 +208,8 @@ function Invoke-InitialAcmeReconcilePrompt {
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
         $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-        $previewArgs = Get-WacsIssueArguments -EnvValues $envValues -CsrAlgorithm $csrAlgo
-        $maskedPreviewArgs = Get-MaskedWacsArgumentsText -Args $previewArgs
-        [Console]::WriteLine(('wacs.exe ' + (ConvertTo-WacsCommandLineText -Args $maskedPreviewArgs)))
+        $previewLine = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
+        [Console]::WriteLine($previewLine)
     } catch {
         [Console]::WriteLine(('Cannot build WACS command preview: ' + $_.Exception.Message))
         Wait-ForOperatorReturn
@@ -412,6 +412,7 @@ while ($menuStack.Count -gt 0) {
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
         'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
+        'acme-tui-diagnostics' { Write-SetupDebugLog -Message "Executing action: acme-tui-diagnostics"; Invoke-AcmeTuiDiagnostics -ProjectRoot $PSScriptRoot }
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
