@@ -59,6 +59,32 @@ function Resolve-NetscalerPassword {
     ConvertFrom-NetscalerSecureString -SecureString $Password
 }
 
+function New-NetscalerNitroBaseUri {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+
+        [string]$NitroBaseUrl,
+
+        [switch]$UseHttp
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($NitroBaseUrl)) {
+        $trimmedBase = $NitroBaseUrl.TrimEnd('/')
+        if ($trimmedBase -notmatch '^https?://') { throw 'NitroBaseUrl must start with http:// or https://.' }
+        if ($trimmedBase -notmatch '/nitro/v1$') { throw 'NitroBaseUrl must point to the /nitro/v1 API root.' }
+        return $trimmedBase
+    }
+
+    if ([string]::IsNullOrWhiteSpace($HostName)) { throw 'NetScalerHost cannot be empty.' }
+    if ($HostName -match '^https?://') { throw 'NetScalerHost must be a host name or IP address only. Use NitroBaseUrl for a full URL.' }
+    if ($HostName -match '[/?#]') { throw 'NetScalerHost must not include a path or query string.' }
+
+    $scheme = if ($UseHttp) { 'http' } else { 'https' }
+    '{0}://{1}/nitro/v1' -f $scheme, $HostName.Trim('/')
+}
+
 function Connect-NetscalerNitroSession {
     [CmdletBinding()]
     param(
@@ -74,6 +100,10 @@ function Connect-NetscalerNitroSession {
         [ValidateNotNullOrEmpty()]
         [string]$Password,
 
+        [string]$NitroBaseUrl,
+
+        [switch]$UseHttp,
+
         [switch]$SkipCertificateCheck,
 
         [ValidateRange(0, 10)]
@@ -85,7 +115,7 @@ function Connect-NetscalerNitroSession {
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $script:NetscalerNitroSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-    $script:NetscalerNitroBaseUri = ('https://{0}/nitro/v1' -f $HostName.Trim('/'))
+    $script:NetscalerNitroBaseUri = New-NetscalerNitroBaseUri -HostName $HostName -NitroBaseUrl $NitroBaseUrl -UseHttp:$UseHttp
     $script:NetscalerNitroSkipCertificateCheck = [bool]$SkipCertificateCheck
     $script:NetscalerNitroRetryCount = $RetryCount
     $script:NetscalerNitroRetryDelaySeconds = $RetryDelaySeconds
@@ -108,6 +138,44 @@ function Disconnect-NetscalerNitroSession {
 
     $script:NetscalerNitroSession = $null
     $script:NetscalerNitroBaseUri = $null
+}
+
+function Get-NetscalerWebExceptionBody {
+    [CmdletBinding()]
+    param([object]$Exception)
+
+    try {
+        if ($Exception.Response -and $Exception.Response.GetResponseStream()) {
+            $reader = New-Object IO.StreamReader($Exception.Response.GetResponseStream())
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+        }
+    } catch {
+        return $null
+    }
+    $null
+}
+
+function Assert-NetscalerNitroResponse {
+    [CmdletBinding()]
+    param(
+        [object]$Response,
+        [string]$Method,
+        [string]$Path
+    )
+
+    if ($null -eq $Response) { return }
+    $names = @($Response.PSObject.Properties.Name)
+    if ($names -contains 'errorcode') {
+        $errorCode = [int]$Response.errorcode
+        $message = if ($names -contains 'message') { [string]$Response.message } else { 'NITRO returned an error.' }
+        $severity = if ($names -contains 'severity') { [string]$Response.severity } else { '' }
+        if ($errorCode -ne 0) {
+            throw "NetScaler NITRO $Method $Path returned errorcode ${errorCode}: $message"
+        }
+        if ($severity -match 'WARNING' -or $message -match 'warning') {
+            Write-Warning ("NetScaler NITRO $Method $Path warning: $message")
+        }
+    }
 }
 
 function Invoke-NetscalerNitroRequest {
@@ -140,9 +208,7 @@ function Invoke-NetscalerNitroRequest {
         Uri         = $uri
         ErrorAction = 'Stop'
         WebSession  = $script:NetscalerNitroSession
-        Headers     = @{ 'X-NITRO-USER' = $null; 'X-NITRO-PASS' = $null }
     }
-    $params.Remove('Headers')
 
     if ($null -ne $Body) {
         $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress)
@@ -159,20 +225,28 @@ function Invoke-NetscalerNitroRequest {
         while ($true) {
             try {
                 $response = Invoke-RestMethod @params
-                if ($null -ne $response -and ($response.PSObject.Properties.Name -contains 'errorcode') -and [int]$response.errorcode -ne 0) {
-                    $nitroMessage = if ($response.PSObject.Properties.Name -contains 'message') { [string]$response.message } else { 'NITRO returned an error.' }
-                    throw "NetScaler NITRO $Method $Path returned errorcode $($response.errorcode): $nitroMessage"
-                }
+                Assert-NetscalerNitroResponse -Response $response -Method $Method -Path $Path
                 return $response
             } catch {
                 $attempt++
-                $statusCode = $null
+                $statusCode = 0
                 if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
                     $statusCode = [int]$_.Exception.Response.StatusCode
                 }
+                if ($_.Exception.Message -match '^NetScaler NITRO .* returned errorcode') { throw }
                 $retryable = ($statusCode -eq 0 -or $statusCode -eq 408 -or $statusCode -eq 429 -or $statusCode -ge 500)
                 if ($attempt -gt $RetryCount -or -not $retryable) {
                     $message = $_.Exception.Message
+                    $bodyText = Get-NetscalerWebExceptionBody -Exception $_.Exception
+                    if (-not [string]::IsNullOrWhiteSpace($bodyText)) {
+                        try {
+                            $errorPayload = $bodyText | ConvertFrom-Json -ErrorAction Stop
+                            Assert-NetscalerNitroResponse -Response $errorPayload -Method $Method -Path $Path
+                            if ($errorPayload.PSObject.Properties.Name -contains 'message') { $message = [string]$errorPayload.message }
+                        } catch {
+                            $message = '{0} Response body: {1}' -f $message, $bodyText
+                        }
+                    }
                     throw "NetScaler NITRO $Method $Path failed: $message"
                 }
                 Start-Sleep -Seconds $RetryDelaySeconds
@@ -227,17 +301,18 @@ function Get-NetscalerHAState {
     }
 
     $nodes = @($response.hanode)
-    $primary = @($nodes | Where-Object { $_.hacurmasterstate -eq 'PRIMARY' -or $_.hamasterstate -eq 'PRIMARY' } | Select-Object -First 1)
-    $local = @($nodes | Where-Object { $_.id -eq 0 -or $_.nodeid -eq 0 } | Select-Object -First 1)
-    $selected = if ($local.Count -gt 0) { $local[0] } elseif ($primary.Count -gt 0) { $primary[0] } elseif ($nodes.Count -gt 0) { $nodes[0] } else { $null }
+    $selected = @($nodes | Select-Object -First 1)
     $state = 'UNKNOWN'
-    if ($null -ne $selected) {
-        if ($selected.PSObject.Properties.Name -contains 'hacurmasterstate') { $state = [string]$selected.hacurmasterstate }
-        elseif ($selected.PSObject.Properties.Name -contains 'hamasterstate') { $state = [string]$selected.hamasterstate }
+    $status = 'NO'
+    if ($selected.Count -gt 0) {
+        $node = $selected[0]
+        if ($node.PSObject.Properties.Name -contains 'hacurmasterstate') { $state = [string]$node.hacurmasterstate }
+        elseif ($node.PSObject.Properties.Name -contains 'hamasterstate') { $state = [string]$node.hamasterstate }
+        if ($node.PSObject.Properties.Name -contains 'hacurstatus') { $status = [string]$node.hacurstatus }
     }
 
     [pscustomobject]@{
-        HAConfigured  = ($nodes.Count -gt 1 -or ($state -and $state -ne 'UNKNOWN'))
+        HAConfigured  = ($status -eq 'YES' -or $nodes.Count -gt 1)
         HAMasterState = $state
         Raw           = $nodes
     }
@@ -268,10 +343,13 @@ function Send-NetscalerSslFile {
         [string]$FileName
     )
 
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Path '$Path' was not found." }
+    if ($FileName -match '[\\/]') { throw 'FileName must not contain a path separator.' }
+
     if ($PSCmdlet.ShouldProcess('/nsconfig/ssl/', "Upload $FileName")) {
         $bytes = [IO.File]::ReadAllBytes($Path)
-        $body = @{ systemfile = @{ filename = $FileName; filelocation = '/nsconfig/ssl/'; filecontent = [Convert]::ToBase64String($bytes) } }
-        $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/systemfile' -Body $body
+        $body = @{ systemfile = @{ filename = $FileName; filelocation = '/nsconfig/ssl/'; filecontent = [Convert]::ToBase64String($bytes); fileencoding = 'BASE64' } }
+        $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/systemfile?override=yes' -Body $body
         return $true
     }
     $false
@@ -284,9 +362,12 @@ function Get-NetscalerSslCertKey {
         [string]$CertKeyName
     )
 
+    if ([string]::IsNullOrWhiteSpace($CertKeyName)) { throw 'CertKeyName cannot be empty.' }
     try {
         $response = Invoke-NetscalerNitroRequest -Method GET -Path ("/config/sslcertkey/{0}" -f [uri]::EscapeDataString($CertKeyName))
-        return @($response.sslcertkey | Select-Object -First 1)[0]
+        $items = @($response.sslcertkey)
+        if ($items.Count -gt 0) { return $items[0] }
+        return $null
     } catch {
         if ($_.Exception.Message -match 'No such resource|not found|404') { return $null }
         throw
@@ -297,40 +378,54 @@ function Set-NetscalerSslCertKey {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$CertKeyName,
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$CertFileName,
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$KeyFileName,
 
-        [string]$ChainFileName
+        [string]$ChainFileName,
+
+        [SecureString]$KeyPassword
     )
 
     $existing = Get-NetscalerSslCertKey -CertKeyName $CertKeyName
     $payload = @{ certkey = $CertKeyName; cert = $CertFileName; key = $KeyFileName; inform = 'PEM' }
     if (-not [string]::IsNullOrWhiteSpace($ChainFileName)) { $payload['cacert'] = $ChainFileName }
+    if ($null -ne $KeyPassword) {
+        $payload['password'] = $true
+        $payload['passplain'] = ConvertFrom-NetscalerSecureString -SecureString $KeyPassword
+    }
 
-    if ($null -eq $existing) {
-        if ($PSCmdlet.ShouldProcess($CertKeyName, 'Create sslcertkey')) {
-            $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/sslcertkey' -Body @{ sslcertkey = $payload }
+    try {
+        if ($null -eq $existing) {
+            if ($PSCmdlet.ShouldProcess($CertKeyName, 'Create sslcertkey')) {
+                $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/sslcertkey' -Body @{ sslcertkey = $payload }
+                return $true
+            }
+            return $false
+        }
+
+        if ($PSCmdlet.ShouldProcess($CertKeyName, 'Change sslcertkey certificate and key')) {
+            $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/sslcertkey?action=update' -Body @{ sslcertkey = $payload }
             return $true
         }
-        return $false
+        $false
+    } finally {
+        if ($payload.ContainsKey('passplain')) { $payload['passplain'] = $null }
     }
-
-    if ($PSCmdlet.ShouldProcess($CertKeyName, 'Update sslcertkey')) {
-        $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/sslcertkey?action=update' -Body @{ sslcertkey = $payload }
-        return $true
-    }
-    $false
 }
 
 function Get-NetscalerSslVServerCertBindings {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$VServerName
     )
 
@@ -343,16 +438,28 @@ function Get-NetscalerSslVServerCertBindings {
     }
 }
 
+function Test-NetscalerServerCertificateBinding {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][object]$Binding)
+
+    $isCa = ($Binding.PSObject.Properties.Name -contains 'ca') -and ([string]$Binding.ca -match '^(true|YES)$')
+    $isSni = ($Binding.PSObject.Properties.Name -contains 'snicert') -and ([string]$Binding.snicert -match '^(true|YES)$')
+    (-not $isCa -and -not $isSni)
+}
+
 function Set-NetscalerSslVServerCertBinding {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$VServerName,
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$CertKeyName,
 
-        [switch]$ReplaceServerCertificate
+        [Alias('ReplaceServerCertificate')]
+        [switch]$ReplaceExistingServerCertificate
     )
 
     $bindings = @(Get-NetscalerSslVServerCertBindings -VServerName $VServerName)
@@ -360,12 +467,8 @@ function Set-NetscalerSslVServerCertBinding {
     $changed = $false
 
     if ($alreadyBound.Count -eq 0) {
-        if ($ReplaceServerCertificate) {
-            $serverBindings = @($bindings | Where-Object {
-                $isCa = ($_.PSObject.Properties.Name -contains 'ca') -and ([string]$_.ca -eq 'true' -or [string]$_.ca -eq 'YES')
-                $isSni = ($_.PSObject.Properties.Name -contains 'snicert') -and ([string]$_.snicert -eq 'true' -or [string]$_.snicert -eq 'YES')
-                -not $isCa -and -not $isSni
-            })
+        if ($ReplaceExistingServerCertificate) {
+            $serverBindings = @($bindings | Where-Object { Test-NetscalerServerCertificateBinding -Binding $_ })
             foreach ($binding in $serverBindings) {
                 if ($PSCmdlet.ShouldProcess($VServerName, "Unbind server certificate $($binding.certkeyname)")) {
                     $path = "/config/sslvserver_sslcertkey_binding/{0}?args=certkeyname:{1}" -f [uri]::EscapeDataString($VServerName), [uri]::EscapeDataString($binding.certkeyname)
@@ -402,7 +505,7 @@ function Sync-NetscalerHA {
 
     $forceValue = if ($Force) { 'YES' } else { 'NO' }
     if ($PSCmdlet.ShouldProcess('NetScaler HA pair', "Synchronize save=YES force=$forceValue")) {
-        $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/hasync' -Body @{ hasync = @{ save = 'YES'; force = $forceValue } }
+        $null = Invoke-NetscalerNitroRequest -Method POST -Path '/config/hasync?action=Force' -Body @{ hasync = @{ save = 'YES'; force = $forceValue } }
         return $true
     }
     $false
@@ -421,9 +524,9 @@ function Test-NetscalerDeploymentVerification {
     $certKey = Get-NetscalerSslCertKey -CertKeyName $CertKeyName
     $bindings = @(Get-NetscalerSslVServerCertBindings -VServerName $VServerName)
     $binding = @($bindings | Where-Object { $_.certkeyname -eq $CertKeyName })
-    if ($null -ne $certKey -and $binding.Count -gt 0) { return 'Verified' }
-    if ($null -eq $certKey) { return 'CertKeyMissing' }
-    'BindingMissing'
+    if ($null -ne $certKey -and $binding.Count -gt 0) { return 'Passed' }
+    if ($null -eq $certKey -and $binding.Count -eq 0) { return 'Failed' }
+    'Partial'
 }
 
-Export-ModuleMember -Function ConvertFrom-NetscalerSecureString,Resolve-NetscalerPassword,Connect-NetscalerNitroSession,Disconnect-NetscalerNitroSession,Invoke-NetscalerNitroRequest,Test-NetscalerLocalCertificateFiles,Get-NetscalerHAState,Assert-NetscalerPrimary,Send-NetscalerSslFile,Get-NetscalerSslCertKey,Set-NetscalerSslCertKey,Get-NetscalerSslVServerCertBindings,Set-NetscalerSslVServerCertBinding,Save-NetscalerConfig,Sync-NetscalerHA,Test-NetscalerDeploymentVerification
+Export-ModuleMember -Function ConvertFrom-NetscalerSecureString,Resolve-NetscalerPassword,New-NetscalerNitroBaseUri,Connect-NetscalerNitroSession,Disconnect-NetscalerNitroSession,Invoke-NetscalerNitroRequest,Test-NetscalerLocalCertificateFiles,Get-NetscalerHAState,Assert-NetscalerPrimary,Send-NetscalerSslFile,Get-NetscalerSslCertKey,Set-NetscalerSslCertKey,Get-NetscalerSslVServerCertBindings,Test-NetscalerServerCertificateBinding,Set-NetscalerSslVServerCertBinding,Save-NetscalerConfig,Sync-NetscalerHA,Test-NetscalerDeploymentVerification

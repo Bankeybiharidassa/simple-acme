@@ -1,0 +1,122 @@
+[
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/login",
+    "purpose": "Create a NITRO session and receive the NITRO_AUTH_TOKEN session cookie used by subsequent requests.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/performing-basic-netscaler-operations.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Connect-NetscalerNitroSession",
+    "notes": "Official basic operations documentation describes the login API object, POST /nitro/v1/config/login, JSON payload with login.username and login.password, and cookie-based session authentication."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/logout",
+    "purpose": "Terminate the NITRO session in a finally cleanup path.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/performing-basic-netscaler-operations.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Disconnect-NetscalerNitroSession",
+    "notes": "Official basic operations documentation describes POST /nitro/v1/config/logout with a logout object and the NITRO_AUTH_TOKEN cookie."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/systemfile?override=yes",
+    "purpose": "Upload PEM certificate, private key, and optional chain files into /nsconfig/ssl/ as base64 systemfile content before sslcertkey changes.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/system/systemfile/",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Send-NetscalerSslFile",
+    "notes": "Official systemfile documentation verifies filename, filecontent in Base64 format, filelocation, fileencoding, POST add, and the override query parameter. Live appliance validation is still required for version-specific overwrite behavior and permissions."
+  },
+  {
+    "endpoint_or_resource": "GET /nitro/v1/config/sslcertkey/{certkey}",
+    "purpose": "Detect whether the requested certificate-key pair already exists before choosing add or change behavior.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslcertkey.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Get-NetscalerSslCertKey",
+    "notes": "Official sslcertkey documentation lists GET and GET ALL operations for the certificate key resource."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/sslcertkey",
+    "purpose": "Create a missing sslcertkey resource using explicit certkey, cert, key, PEM inform, and optional cacert fields.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslcertkey.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Set-NetscalerSslCertKey",
+    "notes": "Official sslcertkey add operation documents certkey, cert, key, inform, password/passplain-related fields, and cacert. The connector supports PEM and optional chain by passing cacert."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/sslcertkey?action=update",
+    "purpose": "Change an existing sslcertkey to the newly uploaded certificate/key material without silently creating unrelated objects.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslcertkey.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Set-NetscalerSslCertKey",
+    "notes": "Official sslcertkey documentation labels this operation as change and shows URL /config/sslcertkey?action=update with POST and cert/key replacement fields."
+  },
+  {
+    "endpoint_or_resource": "GET /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}",
+    "purpose": "Read existing SSL vServer certificate bindings before deciding whether to bind or replace anything.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslvserver_sslcertkey_binding.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Get-NetscalerSslVServerCertBindings",
+    "notes": "Official binding resource documents vservername, certkeyname, ca, snicert, GET, ADD, and DELETE behavior."
+  },
+  {
+    "endpoint_or_resource": "PUT /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}",
+    "purpose": "Bind the requested sslcertkey to the SSL vServer when it is not already present.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslvserver_sslcertkey_binding.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Set-NetscalerSslVServerCertBinding",
+    "notes": "Official add operation uses PUT and payload sslvserver_sslcertkey_binding with vservername and certkeyname."
+  },
+  {
+    "endpoint_or_resource": "DELETE /nitro/v1/config/sslvserver_sslcertkey_binding/{vservername}?args=certkeyname:{certkey}",
+    "purpose": "When explicitly requested, remove old non-CA and non-SNI server certificate bindings before binding the new certkey.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ssl/sslvserver_sslcertkey_binding.html",
+    "source_type": "official_doc",
+    "confidence": "medium",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Set-NetscalerSslVServerCertBinding",
+    "notes": "Official binding documentation verifies DELETE with certkeyname args and exposes ca/snicert fields. Preservation logic is local policy based on those documented metadata fields and still needs live validation against appliance output formatting."
+  },
+  {
+    "endpoint_or_resource": "GET /nitro/v1/stat/hanode",
+    "purpose": "Detect HA configuration and current master state without inferring from hostnames.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/statistics/ha/hanode.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Get-NetscalerHAState",
+    "notes": "Official hanode statistics documentation verifies hacurstatus YES/NO and hacurmasterstate values including PRIMARY and SECONDARY."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/nsconfig?action=save",
+    "purpose": "Persist running configuration after upload, sslcertkey, binding, and verification succeed when SaveConfig is enabled.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/performing-basic-netscaler-operations.html#saving-citrix-adc-configurations",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Save-NetscalerConfig",
+    "notes": "Official basic operations documentation and nsconfig API documentation verify saving configurations via nsconfig action=save."
+  },
+  {
+    "endpoint_or_resource": "POST /nitro/v1/config/hasync?action=Force",
+    "purpose": "Synchronize HA configuration after successful deployment on the primary node; default payload uses save=YES and force=NO.",
+    "source_url": "https://developer-docs.netscaler.com/en-us/adc-nitro-api/current-release/configuration/ha/hasync.html",
+    "source_type": "official_doc",
+    "confidence": "high",
+    "implementation_file": "Scripts/Modules/SimpleAcme.Netscaler/NetscalerNitro.psm1",
+    "implementation_function": "Sync-NetscalerHA",
+    "notes": "Official hasync documentation verifies force and save properties and the Force action URL. The connector only sends force=YES when -SyncHAForce is set."
+  }
+]
