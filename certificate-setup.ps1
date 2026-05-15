@@ -91,6 +91,7 @@ Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScri
 
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
+$netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
 $envLoaderModulePath = Join-Path $PSScriptRoot 'core/Env-Loader.psm1'
 
@@ -154,6 +155,16 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-ViewLogsDiagnostics' -Expected
 Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+
+$netScalerRunnerModule = Import-Module $netScalerRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $netScalerRunnerModulePath"
+if ($null -eq $netScalerRunnerModule) {
+    throw "Unable to import required NetScaler setup module from path: $netScalerRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDeploymentForm' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDiagnostics' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Convert-NetScalerFormValuesToArguments' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Test-NetScalerTuiWiring' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
 Write-SetupDebugLog -Message "Imported module: $schedulerModulePath"
 if ($null -eq $schedulerModule) {
@@ -401,6 +412,9 @@ while ($menuStack.Count -gt 0) {
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
         'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
+        'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
+        'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
+        'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
         'task-register'  { Write-SetupDebugLog -Message "Executing action: task-register"; Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
         'policies'       { Write-SetupDebugLog -Message "Executing action: policies"; Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
         'policies-view'  { Write-SetupDebugLog -Message "Executing action: policies-view"; Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }
