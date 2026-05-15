@@ -7,11 +7,34 @@ BeforeAll {
 }
 
 Describe 'NetScaler TUI wiring files' {
-    It 'menu tree contains NetScaler action keys' {
+    It 'menu tree contains stable NetScaler action keys' {
         $menu = Get-Content -LiteralPath (Join-Path $script:repoRoot 'setup/Menu-Tree.ps1') -Raw
         $menu | Should -Match 'netscaler-deploy'
         $menu | Should -Match 'netscaler-whatif'
         $menu | Should -Match 'netscaler-diagnostics'
+    }
+
+    It 'menu tree shows operator-safe NetScaler labels in safe-first order' {
+        . (Join-Path $script:repoRoot 'setup/Menu-Tree.ps1')
+        $deploymentMenu = @($CertificateMenuTree.Items | Where-Object { $_.Key -eq 'deployment-targets' } | Select-Object -First 1)
+        $deploymentMenu | Should -Not -BeNullOrEmpty
+
+        $netScalerItems = @($deploymentMenu.Items | Where-Object { $_.Key -like 'netscaler-*' })
+        @($netScalerItems.Key) | Should -Be @(
+            'netscaler-whatif'
+            'netscaler-deploy'
+            'netscaler-diagnostics'
+        )
+
+        $whatIfLabel = ($netScalerItems | Where-Object { $_.Key -eq 'netscaler-whatif' }).Label
+        $deployLabel = ($netScalerItems | Where-Object { $_.Key -eq 'netscaler-deploy' }).Label
+        $diagnosticsLabel = ($netScalerItems | Where-Object { $_.Key -eq 'netscaler-diagnostics' }).Label
+
+        $whatIfLabel | Should -Match 'safe preview'
+        $whatIfLabel | Should -Match 'no changes'
+        $deployLabel | Should -Match 'Install certificate'
+        $deployLabel | Should -Match 'asks for confirmation'
+        $diagnosticsLabel | Should -Match 'Check setup|diagnostics'
     }
 
     It 'device schemas include complete netscaler schema' {
