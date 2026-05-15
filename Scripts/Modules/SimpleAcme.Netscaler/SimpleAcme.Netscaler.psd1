@@ -10,6 +10,7 @@
     FunctionsToExport = @(
         'ConvertFrom-NetscalerSecureString',
         'Resolve-NetscalerPassword',
+        'New-NetscalerNitroBaseUri',
         'Connect-NetscalerNitroSession',
         'Disconnect-NetscalerNitroSession',
         'Invoke-NetscalerNitroRequest',
@@ -20,6 +21,7 @@
         'Get-NetscalerSslCertKey',
         'Set-NetscalerSslCertKey',
         'Get-NetscalerSslVServerCertBindings',
+        'Test-NetscalerServerCertificateBinding',
         'Set-NetscalerSslVServerCertBinding',
         'Save-NetscalerConfig',
         'Sync-NetscalerHA',

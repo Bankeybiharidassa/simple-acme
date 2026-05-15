@@ -19,7 +19,7 @@ function Invoke-TestNetscalerIntegration {
         $password = [Environment]::GetEnvironmentVariable('NETSCALER_PASSWORD')
         try {
             Connect-NetscalerNitroSession -HostName ([Environment]::GetEnvironmentVariable('NETSCALER_HOST')) -Username ([Environment]::GetEnvironmentVariable('NETSCALER_USER')) -Password $password
-            $null = Invoke-NetscalerNitroRequest -Method GET -Path '/config/nsversion'
+            $null = Invoke-NetscalerNitroRequest -Method GET -Path '/stat/hanode'
             $null = Get-NetscalerSslVServerCertBindings -VServerName ([Environment]::GetEnvironmentVariable('NETSCALER_TEST_VSERVER'))
         } finally {
             Disconnect-NetscalerNitroSession

@@ -35,17 +35,30 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$VServerName,
 
-    [bool]$DetectHA = $true,
+    [string]$NitroBaseUrl,
 
-    [bool]$RequirePrimary = $true,
+    [switch]$UseHttp,
 
-    [bool]$SyncHA = $true,
+    [switch]$DetectHA = $true,
+
+    [switch]$NoDetectHA,
+
+    [switch]$RequirePrimary = $true,
+
+    [switch]$SyncHA = $true,
+
+    [switch]$NoSyncHA,
 
     [switch]$SyncHAForce,
 
-    [bool]$SaveConfig = $true,
+    [switch]$SaveConfig = $true,
 
-    [switch]$ReplaceServerCertificate,
+    [switch]$NoSaveConfig,
+
+    [Alias('ReplaceServerCertificate')]
+    [switch]$ReplaceExistingServerCertificate,
+
+    [SecureString]$KeyPassword,
 
     [switch]$SkipCertificateCheck,
 
@@ -65,6 +78,12 @@ if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
 }
 Import-Module $modulePath -Force
 
+$effectiveDetectHA = [bool]$DetectHA -and -not [bool]$NoDetectHA
+$effectiveRequirePrimary = [bool]$RequirePrimary
+$effectiveSaveConfig = [bool]$SaveConfig -and -not [bool]$NoSaveConfig
+$effectiveSyncHA = [bool]$SyncHA -and -not [bool]$NoSyncHA
+
+$null = New-NetscalerNitroBaseUri -HostName $NetScalerHost -NitroBaseUrl $NitroBaseUrl -UseHttp:$UseHttp
 $validatedFiles = Test-NetscalerLocalCertificateFiles -CertPath $CertPath -KeyPath $KeyPath -ChainPath $ChainPath
 $passwordText = if ($PSCmdlet.ParameterSetName -eq 'SecretName') {
     Resolve-NetscalerPassword -PasswordSecretName $PasswordSecretName
@@ -84,11 +103,11 @@ $chainFileName = if ($null -eq $validatedFiles.ChainPath) { $null } else { Split
 
 try {
     if ($PSCmdlet.ShouldProcess($NetScalerHost, 'Open NITRO session and deploy certificate')) {
-        Connect-NetscalerNitroSession -HostName $NetScalerHost -Username $Username -Password $passwordText -SkipCertificateCheck:$SkipCertificateCheck -RetryCount $RetryCount -RetryDelaySeconds $RetryDelaySeconds
+        Connect-NetscalerNitroSession -HostName $NetScalerHost -Username $Username -Password $passwordText -NitroBaseUrl $NitroBaseUrl -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -RetryCount $RetryCount -RetryDelaySeconds $RetryDelaySeconds
 
-        if ($DetectHA) {
+        if ($effectiveDetectHA) {
             $haState = Get-NetscalerHAState
-            Assert-NetscalerPrimary -HAState $haState -RequirePrimary $RequirePrimary
+            Assert-NetscalerPrimary -HAState $haState -RequirePrimary $effectiveRequirePrimary
         }
 
         $changed = (Send-NetscalerSslFile -Path $validatedFiles.CertPath -FileName $certFileName) -or $changed
@@ -97,23 +116,21 @@ try {
             $changed = (Send-NetscalerSslFile -Path $validatedFiles.ChainPath -FileName $chainFileName) -or $changed
         }
 
-        $changed = (Set-NetscalerSslCertKey -CertKeyName $CertKeyName -CertFileName $certFileName -KeyFileName $keyFileName -ChainFileName $chainFileName) -or $changed
-        $changed = (Set-NetscalerSslVServerCertBinding -VServerName $VServerName -CertKeyName $CertKeyName -ReplaceServerCertificate:$ReplaceServerCertificate) -or $changed
+        $changed = (Set-NetscalerSslCertKey -CertKeyName $CertKeyName -CertFileName $certFileName -KeyFileName $keyFileName -ChainFileName $chainFileName -KeyPassword $KeyPassword) -or $changed
+        $changed = (Set-NetscalerSslVServerCertBinding -VServerName $VServerName -CertKeyName $CertKeyName -ReplaceExistingServerCertificate:$ReplaceExistingServerCertificate) -or $changed
 
         $verificationStatus = Test-NetscalerDeploymentVerification -CertKeyName $CertKeyName -VServerName $VServerName
-        if ($verificationStatus -ne 'Verified') {
+        if ($verificationStatus -ne 'Passed') {
             throw "NetScaler deployment verification failed with status '$verificationStatus'."
         }
 
-        if ($SaveConfig -and $changed) {
+        if ($effectiveSaveConfig) {
             $saved = Save-NetscalerConfig
         }
 
-        if ($SyncHA -and $haState.HAConfigured -and $changed) {
+        if ($effectiveSyncHA -and $haState.HAConfigured) {
             $haSynced = Sync-NetscalerHA -Force:$SyncHAForce
         }
-    } else {
-        $verificationStatus = 'WhatIf'
     }
 } finally {
     $passwordText = $null
