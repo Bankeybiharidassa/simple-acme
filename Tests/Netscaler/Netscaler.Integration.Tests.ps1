@@ -1,26 +1,23 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Invoke-TestNetscalerIntegration {
-    param([scriptblock]$Assert)
+$hasLiveNetScaler = -not [string]::IsNullOrWhiteSpace($env:NETSCALER_HOST) -and`
+    -not [string]::IsNullOrWhiteSpace($env:NETSCALER_USER) -and`
+    -not [string]::IsNullOrWhiteSpace($env:NETSCALER_PASSWORD) -and`
+    -not [string]::IsNullOrWhiteSpace($env:NETSCALER_TEST_VSERVER)
 
-    & $Assert 'NetScaler integration smoke test is opt-in' {
-        $required = @('NETSCALER_HOST','NETSCALER_USER','NETSCALER_PASSWORD','NETSCALER_TEST_VSERVER')
-        $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-        if ($missing.Count -gt 0) {
-            Write-Host ('[SKIP] Missing integration environment variables: {0}' -f ($missing -join ', '))
-            return
-        }
+BeforeAll {
+$script:repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')
+    $script:modulePath = Join-Path $script:repoRoot 'Scripts/Modules/SimpleAcme.Netscaler/SimpleAcme.Netscaler.psd1'
+}
 
-        $repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')
-        $modulePath = Join-Path $repoRoot 'Scripts/Modules/SimpleAcme.Netscaler/SimpleAcme.Netscaler.psd1'
-        Import-Module $modulePath -Force
-
-        $password = [Environment]::GetEnvironmentVariable('NETSCALER_PASSWORD')
+Describe 'NetScaler live integration' -Skip:(-not $hasLiveNetScaler) {
+    It 'can connect, read HA and vServer bindings, then disconnect' {
+        Import-Module $script:modulePath -Force
+        Connect-NetscalerNitroSession -HostName $env:NETSCALER_HOST -Username $env:NETSCALER_USER -Password $env:NETSCALER_PASSWORD
         try {
-            Connect-NetscalerNitroSession -HostName ([Environment]::GetEnvironmentVariable('NETSCALER_HOST')) -Username ([Environment]::GetEnvironmentVariable('NETSCALER_USER')) -Password $password
-            $null = Invoke-NetscalerNitroRequest -Method GET -Path '/stat/hanode'
-            $null = Get-NetscalerSslVServerCertBindings -VServerName ([Environment]::GetEnvironmentVariable('NETSCALER_TEST_VSERVER'))
+            { Get-NetscalerHAState } | Should -Not -Throw
+            { Get-NetscalerSslVServerCertBindings -VServerName $env:NETSCALER_TEST_VSERVER } | Should -Not -Throw
         } finally {
             Disconnect-NetscalerNitroSession
         }
