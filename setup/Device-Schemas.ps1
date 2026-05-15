@@ -35,6 +35,23 @@ $DeviceSchemas = @{
         @{ Name='token_env'; Label='Token env-var name'; Type='string'; Required=$true; Placeholder='F5_API_TOKEN'; HelpText='Environment variable that stores the iControl REST Bearer token' },
         @{ Name='ssl_profile'; Label='Client SSL profile name'; Type='string'; Required=$true; Placeholder='clientssl-prod'; HelpText='Name of the client SSL profile to update' }
     )}
+
+    netscaler = @{ ConnectorType='netscaler'; Label='NetScaler / Citrix ADC'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Management hostname or IP'; Type='string'; Required=$true; Placeholder='adc.example.com'; HelpText='NetScaler / Citrix ADC management endpoint' },
+        @{ Name='username'; Label='NITRO username'; Type='string'; Required=$true; Placeholder='nsroot'; HelpText='NITRO API username. The password is resolved by secret name, not stored in the TUI log.' },
+        @{ Name='password_secret_name'; Label='Password secret name'; Type='string'; Required=$true; Placeholder='NETSCALER_PASSWORD'; HelpText='Secret/environment name used by cert2netscaler.ps1 to resolve the NITRO password' },
+        @{ Name='certkey_name'; Label='sslcertkey name'; Type='string'; Required=$true; Placeholder='wildcard_example_com'; HelpText='Target sslcertkey object name' },
+        @{ Name='cert_path'; Label='Certificate path'; Type='string'; Required=$true; Placeholder='/path/to/cert.crt'; HelpText='PEM certificate file path' },
+        @{ Name='key_path'; Label='Private key path'; Type='string'; Required=$true; Placeholder='/path/to/cert.key'; HelpText='PEM private key file path. Contents are never logged.' },
+        @{ Name='chain_path'; Label='Chain path'; Type='string'; Required=$false; Placeholder=''; HelpText='Optional PEM chain file path' },
+        @{ Name='vserver_name'; Label='SSL vServer name'; Type='string'; Required=$true; Placeholder='prod-vsrv'; HelpText='SSL virtual server to bind the certificate to' },
+        @{ Name='require_primary'; Label='Require HA primary'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to allow operation when HA primary assertion should be bypassed' },
+        @{ Name='sync_ha'; Label='Sync HA after deploy'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to skip HA sync after successful deployment' },
+        @{ Name='save_config'; Label='Save config after deploy'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to skip saving the running NetScaler configuration' },
+        @{ Name='replace_existing_server_certificate'; Label='Replace existing server cert'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='When true, replace existing non-CA/non-SNI server certificate bindings' },
+        @{ Name='skip_certificate_check'; Label='Skip TLS certificate check'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='When true, skip management endpoint TLS certificate validation' }
+    )}
+
     citrix_adc = @{ ConnectorType='citrix_adc'; Label='Citrix ADC'; Category='network_appliance'; Fields=@(
         @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='adc.example.com'; HelpText='Citrix ADC management endpoint' },
         @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='ADC_USER'; HelpText='Environment variable name for NITRO API username' },

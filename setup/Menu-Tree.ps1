@@ -6,6 +6,12 @@ $CertificateMenuTree = @{
     Items = @(
         @{ Label='Setup new certificate'; Key='setup-new'; Type='action' },
         @{ Label='Manage existing certificates'; Key='manage-certs'; Type='action' },
+        @{ Label='Deployment targets'; Key='deployment-targets'; Type='submenu'; Items=@(
+            @{ Label='NetScaler / Citrix ADC - deploy'; Key='netscaler-deploy'; Type='action' },
+            @{ Label='NetScaler / Citrix ADC - WhatIf preview'; Key='netscaler-whatif'; Type='action' },
+            @{ Label='NetScaler / Citrix ADC - diagnostics'; Key='netscaler-diagnostics'; Type='action' },
+            @{ Key='back'; Label='.. Back'; Type='back' }
+        )},
         @{ Label='Backup / Restore'; Key='backup'; Type='submenu'; Items=@(@{ Label='Create backup'; Key='backup-create'; Type='action' },@{ Label='Restore from backup'; Key='backup-restore'; Type='action' },@{ Label='Verify backup'; Key='backup-verify'; Type='action' },@{Key='back';Label='.. Back';Type='back'})},
         @{ Label='Advanced / Phase 2 features'; Key='advanced'; Type='submenu'; Items=@(
             @{ Label='ACME settings'; Key='acme'; Type='action' },
