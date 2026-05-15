@@ -537,6 +537,18 @@ function Get-NormalizedCsvValues {
     )
 }
 
+function Normalize-WacsScriptParametersText {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) { return '' }
+    $text = [string]$Value
+    $text = $text.Trim()
+    $text = $text -replace '\\"', '"'
+    $text = $text -replace '\''', "'"
+    $text = $text -replace '\s+', ' '
+    return $text
+}
+
 function Compare-RenewalWithEnv {
     param(
         [Parameter(Mandatory)]$RenewalSummary,
@@ -592,20 +604,29 @@ function Compare-RenewalWithEnv {
     if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
         $mismatches.Add('Script path')
     }
-    $normalizedScriptParameters = @($RenewalSummary.ScriptParameters | ForEach-Object { [string]$_ })
-    if (-not ($normalizedScriptParameters -contains '{CertThumbprint}')) {
+    $expectedScriptParameters = Normalize-WacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
+    $normalizedScriptParameters = @(
+        $RenewalSummary.ScriptParameters |
+            ForEach-Object { Normalize-WacsScriptParametersText -Value ([string]$_) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
         $mismatches.Add('Script parameters')
     }
 
     $requestedCsr = [string](Get-CsrExecutionPlan -EnvValues $EnvValues | Select-Object -First 1)
-    if (-not [string]::IsNullOrWhiteSpace($requestedCsr) -and -not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.CsrPlugin)) {
-        if ([string]$RenewalSummary.CsrPlugin -ne $requestedCsr) {
+    $actualCsrPlugin = ''
+    if ($RenewalSummary.PSObject.Properties.Name -contains 'CsrPlugin') { $actualCsrPlugin = [string]$RenewalSummary.CsrPlugin }
+    if (-not [string]::IsNullOrWhiteSpace($requestedCsr) -and -not [string]::IsNullOrWhiteSpace($actualCsrPlugin)) {
+        if ($actualCsrPlugin -ne $requestedCsr) {
             $mismatches.Add('CSR plugin')
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) -and -not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.KeyType)) {
-        if ([string]$RenewalSummary.KeyType -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) {
+    $actualKeyType = ''
+    if ($RenewalSummary.PSObject.Properties.Name -contains 'KeyType') { $actualKeyType = [string]$RenewalSummary.KeyType }
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) -and -not [string]::IsNullOrWhiteSpace($actualKeyType)) {
+        if ($actualKeyType -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KEY_TYPE')) {
             $mismatches.Add('Key type')
         }
     }
@@ -651,7 +672,9 @@ function Test-ReconcilePreflight {
         throw "Script installation path does not exist: '$scriptPath'"
     }
     $EnvValues['ACME_SCRIPT_PATH'] = $scriptPath
-    $EnvValues['ACME_SCRIPT_PARAMETERS'] = '{CertThumbprint}'
+    if ([string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS'))) {
+        $EnvValues['ACME_SCRIPT_PARAMETERS'] = '{CertThumbprint}'
+    }
     $requiredRolesRaw = (Get-EnvValue -EnvValues $EnvValues -Key 'CERTIFICATE_REQUIRED_WINDOWS_ROLES')
     if (-not [string]::IsNullOrWhiteSpace($requiredRolesRaw) -and (Get-Command -Name Get-WindowsFeature -ErrorAction SilentlyContinue)) {
         $requiredRoles = @(
@@ -807,9 +830,9 @@ function Get-CsrExecutionPlan {
 }
 
 function Get-MaskedWacsArgumentsText {
-    param([AllowNull()][string[]]$Args)
+    param([Alias('Args')][AllowNull()][string[]]$ArgumentList)
 
-    $argList = @($Args | ForEach-Object { [string]$_ })
+    $argList = @($ArgumentList | ForEach-Object { [string]$_ })
     $masked = New-Object System.Collections.Generic.List[string]
 
     for ($i = 0; $i -lt (Get-SafeCount $argList); $i++) {
@@ -1064,10 +1087,10 @@ WACS entered interactive menu. The generated command is incomplete.
 
 
 function ConvertTo-WacsCommandLineText {
-    param([AllowNull()][string[]]$Args)
+    param([Alias('Args')][AllowNull()][string[]]$ArgumentList)
 
     $parts = New-Object System.Collections.Generic.List[string]
-    foreach ($arg in @($Args | ForEach-Object { [string]$_ })) {
+    foreach ($arg in @($ArgumentList | ForEach-Object { [string]$_ })) {
         if ($arg -match '[\s"]') {
             $parts.Add(('"{0}"' -f $arg.Replace('"','\"')))
         } else {
@@ -1075,6 +1098,18 @@ function ConvertTo-WacsCommandLineText {
         }
     }
     return ($parts -join ' ')
+}
+
+function Get-MaskedWacsIssueCommandPreview {
+    param(
+        [Parameter(Mandatory)][hashtable]$EnvValues,
+        [string]$CsrAlgorithm = '',
+        [switch]$EnsurePfxDirectory
+    )
+
+    $args = Get-WacsIssueArguments -EnvValues $EnvValues -CsrAlgorithm $CsrAlgorithm -EnsurePfxDirectory:$EnsurePfxDirectory
+    $maskedArgs = Get-MaskedWacsArgumentsText -Args $args
+    return ('wacs.exe ' + (ConvertTo-WacsCommandLineText -Args $maskedArgs))
 }
 
 function Get-WacsIssueArguments {
@@ -1428,6 +1463,8 @@ $FunctionsToExport.Add('Invoke-WacsIssue')
 $FunctionsToExport.Add('Get-MaskedWacsArgumentsText')
 $FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
 $FunctionsToExport.Add('Get-WacsIssueArguments')
+$FunctionsToExport.Add('Get-MaskedWacsIssueCommandPreview')
+$FunctionsToExport.Add('Normalize-WacsScriptParametersText')
 $FunctionsToExport.Add('Get-NormalizedCsvValues')
 $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')

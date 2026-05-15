@@ -6,6 +6,15 @@ $DeviceSchemas = @{
         @{ Name='cert_store_location'; Label='Store location'; Type='choice'; Required=$true; Choices=@('My','WebHosting'); Placeholder='My'; HelpText='Certificate store location for IIS binding' }
     )}
 
+
+    rds = @{ ConnectorType='rds'; Label='Remote Desktop Gateway / RD Web'; Category='local_windows'; Fields=@() }
+    'rds-farm' = @{ ConnectorType='rds-farm'; Label='Remote Desktop Gateway + Session Hosts farm'; Category='local_windows'; Fields=@(
+        @{ Name='session_hosts'; Label='Session hosts'; Type='string'; Required=$true; Placeholder='rdsh01.contoso.local,rdsh02.contoso.local'; HelpText='Comma-separated Session Host FQDNs for farm fan-out' }
+    )}
+    mail = @{ ConnectorType='mail'; Label='Mail server'; Category='server'; Fields=@() }
+    firewall = @{ ConnectorType='firewall'; Label='Firewall / VPN'; Category='network_appliance'; Fields=@() }
+    waf = @{ ConnectorType='waf'; Label='Load balancer / WAF'; Category='network_appliance'; Fields=@() }
+
     adfs = @{ ConnectorType='adfs'; Label='ADFS'; Category='local_windows'; Fields=@() }
     rdp_listener = @{ ConnectorType='rdp_listener'; Label='RDP Listener'; Category='local_windows'; Fields=@() }
     rd_gateway = @{ ConnectorType='rd_gateway'; Label='RD Gateway'; Category='local_windows'; Fields=@() }
@@ -63,6 +72,18 @@ $DeviceSchemas = @{
         @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='KEMP_USER'; HelpText='Environment variable name for API username' },
         @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='KEMP_PASSWORD'; HelpText='Environment variable name for API password' },
         @{ Name='vs_id'; Label='Virtual service ID'; Type='string'; Required=$true; Placeholder='1'; HelpText='LoadMaster virtual service id' }
+    )}
+
+
+    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
+    )}
+    sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='sophos.example.com'; HelpText='Sophos management endpoint' }
+    )}
+    custom = @{ ConnectorType='custom'; Label='Custom script'; Category='custom'; Fields=@(
+        @{ Name='script_path'; Label='Script path'; Type='string'; Required=$true; Placeholder='Scripts\my-deploy.ps1'; HelpText='Operator-provided deployment script path' },
+        @{ Name='script_parameters'; Label='Script parameters'; Type='string'; Required=$false; Placeholder='{CertThumbprint}'; HelpText='WACS script parameters for the custom script' }
     )}
 
     java_keystore = @{ ConnectorType='java_keystore'; Label='Java KeyStore'; Category='external_dependency'; Disabled=$true; Requires='JDK (keytool.exe)'; Fields=@(
