@@ -1,4 +1,5 @@
 . "$PSScriptRoot/Device-Schemas.ps1"
+. "$PSScriptRoot/Connector-Registry.ps1"
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 [Console]::OutputEncoding = [System.Text.Encoding]::ASCII
@@ -8,7 +9,9 @@ Import-Module "$PSScriptRoot/../core/Config-Store.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Native-Process.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Simple-Acme-Reconciler.psm1" -Force -Global
+Import-Module (Join-Path $PSScriptRoot '..\core\Crypto.psm1') -Force
 . "$PSScriptRoot/Device-Schemas.ps1"
+. "$PSScriptRoot/Connector-Registry.ps1"
 . "$PSScriptRoot/Menu-Tree.ps1"
 
 if (-not (Get-Command -Name Resolve-BootstrapEnvPath -CommandType Function -ErrorAction SilentlyContinue)) {
@@ -75,26 +78,29 @@ function Get-GuidedPipelineTemplate {
         [Parameter(Mandatory)][string]$ValidationMode
     )
 
-    $base = Get-SafeDefaultPipeline
-    switch ($TargetSystem) {
-        'iis' {
-            $base.ACME_SOURCE_PLUGIN = 'iis'
-            $base.ACME_VALIDATION_MODE = $ValidationMode
-            $base.ACME_INSTALLATION_PLUGINS = 'iis'
-            $base.ACME_SCRIPT_PATH = ''
-            $base.ACME_SCRIPT_PARAMETERS = ''
-        }
-        'rds' {
-            $base.ACME_SOURCE_PLUGIN = 'manual'
-            $base.ACME_VALIDATION_MODE = $ValidationMode
-            $base.ACME_INSTALLATION_PLUGINS = 'script'
-            $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName 'cert2rds.ps1'
-            $base.ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
-        }
-        default {
-            throw "Unsupported guided target '$TargetSystem'."
-        }
+    $connector = Get-AcmeConnectorRegistryEntry -ConnectorId $TargetSystem
+    if (-not $connector.FirstRunAcmeSupported) {
+        throw "Connector '$TargetSystem' is available after certificate issuance / post-deployment only. Use Deployment targets after the certificate exists."
     }
+
+    $base = Get-SafeDefaultPipeline
+    $base.ACME_SOURCE_PLUGIN = [string]$connector.DefaultSourcePlugin
+    $base.ACME_ORDER_PLUGIN = [string]$connector.DefaultOrderPlugin
+    $base.ACME_STORE_PLUGIN = [string]$connector.DefaultStorePlugin
+    $base.ACME_VALIDATION_MODE = $ValidationMode
+    $base.ACME_INSTALLATION_PLUGINS = [string]$connector.DefaultInstallationPlugin
+    $base.ACME_SCRIPT_PARAMETERS = [string]$connector.DefaultScriptParameters
+    if ([string]::IsNullOrWhiteSpace([string]$connector.ScriptFileName)) {
+        $base.ACME_SCRIPT_PATH = ''
+    } else {
+        $base.ACME_SCRIPT_PATH = Resolve-DeploymentScriptPath -ScriptFileName ([string]$connector.ScriptFileName)
+    }
+
+    if ([string]$connector.DefaultInstallationPlugin -eq 'iis') {
+        $base.ACME_SCRIPT_PATH = ''
+        $base.ACME_SCRIPT_PARAMETERS = ''
+    }
+
     return $base
 }
 
@@ -221,9 +227,8 @@ function Assert-AcmeSetupValues {
 
     $domains = @([string]$Values.DOMAINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     foreach ($domain in $domains) {
-        $isWildcard = $domain.StartsWith('*.')
-        $domainToValidate = if ($isWildcard) { $domain.Substring(2) } else { $domain }
-        if ([string]::IsNullOrWhiteSpace($domainToValidate) -or $domainToValidate -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
+        $domainToCheck = if ($domain -match '^\*\.') { $domain.Substring(2) } else { $domain }
+        if ($domainToCheck -notmatch '^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') {
             throw "Invalid domain format: $domain"
         }
     }
@@ -236,7 +241,7 @@ function Assert-AcmeSetupValues {
             $scriptPath = Resolve-AbsoluteSetupPath -PathValue $scriptPath
             $Values.ACME_SCRIPT_PATH = $scriptPath
         }
-        if (-not (Test-Path -LiteralPath $scriptPath)) { throw "Script installation selected but script path does not exist: $scriptPath" }
+        if (-not (Test-Path -LiteralPath $scriptPath)) { Write-Warning "Script path does not exist yet: $scriptPath. Ensure the script is deployed before running wacs.exe." }
         if ([string]::IsNullOrWhiteSpace([string]$Values.ACME_SCRIPT_PARAMETERS)) { throw 'Script installation selected but ACME_SCRIPT_PARAMETERS is empty.' }
     }
 
@@ -259,12 +264,12 @@ function Resolve-DeploymentScriptPath {
         throw 'Deployment script file name is empty.'
     }
 
-    if ([System.IO.Path]::IsPathRooted($ScriptFileName)) {
-        $candidate = $ScriptFileName
-    } else {
-        $projectRoot = Split-Path $PSScriptRoot -Parent
-        $candidate = Join-Path $projectRoot (Join-Path 'Scripts' $ScriptFileName)
+    if ($ScriptFileName -match '[\\/]' -or [System.IO.Path]::IsPathRooted($ScriptFileName)) {
+        throw "Deployment script must be provided as a file name only (for example 'cert2rds.ps1'). Received: $ScriptFileName"
     }
+
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    $candidate = Join-Path $projectRoot (Join-Path 'Scripts' $ScriptFileName)
 
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
         throw @"
@@ -530,6 +535,107 @@ function Show-SimpleAcmeDiagnosticSummary {
     }
 }
 
+
+function Test-AcmeTuiWiring {
+    param([string]$ProjectRoot = (Split-Path $PSScriptRoot -Parent))
+
+    $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+    $checks = New-Object System.Collections.Generic.List[object]
+    function Add-AcmeTuiWiringCheck { param([string]$Name,[bool]$Passed,[string]$Detail = '') $checks.Add([pscustomobject]@{ Name=$Name; Passed=$Passed; Detail=$Detail }) | Out-Null }
+
+    $repoFileSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $excludedRootDirs = @('.git','out','runtime','logs')
+    if (Test-Path -LiteralPath $ProjectRoot -PathType Container) {
+        $pendingDirs = New-Object 'System.Collections.Generic.Stack[string]'
+        $pendingDirs.Push([System.IO.Path]::GetFullPath($ProjectRoot))
+        while ($pendingDirs.Count -gt 0) {
+            $currentDir = $pendingDirs.Pop()
+            foreach ($file in @(Get-ChildItem -LiteralPath $currentDir -File -ErrorAction SilentlyContinue)) {
+                $relative = $file.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+                [void]$repoFileSet.Add($relative)
+            }
+            foreach ($dir in @(Get-ChildItem -LiteralPath $currentDir -Directory -ErrorAction SilentlyContinue)) {
+                $relativeDir = $dir.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+                $firstSegment = ($relativeDir -split '/')[0]
+                if ($excludedRootDirs -contains $firstSegment) { continue }
+                $pendingDirs.Push($dir.FullName)
+            }
+        }
+    }
+
+    function Test-RepoPathExistsCaseInsensitive {
+        param([Parameter(Mandatory)][string]$RelativePath)
+        $literal = Join-Path $ProjectRoot $RelativePath
+        if (Test-Path -LiteralPath $literal -PathType Leaf) { return $true }
+        $normalized = $RelativePath -replace '\\','/'
+        return $repoFileSet.Contains($normalized)
+    }
+
+    $registry = Get-AcmeConnectorRegistry
+    Add-AcmeTuiWiringCheck -Name 'Connector registry loaded' -Passed ($registry.Count -ge 11) -Detail (($registry.Keys | Sort-Object) -join ',')
+
+    foreach ($entry in @($registry.Values | Sort-Object ConnectorId)) {
+        if ($entry.FirstRunAcmeSupported -and [string]$entry.ConnectorId -ne 'custom' -and [string]$entry.DefaultInstallationPlugin -eq 'script') {
+            $hasScript = -not [string]::IsNullOrWhiteSpace([string]$entry.ScriptFileName)
+            Add-AcmeTuiWiringCheck -Name "First-run script mapping: $($entry.ConnectorId)" -Passed $hasScript -Detail ([string]$entry.ScriptFileName)
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry.ScriptFileName)) {
+            $relative = Join-Path 'Scripts' ([string]$entry.ScriptFileName)
+            Add-AcmeTuiWiringCheck -Name "Mapped script exists: $($entry.ConnectorId)" -Passed (Test-RepoPathExistsCaseInsensitive -RelativePath $relative) -Detail $relative
+        }
+    }
+
+    $manifestPath = Join-Path $ProjectRoot 'build/release-file-list.txt'
+    $manifestConnectorFiles = @()
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifestConnectorFiles = @(Get-Content -LiteralPath $manifestPath -Encoding UTF8 | Where-Object { $_ -match '^(scripts|setup)/.*(cert2|deploy-|Connector-Registry)' })
+    }
+    foreach ($relative in $manifestConnectorFiles) {
+        Add-AcmeTuiWiringCheck -Name "Release manifest file exists: $relative" -Passed (Test-RepoPathExistsCaseInsensitive -RelativePath $relative) -Detail $relative
+    }
+
+    $formText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'setup/Form-Runner.psm1') -Raw -Encoding UTF8
+    $coreText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'core/Simple-Acme-Reconciler.psm1') -Raw -Encoding UTF8
+    Add-AcmeTuiWiringCheck -Name 'All WACS preview helpers use Get-WacsIssueArguments' -Passed ($coreText -match 'function Get-MaskedWacsIssueCommandPreview[\s\S]*Get-WacsIssueArguments[\s\S]*Get-MaskedWacsArgumentsText[\s\S]*ConvertTo-WacsCommandLineText') -Detail 'Get-MaskedWacsIssueCommandPreview'
+    Add-AcmeTuiWiringCheck -Name 'No manual wacs.exe preview strings remain in TUI' -Passed ($formText -notmatch ('wacs' + '\.' + 'exe --accepttos') -and $formText -notmatch (' --source manual' + ' --order single ')) -Detail 'setup/Form-Runner.psm1'
+
+    . (Join-Path $ProjectRoot 'setup/Device-Schemas.ps1')
+    foreach ($schemaKey in @($DeviceSchemas.Keys | Sort-Object)) {
+        $status = if ($registry.ContainsKey($schemaKey)) { 'registered' } else { 'legacy/post-deployment schema without first-run registry entry' }
+        Add-AcmeTuiWiringCheck -Name "Device schema registry status: $schemaKey" -Passed $true -Detail $status
+    }
+
+    . (Join-Path $ProjectRoot 'setup/Menu-Tree.ps1')
+    $menuActionKeys = New-Object System.Collections.Generic.List[string]
+    function Add-MenuActionKeys { param($Items) foreach ($item in @($Items)) { if ([string]$item.Type -eq 'action') { $menuActionKeys.Add([string]$item.Key) | Out-Null } elseif (($item -is [hashtable]) -and $item.ContainsKey('Items')) { Add-MenuActionKeys -Items $item.Items } } }
+    Add-MenuActionKeys -Items $CertificateMenuTree.Items
+    $setupText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'certificate-setup.ps1') -Raw -Encoding UTF8
+    foreach ($key in @($menuActionKeys | Sort-Object -Unique | Where-Object { $_ -ne 'exit' })) {
+        Add-AcmeTuiWiringCheck -Name "TUI action dispatch: $key" -Passed ($setupText -match [regex]::Escape("'$key'")) -Detail $key
+    }
+
+    $failedCount = 0
+    foreach ($check in $checks.ToArray()) { if (-not $check.Passed) { $failedCount++ } }
+    return [pscustomobject]@{
+        Passed = ($failedCount -eq 0)
+        Checks = $checks.ToArray()
+    }
+}
+
+function Invoke-AcmeTuiDiagnostics {
+    param([string]$ProjectRoot = (Split-Path $PSScriptRoot -Parent))
+    $result = Test-AcmeTuiWiring -ProjectRoot $ProjectRoot
+    [Console]::WriteLine('ACME TUI wiring diagnostics')
+    [Console]::WriteLine('---------------------------')
+    foreach ($check in @($result.Checks)) {
+        $status = if ($check.Passed) { 'PASS' } else { 'FAIL' }
+        [Console]::WriteLine("[$status] $($check.Name) $($check.Detail)")
+    }
+    [Console]::WriteLine("Overall: $(if ($result.Passed) { 'PASS' } else { 'FAIL' })")
+    Wait-ForOperatorReturn
+    return $result
+}
+
 function Invoke-ViewLogsDiagnostics {
     param([string]$ProjectRoot)
     $locations = Get-SimpleAcmeLogLocations -ProjectRoot $ProjectRoot
@@ -744,9 +850,31 @@ function Invoke-AcmeSettingsMenu {
             'eab' {
                 $envValues = @{}
                 if (Test-Path -LiteralPath $resolvedEnvFilePath -PathType Leaf) { $envValues = Read-EnvFile -Path $resolvedEnvFilePath }
-                $envValues.ACME_KID = [string](Read-Host 'ACME_KID')
-                $envValues.ACME_HMAC_SECRET = [string](Read-Host 'ACME_HMAC_SECRET')
-                Write-EnvFile -Values $envValues -Path $resolvedEnvFilePath
+                $currentKid = if ($envValues.ContainsKey('ACME_KID')) { [string]$envValues.ACME_KID } else { '' }
+                $currentSecret = if ($envValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$envValues.ACME_HMAC_SECRET } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($currentKid) -and -not [string]::IsNullOrWhiteSpace($currentSecret)) {
+                    [Console]::WriteLine('[1] Keep existing credentials')
+                    [Console]::WriteLine('[2] Replace credentials')
+                    $choice = Read-SetupChoice -Prompt 'EAB credentials' -Options @{ '1'='keep'; '2'='replace' } -DefaultKey '1' -AllowBack
+                    if ($choice -in @('__CANCEL__','__BACK__','keep')) {
+                        [Console]::WriteLine('Kept existing EAB credentials.')
+                        Wait-ForOperatorReturn
+                        continue
+                    }
+                }
+                $newKid = ([string](Read-Host 'ACME_KID')).Trim()
+                $newSecret = ([string](Read-Host 'ACME_HMAC_SECRET')).Trim()
+                if ([string]::IsNullOrWhiteSpace($newKid) -or [string]::IsNullOrWhiteSpace($newSecret)) {
+                    [Console]::WriteLine('EAB credentials were not changed: both values are required.')
+                    Wait-ForOperatorReturn
+                    continue
+                }
+                $envValues.ACME_KID = $newKid
+                $envValues.ACME_HMAC_SECRET = $newSecret
+                $toWrite = @{}
+                foreach ($k in $envValues.Keys) { if ($k -notin @('ACME_KID','ACME_HMAC_SECRET')) { $toWrite[$k] = $envValues[$k] } }
+                Write-EnvFile -Values $toWrite -Path $resolvedEnvFilePath
+                if ($envValues.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$envValues.CERTIFICATE_CONFIG_DIR) -Values $envValues }
                 [Console]::WriteLine('Updated EAB credentials.')
                 Wait-ForOperatorReturn
             }
@@ -774,10 +902,8 @@ function Invoke-AcmeSettingsMenu {
                     Wait-ForOperatorReturn
                     continue
                 }
-                $scriptParameters = if ($envValues.ContainsKey('ACME_SCRIPT_PARAMETERS')) { [string]$envValues.ACME_SCRIPT_PARAMETERS } else { '{CertThumbprint}' }
-                $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$envValues.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$envValues.DOMAINS) --store certificatestore --installation script --script $([string]$envValues.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
-                if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
-                if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
+                $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+                $line = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
                 [Console]::WriteLine($line)
                 Wait-ForOperatorReturn
             }
@@ -962,32 +1088,68 @@ function Save-SecurePlatformConfig {
 
     if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
 
-    $secureEnvPath = Join-Path $ConfigDir 'env.secure'
-    $credPath = Join-Path $ConfigDir 'credentials.sec'
-    $mappingPath = Join-Path $ConfigDir 'mappings.json'
-    $mappingCompatPath = Join-Path $ConfigDir 'mapping.json'
-
-    $envSnapshot = @{}
+    $secretKeys  = @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY','ACME_PFX_PASSWORD')
+    $allowedPlainKeys = @('DOMAINS','ACME_DIRECTORY','ACME_WACS_PATH','CERTIFICATE_CONFIG_DIR','CERTIFICATE_DROP_DIR','CERTIFICATE_STATE_DIR','CERTIFICATE_LOG_DIR','ACME_DATA_DIR')
+    $credMap = @{}
+    foreach ($k in $secretKeys) {
+        $v = if ($Values.ContainsKey($k)) { [string]$Values[$k] } else { '' }
+        $credMap[$k] = Protect-DpapiValue -Plaintext $v -Scope LocalMachine
+    }
+    [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'credentials.sec'), ($credMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+    $envMap = @{}
     foreach ($k in $Values.Keys) {
-        if ($k -notin @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')) {
-            $envSnapshot[$k] = [string]$Values[$k]
+        if ($k -notin $secretKeys -and $k -notin $allowedPlainKeys) {
+            $envMap[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
         }
     }
-    $envSnapshot | Export-Clixml -Path $secureEnvPath
+    [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'env.secure'), ($envMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+    $mappingPath = Join-Path $ConfigDir 'mappings.json'
+    $mappingCompatPath = Join-Path $ConfigDir 'mapping.json'
+    if (-not (Test-Path -LiteralPath $mappingPath)) { '[]' | Set-Content -LiteralPath $mappingPath -Encoding UTF8 }
+    if (-not (Test-Path -LiteralPath $mappingCompatPath)) { '[]' | Set-Content -LiteralPath $mappingCompatPath -Encoding UTF8 }
+}
 
-    $credObject = [pscustomobject]@{
-        ACME_KID = ConvertTo-SecureString ([string]$Values.ACME_KID) -AsPlainText -Force
-        ACME_HMAC_SECRET = ConvertTo-SecureString ([string]$Values.ACME_HMAC_SECRET) -AsPlainText -Force
-        CERTIFICATE_API_KEY = ConvertTo-SecureString ([string]$Values.CERTIFICATE_API_KEY) -AsPlainText -Force
-    }
-    $credObject | Export-Clixml -Path $credPath
 
-    if (-not (Test-Path -LiteralPath $mappingPath)) {
-        @() | ConvertTo-Json | Set-Content -LiteralPath $mappingPath -Encoding UTF8
+
+function Resolve-SetupConfigDir {
+    param([hashtable]$Values = @{})
+
+    $configDir = ''
+    if ($null -ne $Values -and $Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { $configDir = [string]$Values.CERTIFICATE_CONFIG_DIR }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'config' }
+    return [System.IO.Path]::GetFullPath($configDir)
+}
+
+function ConvertTo-DeploymentEnvValue {
+    param([string]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -match "`r|`n") { throw 'Deployment config values must be single-line strings.' }
+    return [string]$Value
+}
+
+function Write-ExternalDeploymentConfigFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Values
+    )
+
+    $directory = Split-Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($key in $Values.Keys) {
+        $name = [string]$key
+        if ($name -notmatch '^[A-Z0-9_]+$') { throw "Invalid deployment config key '$name'. Keys must be uppercase A-Z, 0-9, or underscore." }
+        $value = ConvertTo-DeploymentEnvValue -Value ([string]$Values[$key])
+        $lines.Add(('{0}={1}' -f $name, $value))
     }
-    if (-not (Test-Path -LiteralPath $mappingCompatPath)) {
-        @() | ConvertTo-Json | Set-Content -LiteralPath $mappingCompatPath -Encoding UTF8
-    }
+    [System.IO.File]::WriteAllLines($Path, [string[]]$lines.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function ConvertTo-SingleQuotedPowerShellArgument {
+    param([string]$Value)
+    return ("'{0}'" -f ([string]$Value).Replace("'", "''"))
 }
 
 function Save-RenewalMapping {
@@ -1009,15 +1171,7 @@ function Save-RenewalMapping {
 
 function Get-ConnectorScriptByIntent {
     param([Parameter(Mandatory)][string]$TargetIntent)
-    switch ($TargetIntent) {
-        'rds' { return 'cert2rds.ps1' }
-        'iis' { return 'cert2iis.ps1' }
-        'mail' { throw 'This target type is not implemented yet.' }
-        'firewall' { throw 'This target type is not implemented yet.' }
-        'waf' { throw 'This target type is not implemented yet.' }
-        'custom' { throw 'This target type is not implemented yet.' }
-        default { throw "Unsupported target intent: $TargetIntent" }
-    }
+    return Get-AcmeConnectorScriptFileName -ConnectorId $TargetIntent
 }
 
 function Read-AcmeProviderSelection {
@@ -1032,11 +1186,13 @@ function Read-AcmeProviderSelection {
     $providerChoice = Read-SetupChoice -Prompt 'Provider' -Options @{ '1'='letsencrypt'; '2'='networking4all'; '3'='custom'; '0'='back' } -DefaultKey '1' -AllowBack
     if ($providerChoice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
 
+    $existingKid = if ($null -ne $CurrentValues -and $CurrentValues.ContainsKey('ACME_KID')) { [string]$CurrentValues.ACME_KID } else { '' }
+    $existingSecret = if ($null -ne $CurrentValues -and $CurrentValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$CurrentValues.ACME_HMAC_SECRET } else { '' }
     $values = @{
         ACME_PROVIDER = [string]$providerChoice
         ACME_REQUIRES_EAB = '0'
-        ACME_KID = ''
-        ACME_HMAC_SECRET = ''
+        ACME_KID = $existingKid
+        ACME_HMAC_SECRET = $existingSecret
         ACME_VALIDATION_MODE = 'none'
         ACME_NETWORKING4ALL_ENVIRONMENT = ''
         ACME_NETWORKING4ALL_PRODUCT = ''
@@ -1106,6 +1262,13 @@ function Read-AcmeProviderSelection {
             $warnings.Add('SAN product selected with one domain configured.')
         }
 
+        if ($hasWildcardDomain -and -not $isWildcardProduct) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine("Wildcard domain detected in DOMAINS, but selected product '$productChoice' is non-wildcard.")
+            [Console]::WriteLine('Select a *-wildcard product or remove wildcard domains before continuing.')
+            Read-SetupChoice -Prompt 'Press [0] Back' -Options @{ '0'='back' } -DefaultKey '0' -AllowBack | Out-Null
+            return '__BACK__'
+        }
         if ($warnings.Count -gt 0) {
             [Console]::WriteLine('')
             [Console]::WriteLine('Domain/product sanity warnings:')
@@ -1167,6 +1330,12 @@ function Resolve-EabCredentialsForSetup {
             $TargetValues.ACME_HMAC_SECRET = $existingSecret
             return 'ok'
         }
+        $confirmReplace = Read-SetupChoice -Prompt 'Replace credentials: [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+        if ($confirmReplace -in @('__CANCEL__','__BACK__','no')) {
+            $TargetValues.ACME_KID = $existingKid
+            $TargetValues.ACME_HMAC_SECRET = $existingSecret
+            return 'ok'
+        }
     } elseif ($hasKid -or $hasSecret) {
         Start-ConsoleSection -Title 'EAB credentials'
         $kidState = 'not set'
@@ -1181,14 +1350,40 @@ function Resolve-EabCredentialsForSetup {
     }
 
     [Console]::WriteLine('')
-    $kid = [string](Read-Host 'ACME_KID')
+    $kid = ([string](Read-Host 'ACME_KID')).Trim()
     if ([string]::IsNullOrWhiteSpace($kid)) { return '__BACK__' }
     [Console]::WriteLine('')
-    $secret = [string](Read-Host 'ACME_HMAC_SECRET')
+    $secret = ([string](Read-Host 'ACME_HMAC_SECRET')).Trim()
     if ([string]::IsNullOrWhiteSpace($secret)) { return '__BACK__' }
     $TargetValues.ACME_KID = $kid
     $TargetValues.ACME_HMAC_SECRET = $secret
     return 'ok'
+}
+
+function Read-EffectiveSavedEnvValues {
+    param(
+        [Parameter(Mandatory)][string]$EnvFilePath,
+        [string]$ConfigDir = ''
+    )
+
+    if (-not (Get-Command -Name Read-EffectiveEnvFile -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw "Required command 'Read-EffectiveEnvFile' is unavailable. Import core/Env-Loader.psm1 before invoking setup actions."
+    }
+
+    $effective = Read-EffectiveEnvFile -Path $EnvFilePath
+    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $effective.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
+        try {
+            if (Get-Command -Name Import-SecureOverlay -CommandType Function -ErrorAction SilentlyContinue) {
+                $effective = Import-SecureOverlay -Values $effective
+            } else {
+                Write-Verbose "Import-SecureOverlay is not exported; using values from Read-EffectiveEnvFile for '$EnvFilePath'."
+            }
+        } catch {
+            throw "Failed to apply secure overlay while reloading saved settings from '$EnvFilePath': $($_.Exception.Message)"
+        }
+    }
+    return $effective
 }
 
 function Assert-SavedEnvMatchesSetup {
@@ -1196,7 +1391,20 @@ function Assert-SavedEnvMatchesSetup {
         [Parameter(Mandatory)][hashtable]$Expected,
         [Parameter(Mandatory)][hashtable]$Actual
     )
-    foreach ($key in @('ACME_PROVIDER','ACME_DIRECTORY','ACME_REQUIRES_EAB','ACME_NETWORKING4ALL_ENVIRONMENT','ACME_NETWORKING4ALL_PRODUCT','DOMAINS')) {
+
+    $keysToCompare = New-Object System.Collections.Generic.List[string]
+    foreach ($key in @('ACME_DIRECTORY','DOMAINS','ACME_PROVIDER','ACME_REQUIRES_EAB')) {
+        [void]$keysToCompare.Add($key)
+    }
+
+    $requiresEab = [string]$Expected['ACME_REQUIRES_EAB'] -eq '1'
+    if ($requiresEab) {
+        foreach ($key in @('ACME_KID','ACME_HMAC_SECRET')) {
+            [void]$keysToCompare.Add($key)
+        }
+    }
+
+    foreach ($key in $keysToCompare) {
         $expectedValue = ''
         $actualValue = ''
         if ($Expected.ContainsKey($key)) { $expectedValue = [string]$Expected[$key] }
@@ -1246,16 +1454,29 @@ function Invoke-AcmeForm {
 
     Start-ConsoleSection -Title 'Target selection' -Clear
     [Console]::WriteLine('What do you want to secure?')
-    [Console]::WriteLine('[1] Remote Desktop Gateway (RDS)')
-    [Console]::WriteLine('[2] Website (IIS)')
-    [Console]::WriteLine('[3] Mail server (SMTP/IMAP/POP3)')
-    [Console]::WriteLine('[4] Firewall / VPN')
-    [Console]::WriteLine('[5] Load balancer / WAF')
-    [Console]::WriteLine('[6] Custom system')
-    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='iis'; '3'='mail'; '4'='firewall'; '5'='waf'; '6'='custom' } -DefaultKey '1'
+    [Console]::WriteLine('[1] Remote Desktop Gateway / RD Web on this server')
+    [Console]::WriteLine('[2] Remote Desktop Gateway + Session Hosts (farm)')
+    [Console]::WriteLine('[3] Website (IIS)')
+    [Console]::WriteLine('[4] Mail server (SMTP/IMAP/POP3)')
+    [Console]::WriteLine('[5] Firewall / VPN')
+    [Console]::WriteLine('[6] Load balancer / WAF')
+    [Console]::WriteLine('[7] Custom script')
+    [Console]::WriteLine('[8] Kemp LoadMaster (Available after certificate issuance / post-deployment only)')
+    [Console]::WriteLine('[9] NetScaler / Citrix ADC (Available after certificate issuance / post-deployment only)')
+    [Console]::WriteLine('[10] Palo Alto firewall (Available after certificate issuance / post-deployment only)')
+    [Console]::WriteLine('[11] Sophos firewall (Available after certificate issuance / post-deployment only)')
+    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='rds-farm'; '3'='iis'; '4'='mail'; '5'='firewall'; '6'='waf'; '7'='custom'; '8'='kemp'; '9'='netscaler'; '10'='paloalto'; '11'='sophos' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
+        return $null
+    }
+    $selectedConnector = Get-AcmeConnectorRegistryEntry -ConnectorId $target
+    if (-not $selectedConnector.FirstRunAcmeSupported) {
+        [Console]::WriteLine('')
+        [Console]::WriteLine("$([string]$selectedConnector.Label) is available after certificate issuance / post-deployment only.")
+        [Console]::WriteLine('Open Deployment targets after issuing the certificate so appliance-specific fields and script parameters can be collected safely.')
+        Wait-ForOperatorReturn
         return $null
     }
 
@@ -1272,31 +1493,38 @@ function Invoke-AcmeForm {
     }
 
     Start-ConsoleSection -Title 'Certificate distribution selection'
-    [Console]::WriteLine('Will this certificate be used on more than one system?')
-    [Console]::WriteLine('[1] No - only this system (recommended, most secure)')
-    [Console]::WriteLine('[2] Yes - multiple systems (RDS farm, firewall, etc.)')
-    $distributionMode = Read-SetupChoice -Prompt 'Distribution' -Options @{ '1'='single'; '2'='multi' } -DefaultKey '1' -AllowBack
-    if ($distributionMode -in @('__CANCEL__','__BACK__')) {
-        [Console]::WriteLine('')
-        [Console]::WriteLine('Setup cancelled.')
-        return $null
+    if ($target -eq 'rds-farm') {
+        [Console]::WriteLine('RDS Gateway + Session Hosts farm always uses multi-system PFX distribution.')
+        [Console]::WriteLine('The setup will collect a PFX output directory and password before generating the WACS preview.')
+        $distributionMode = 'multi'
+    } else {
+        [Console]::WriteLine('Will this certificate be used on more than one system?')
+        [Console]::WriteLine('[1] No - only this system (recommended, most secure)')
+        [Console]::WriteLine('[2] Yes - multiple systems (RDS farm, firewall, etc.)')
+        $distributionMode = Read-SetupChoice -Prompt 'Distribution' -Options @{ '1'='single'; '2'='multi' } -DefaultKey '1' -AllowBack
+        if ($distributionMode -in @('__CANCEL__','__BACK__')) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
     }
 
     $values = @{}
     foreach ($k in $curr.Keys) { $values[$k] = [string]$curr[$k] }
+    $values.CERTIFICATE_CONFIG_DIR = Resolve-SetupConfigDir -Values $values
     $domains = Read-DomainsInput
     if ($domains -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
         return $null
     }
-    $providerResult = Read-AcmeProviderSelection -CurrentValues $curr
+    $values.DOMAINS = $domains
+    $providerResult = Read-AcmeProviderSelection -CurrentValues $values
     if ($providerResult -in @('__BACK__','__CANCEL__') -or $null -eq $providerResult) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
         return $null
     }
-    $values.DOMAINS = $domains
     foreach ($key in $providerResult.Keys) {
         $values[$key] = [string]$providerResult[$key]
     }
@@ -1332,6 +1560,17 @@ function Invoke-AcmeForm {
         }
     }
     $values.ACME_ACCOUNT_NAME = ''
+    if ($target -eq 'custom') {
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Custom system deployment script')
+        [Console]::WriteLine('Provide a script path relative to project root or an absolute path.')
+        $customScriptPath = [string](Read-Host 'Script path')
+        if ([string]::IsNullOrWhiteSpace($customScriptPath)) { return $null }
+        $values.ACME_SCRIPT_PATH = $customScriptPath
+        $customScriptParams = [string](Read-Host 'Script parameters (default: {CertThumbprint})')
+        if ([string]::IsNullOrWhiteSpace($customScriptParams)) { $customScriptParams = '{CertThumbprint}' }
+        $values.ACME_SCRIPT_PARAMETERS = $customScriptParams
+    }
     if ($curr.ContainsKey('ACME_SCRIPT_PATH')) {
         $existingScriptPath = Resolve-AbsoluteSetupPath -PathValue ([string]$curr.ACME_SCRIPT_PATH)
         $sameTarget = $curr.ContainsKey('ACME_TARGET_SYSTEM') -and ([string]$curr.ACME_TARGET_SYSTEM).ToLowerInvariant() -eq $target
@@ -1347,21 +1586,30 @@ function Invoke-AcmeForm {
     if ($distributionMode -eq 'multi') {
         [Console]::WriteLine('')
         [Console]::WriteLine('Certificates used on multiple systems require access to the private key.')
-        [Console]::WriteLine('Choose distribution method:')
-        [Console]::WriteLine('[1] Windows systems (enable exportable key)')
-        [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
-        $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
-        if ($multiChoice -in @('__CANCEL__','__BACK__')) {
-            [Console]::WriteLine('')
-            [Console]::WriteLine('Setup cancelled.')
-            return $null
+        if ($target -eq 'rds-farm') {
+            [Console]::WriteLine('RDS farm mode requires PFX distribution so the private key can be imported on Session Hosts.')
+            $multiChoice = 'pfx'
+        } else {
+            [Console]::WriteLine('Choose distribution method:')
+            [Console]::WriteLine('[1] Windows systems (enable exportable key)')
+            [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
+            $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
+            if ($multiChoice -in @('__CANCEL__','__BACK__')) {
+                [Console]::WriteLine('')
+                [Console]::WriteLine('Setup cancelled.')
+                return $null
+            }
         }
-        [Console]::WriteLine('Enabling exportable keys reduces security because private keys can be transferred.')
-        $continue = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
-        if ($continue -in @('__CANCEL__','__BACK__','no')) {
+        if ($multiChoice -eq 'exportable') {
             [Console]::WriteLine('')
-            [Console]::WriteLine('Setup cancelled.')
-            return $null
+            [Console]::WriteLine('Warning: enabling exportable private keys reduces security.')
+            [Console]::WriteLine('The private key can be transferred off this server.')
+            $continue = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+            if ($continue -in @('__CANCEL__','__BACK__','no')) {
+                [Console]::WriteLine('')
+                [Console]::WriteLine('Setup cancelled.')
+                return $null
+            }
         }
 
         if ($multiChoice -eq 'exportable') {
@@ -1371,10 +1619,29 @@ function Invoke-AcmeForm {
             $values.Store_CertificateStore_PrivateKeyExportable = 'true'
         } else {
             $values.ACME_PRIVATE_KEY_STRATEGY = 'pfx-distribution'
-            $values.ACME_STORE_PLUGIN = 'pfxfile'
+            $values.ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
             $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
             $values.Store_CertificateStore_PrivateKeyExportable = 'false'
-            $values.ACME_INSTALLATION_PLUGINS = 'script,pfxfile'
+            $values.ACME_INSTALLATION_PLUGINS = 'script'
+            $pfxPath = ''
+            while ([string]::IsNullOrWhiteSpace($pfxPath)) {
+                $pfxPath = [string](Read-Host 'PFX output directory (e.g. C:\certs)')
+                $pfxPath = $pfxPath.Trim()
+                if ([System.IO.Path]::GetExtension($pfxPath) -ne '') {
+                    Write-Warning 'Enter a directory path, not a file path (e.g. C:\certs, not C:\certs\certificate.pfx).'
+                    $pfxPath = ''
+                }
+            }
+            $values.ACME_PFX_FILE_PATH = $pfxPath
+            $pfxPasswordInput = ''
+            while ($pfxPasswordInput.Length -lt 8) {
+                $pfxPasswordInput = [string](Read-Host 'PFX file password (min 8 chars, stored encrypted)')
+                $pfxPasswordInput = $pfxPasswordInput.Trim()
+                if ($pfxPasswordInput.Length -lt 8) {
+                    Write-Warning 'PFX password must be at least 8 characters.'
+                }
+            }
+            $values.ACME_PFX_PASSWORD = $pfxPasswordInput
         }
 
         $values.ACME_RENEWAL_MODE = 'multi-endpoint'
@@ -1431,11 +1698,78 @@ function Invoke-AcmeForm {
             break
         }
     }
-    if (-not $values.ContainsKey('ACME_ALLOW_CSR_FALLBACK') -or [string]::IsNullOrWhiteSpace([string]$values.ACME_ALLOW_CSR_FALLBACK)) { $values.ACME_ALLOW_CSR_FALLBACK = '0' }
+    if (-not $values.ContainsKey('ACME_ALLOW_CSR_FALLBACK') -or [string]::IsNullOrWhiteSpace([string]$values.ACME_ALLOW_CSR_FALLBACK)) { $values.ACME_ALLOW_CSR_FALLBACK = '1' }
     $values.TARGET_SYSTEM = $target
     $values.TARGET_LOCATION = $location
     $values.ACME_TARGET_SYSTEM = $target
     $values.ACME_TARGET_LOCATION = $location
+
+    if ($target -eq 'rds-farm') {
+        Start-ConsoleSection -Title 'RDS Gateway + Session Hosts mode'
+        [Console]::WriteLine('This server acts as the RDS Gateway. Remote Session Hosts will receive the certificate via PowerShell Remoting. The private key will be exported as PFX.')
+        [Console]::WriteLine('Enter RDS Session Host names or FQDNs, one per line.')
+        [Console]::WriteLine('Leave a line empty when done. Type Q to cancel.')
+        $sessionHosts = New-Object System.Collections.Generic.List[string]
+        while ($true) {
+            $h = [string](Read-Host 'Session host')
+            if ($h -match '^[Qq]$') { return $null }
+            $h = $h.Trim()
+            if ([string]::IsNullOrWhiteSpace($h)) {
+                if ($sessionHosts.Count -gt 0) { break }
+                Write-Warning 'At least one session host is required.'
+                continue
+            }
+            $sessionHosts.Add($h)
+        }
+        Start-ConsoleSection -Title 'Remote PowerShell authentication'
+        [Console]::WriteLine('Leave empty to use the current logged-on account (Kerberos/Negotiate).')
+        $remoteUser = [string](Read-Host 'Username (leave empty for current user)')
+
+        Start-ConsoleSection -Title 'Important'
+        [Console]::WriteLine('Important: RDS farm mode requires exporting the issued certificate private key as a PFX file to distribute it to the session hosts.')
+        [Console]::WriteLine('This setup will write ACME_PRIVATEKEY_EXPORTABLE=true to env.secure.')
+        $farmConfirm = Read-SetupChoice -Prompt 'Continue? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '2' -AllowBack
+        if ($farmConfirm -ne 'yes') { return $null }
+
+        $deployment = [ordered]@{
+            schema='simple-acme-helper-deployment-targets.v1';
+            targetType='rds-gateway-session-hosts';
+            pfxDistribution=[ordered]@{enabled=$true;exportSourceStore='Cert:\LocalMachine\My';localTempDirectory='runtime';remoteTempDirectory='C:\Windows\Temp\simple-acme-helper';deleteLocalPfxAfterImport=$true;deleteRemotePfxAfterImport=$true};
+            localGateway=[ordered]@{name='rds-gateway';type='rds-gateway';computerName='localhost';method='local';script='Scripts\cert2rds.ps1';enabled=$true};
+            sessionHosts=@()
+        }
+        foreach ($sh in $sessionHosts) {
+            $deployment.sessionHosts += [ordered]@{name=$sh;type='rds-session-host';computerName=$sh;method='powershell-remoting';script='Scripts\deploy-rds-sessionhost.ps1';username=$remoteUser;enabled=$true}
+        }
+        $repoRoot = Split-Path $PSScriptRoot -Parent
+        ($deployment | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path $repoRoot 'deployment-targets.json') -Encoding UTF8
+
+        $values.ACME_SCRIPT_PATH = 'Scripts\deploy-rds-farm.ps1'
+        $resolvedPfxDir = [string]$values.ACME_PFX_FILE_PATH
+        $resolvedSessionHosts = [string]::Join(',', $sessionHosts)
+        $deploymentConfigPath = Join-Path (Join-Path $repoRoot 'runtime\deployment') 'rds-farm.env'
+        $configDir = Resolve-SetupConfigDir -Values $values
+        $values.CERTIFICATE_CONFIG_DIR = $configDir
+        $deploymentConfig = [ordered]@{
+            TARGET_TYPE = 'rds-farm'
+            HOSTS = $resolvedSessionHosts
+            PFX_STORE_PATH = $resolvedPfxDir
+            PFX_PASSWORD_REF = 'ACME_PFX_PASSWORD'
+            CERTIFICATE_CONFIG_DIR = $configDir
+            REMOTE_TEMP_DIRECTORY = 'C:\Windows\Temp\simple-acme-helper'
+            REMOTE_USER = $remoteUser
+            UPDATED_UTC = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-ExternalDeploymentConfigFile -Path $deploymentConfigPath -Values $deploymentConfig
+        $quotedDeploymentConfigPath = ConvertTo-SingleQuotedPowerShellArgument -Value $deploymentConfigPath
+        $values.ACME_SCRIPT_PARAMETERS = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -ConfigFile $quotedDeploymentConfigPath"
+        $values.ACME_PRIVATEKEY_EXPORTABLE = 'true'
+        $values.TARGET_SYSTEM = 'rds-farm'
+        $values.TARGET_LOCATION = 'cluster-farm'
+        $values.ACME_TARGET_SYSTEM = 'rds-farm'
+        $values.ACME_TARGET_LOCATION = 'cluster-farm'
+    }
+
     Start-ConsoleSection -Title 'Review selected settings'
     [Console]::WriteLine("Selected ACME provider: $([string]$values.ACME_PROVIDER)")
     [Console]::WriteLine("Selected ACME environment: $([string]$values.ACME_NETWORKING4ALL_ENVIRONMENT)")
@@ -1455,10 +1789,7 @@ function Invoke-AcmeForm {
     [Console]::WriteLine("Script parameters: $([string]$values.ACME_SCRIPT_PARAMETERS)")
 
     Start-ConsoleSection -Title 'Effective wacs command preview'
-    $scriptParameters = [string]$values.ACME_SCRIPT_PARAMETERS
-    $line = "wacs.exe --accepttos --source manual --order single --baseuri $([string]$values.ACME_DIRECTORY) --validation none --globalvalidation none --host $([string]$values.DOMAINS) --store certificatestore --installation script --script $([string]$values.ACME_SCRIPT_PATH) --scriptparameters `"$scriptParameters`" --csr $([string]$values.ACME_CSR_ALGORITHM)"
-    if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_KID)) { $line += ' --eab-key-identifier <set>' }
-    if (-not [string]::IsNullOrWhiteSpace([string]$values.ACME_HMAC_SECRET)) { $line += ' --eab-key <hidden>' }
+    $line = Get-MaskedWacsIssueCommandPreview -EnvValues $values -CsrAlgorithm ([string]$values.ACME_CSR_ALGORITHM)
     [Console]::WriteLine($line)
 
     Start-ConsoleSection -Title 'Save these settings?'
@@ -1472,27 +1803,26 @@ function Invoke-AcmeForm {
         return $null
     }
 
-    try {
-        Assert-ProviderDirectoryConsistency -Values $values
-        Assert-AcmeSetupValues -Values $values
+    Assert-ProviderDirectoryConsistency -Values $values
+    Assert-AcmeSetupValues -Values $values
 
-        Write-EnvFile -Values $values -Path $resolvedEnvFilePath
-        if ($values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$values.CERTIFICATE_CONFIG_DIR) -Values $values }
-        $reloaded = Read-EnvFile -Path $resolvedEnvFilePath
-        Assert-ProviderDirectoryConsistency -Values $reloaded
-        Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
-        if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
-            throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
-        }
-        [Console]::WriteLine('')
-        [Console]::WriteLine('Saved bootstrap certificate.env for initial simple-acme setup.')
-        return $reloaded
-    } catch {
-        [Console]::WriteLine('')
-        [Console]::WriteLine('Setup could not be saved due to invalid settings:')
-        [Console]::WriteLine($_.Exception.Message)
-        Wait-ForAnyKey -Message 'Press Enter to return to the previous menu.'
-        return $null
+    $plainEnvValues = @{}; foreach ($k in $values.Keys) { if ($k -ne 'ACME_PFX_PASSWORD') { $plainEnvValues[$k] = $values[$k] } }
+    Write-EnvFile -Values $plainEnvValues -Path $resolvedEnvFilePath
+    $configDir = Resolve-SetupConfigDir -Values $values
+    $values.CERTIFICATE_CONFIG_DIR = $configDir
+    Save-SecurePlatformConfig -ConfigDir $configDir -Values $values
+    $reloaded = Read-EffectiveSavedEnvValues -EnvFilePath $resolvedEnvFilePath -ConfigDir $configDir
+    Assert-ProviderDirectoryConsistency -Values $reloaded
+    Assert-SavedEnvMatchesSetup -Expected $values -Actual $reloaded
+    if ([string]$reloaded.ACME_PROVIDER -eq 'networking4all' -and ([string]$reloaded.ACME_REQUIRES_EAB -ne '1')) {
+        throw "Saved environment mismatch for 'ACME_REQUIRES_EAB'. expected='1' actual='$([string]$reloaded.ACME_REQUIRES_EAB)'"
+    }
+
+    return [pscustomobject]@{
+        Status = 'saved'
+        EnvFilePath = [string]$resolvedEnvFilePath
+        TargetSystem = [string]$values.ACME_TARGET_SYSTEM
+        Domains = [string]$values.DOMAINS
     }
 }
 
@@ -2004,6 +2334,9 @@ function Invoke-FirstRunWizard {
     if (-not $all.ContainsKey('ACME_PRIVATEKEY_EXPORTABLE') -or [string]::IsNullOrWhiteSpace([string]$all.ACME_PRIVATEKEY_EXPORTABLE)) { $all.ACME_PRIVATEKEY_EXPORTABLE = 'false' }
 
     Write-EnvFile -Values $all -Path $DefaultEnvPath
+    $configDir = if ($all.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$all.CERTIFICATE_CONFIG_DIR } else { '' }
+    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
+    if (-not [string]::IsNullOrWhiteSpace($configDir)) { Save-SecurePlatformConfig -ConfigDir $configDir -Values $all }
 
     Show-TuiStatus -Message "Wizard complete. certificate.env saved to: $DefaultEnvPath" `
         -Type Success -Row ([Math]::Max(0, [Console]::WindowHeight) - 2)
@@ -2040,6 +2373,13 @@ $FunctionsToExport.Add('Get-SimpleAcmeLatestLogFile')
 $FunctionsToExport.Add('Get-SimpleAcmeLogDiagnostics')
 $FunctionsToExport.Add('Show-SimpleAcmeDiagnosticSummary')
 $FunctionsToExport.Add('Invoke-ViewLogsDiagnostics')
+$FunctionsToExport.Add('Test-AcmeTuiWiring')
+$FunctionsToExport.Add('Invoke-AcmeTuiDiagnostics')
+$FunctionsToExport.Add('Get-GuidedPipelineTemplate')
+$FunctionsToExport.Add('Get-ConnectorScriptByIntent')
+$FunctionsToExport.Add('Get-AcmeConnectorRegistry')
+$FunctionsToExport.Add('Get-AcmeConnectorRegistryEntry')
+$FunctionsToExport.Add('Get-AcmeConnectorScriptFileName')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {

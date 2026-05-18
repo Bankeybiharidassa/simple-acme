@@ -6,6 +6,15 @@ $DeviceSchemas = @{
         @{ Name='cert_store_location'; Label='Store location'; Type='choice'; Required=$true; Choices=@('My','WebHosting'); Placeholder='My'; HelpText='Certificate store location for IIS binding' }
     )}
 
+
+    rds = @{ ConnectorType='rds'; Label='Remote Desktop Gateway / RD Web'; Category='local_windows'; Fields=@() }
+    'rds-farm' = @{ ConnectorType='rds-farm'; Label='Remote Desktop Gateway + Session Hosts farm'; Category='local_windows'; Fields=@(
+        @{ Name='session_hosts'; Label='Session hosts'; Type='string'; Required=$true; Placeholder='rdsh01.contoso.local,rdsh02.contoso.local'; HelpText='Comma-separated Session Host FQDNs for farm fan-out' }
+    )}
+    mail = @{ ConnectorType='mail'; Label='Mail server'; Category='server'; Fields=@() }
+    firewall = @{ ConnectorType='firewall'; Label='Firewall / VPN'; Category='network_appliance'; Fields=@() }
+    waf = @{ ConnectorType='waf'; Label='Load balancer / WAF'; Category='network_appliance'; Fields=@() }
+
     adfs = @{ ConnectorType='adfs'; Label='ADFS'; Category='local_windows'; Fields=@() }
     rdp_listener = @{ ConnectorType='rdp_listener'; Label='RDP Listener'; Category='local_windows'; Fields=@() }
     rd_gateway = @{ ConnectorType='rd_gateway'; Label='RD Gateway'; Category='local_windows'; Fields=@() }
@@ -35,6 +44,23 @@ $DeviceSchemas = @{
         @{ Name='token_env'; Label='Token env-var name'; Type='string'; Required=$true; Placeholder='F5_API_TOKEN'; HelpText='Environment variable that stores the iControl REST Bearer token' },
         @{ Name='ssl_profile'; Label='Client SSL profile name'; Type='string'; Required=$true; Placeholder='clientssl-prod'; HelpText='Name of the client SSL profile to update' }
     )}
+
+    netscaler = @{ ConnectorType='netscaler'; Label='NetScaler / Citrix ADC'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Management hostname or IP'; Type='string'; Required=$true; Placeholder='adc.example.com'; HelpText='NetScaler / Citrix ADC management endpoint' },
+        @{ Name='username'; Label='NITRO username'; Type='string'; Required=$true; Placeholder='nsroot'; HelpText='NITRO API username. The password is resolved by secret name, not stored in the TUI log.' },
+        @{ Name='password_secret_name'; Label='Password secret name'; Type='string'; Required=$true; Placeholder='NETSCALER_PASSWORD'; HelpText='Secret/environment name used by cert2netscaler.ps1 to resolve the NITRO password' },
+        @{ Name='certkey_name'; Label='sslcertkey name'; Type='string'; Required=$true; Placeholder='wildcard_example_com'; HelpText='Target sslcertkey object name' },
+        @{ Name='cert_path'; Label='Certificate path'; Type='string'; Required=$true; Placeholder='/path/to/cert.crt'; HelpText='PEM certificate file path' },
+        @{ Name='key_path'; Label='Private key path'; Type='string'; Required=$true; Placeholder='/path/to/cert.key'; HelpText='PEM private key file path. Contents are never logged.' },
+        @{ Name='chain_path'; Label='Chain path'; Type='string'; Required=$false; Placeholder=''; HelpText='Optional PEM chain file path' },
+        @{ Name='vserver_name'; Label='SSL vServer name'; Type='string'; Required=$true; Placeholder='prod-vsrv'; HelpText='SSL virtual server to bind the certificate to' },
+        @{ Name='require_primary'; Label='Require HA primary'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to allow operation when HA primary assertion should be bypassed' },
+        @{ Name='sync_ha'; Label='Sync HA after deploy'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to skip HA sync after successful deployment' },
+        @{ Name='save_config'; Label='Save config after deploy'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Set false to skip saving the running NetScaler configuration' },
+        @{ Name='replace_existing_server_certificate'; Label='Replace existing server cert'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='When true, replace existing non-CA/non-SNI server certificate bindings' },
+        @{ Name='skip_certificate_check'; Label='Skip TLS certificate check'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='When true, skip management endpoint TLS certificate validation' }
+    )}
+
     citrix_adc = @{ ConnectorType='citrix_adc'; Label='Citrix ADC'; Category='network_appliance'; Fields=@(
         @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='adc.example.com'; HelpText='Citrix ADC management endpoint' },
         @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='ADC_USER'; HelpText='Environment variable name for NITRO API username' },
@@ -46,6 +72,18 @@ $DeviceSchemas = @{
         @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='KEMP_USER'; HelpText='Environment variable name for API username' },
         @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='KEMP_PASSWORD'; HelpText='Environment variable name for API password' },
         @{ Name='vs_id'; Label='Virtual service ID'; Type='string'; Required=$true; Placeholder='1'; HelpText='LoadMaster virtual service id' }
+    )}
+
+
+    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
+    )}
+    sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='sophos.example.com'; HelpText='Sophos management endpoint' }
+    )}
+    custom = @{ ConnectorType='custom'; Label='Custom script'; Category='custom'; Fields=@(
+        @{ Name='script_path'; Label='Script path'; Type='string'; Required=$true; Placeholder='Scripts\my-deploy.ps1'; HelpText='Operator-provided deployment script path' },
+        @{ Name='script_parameters'; Label='Script parameters'; Type='string'; Required=$false; Placeholder='{CertThumbprint}'; HelpText='WACS script parameters for the custom script' }
     )}
 
     java_keystore = @{ ConnectorType='java_keystore'; Label='Java KeyStore'; Category='external_dependency'; Disabled=$true; Requires='JDK (keytool.exe)'; Fields=@(

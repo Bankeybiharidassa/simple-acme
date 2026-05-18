@@ -16,6 +16,7 @@ $CertificateMenuTree = @{
         @{ Label='Advanced / Phase 2 features'; Key='advanced'; Type='submenu'; Items=@(
             @{ Label='ACME settings'; Key='acme'; Type='action' },
             @{ Label='View logs / diagnostics'; Key='logs-diagnostics'; Type='action' },
+            @{ Label='Full ACME TUI wiring diagnostics'; Key='acme-tui-diagnostics'; Type='action' },
             @{ Label='Deployment policies'; Key='policies'; Type='action' },
             @{ Label='View existing policies'; Key='policies-view'; Type='action' },
             @{ Label='Register/Repair orchestrator task'; Key='task-register'; Type='action' },
