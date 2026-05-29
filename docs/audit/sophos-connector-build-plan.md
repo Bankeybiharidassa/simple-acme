@@ -26,6 +26,8 @@ Key API facts from the docs:
 - `AdminSettings/WebAdminSettings` includes `HTTPSport`, `UserPortalHTTPSPort`, `VPNPortalHTTPSPort`, and `Certificate`.
 - WAF / HTTP-based firewall rules expose `HTTPSCertificate` for the certificate used by the rule.
 - Certificate upload supports external certificates including PEM and PKCS12/PFX formats.
+- Lab validation on SFOS `22.0.0 GA-Build411` / API `2200.1` showed that `Get <Certificate/>` generates certificate export files on the firewall, but the HTTPS API response body can still be empty.
+- The confirmed recovery path for that behavior is SSH into `Device Management > Advanced Shell`, then SCP the generated `/var/API-*.tar` export artifact. This must remain an explicit diagnostics/export recovery path, not the default deployment path.
 - The official Python SDK models the API as generic `get_tag`, filtered get, update, and template/XML submit operations. We should mirror that shape in PowerShell rather than hard-coding a narrow one-off flow.
 
 ## Product Model Decision
@@ -90,16 +92,20 @@ Responsibilities:
 - Send requests to `/webconsole/APIController`.
 - Support `-SkipCertificateCheck` only with explicit warning.
 - Parse Sophos response status.
+- Detect zero-byte certificate export responses and report the known SFOS `2200.1` behavior.
 - Redact secrets and certificate/private-key payloads in logs.
 - Expose reusable functions:
   - `Connect-SophosFirewallApi`
   - `Invoke-SophosXmlRequest`
   - `Get-SophosCertificate`
+  - `Export-SophosCertificateArchive`
   - `Import-SophosCertificate`
   - `Get-SophosAdminWebSettings`
   - `Set-SophosAdminWebSettingsCertificate`
   - `Get-SophosWafRules`
   - `Set-SophosWafRuleCertificate`
+  - `Get-SophosApiExportArtifact`
+  - `Copy-SophosApiExportArtifact`
   - `Test-SophosDeploymentVerification`
 
 ### New Runner
@@ -115,6 +121,7 @@ Responsibilities:
 - Export:
   - `Invoke-SophosDeploymentForm`
   - `Invoke-SophosDiagnostics`
+  - `Invoke-SophosCertificateExportRecovery`
   - `Convert-SophosFormValuesToPlan`
   - `Test-SophosTuiWiring`
 
@@ -141,6 +148,12 @@ Target contract:
   - `-WafRuleNames`
 - Accept `-WhatIf` / `SupportsShouldProcess`.
 - Accept `-SkipCertificateCheck`.
+- Accept optional diagnostics-only SSH parameters:
+  - `-EnableSshExportRecovery`
+  - `-SshPort`, default `22`
+  - `-SshUsername`
+  - `-SshPasswordSecretName` or `-SshPasswordSecureFile`
+  - `-SshHostKeyFingerprint`
 
 ### Setup Wiring
 
@@ -156,6 +169,7 @@ Add menu entries:
 - `Sophos Firewall - Check what would happen`
 - `Sophos Firewall - Install certificate on selected services`
 - `Sophos Firewall - Check setup and show diagnostics`
+- `Sophos Firewall - Recover certificate export over SSH`
 
 Keep `FirstRunAcmeSupported = $false`.
 
@@ -182,7 +196,7 @@ Preflight checks:
 
 ### Certificate Inventory
 
-Implement:
+Implement the documented certificate export request as a best-effort API path:
 
 ```xml
 <Get>
@@ -195,6 +209,51 @@ Use this to:
 - Detect whether the target certificate name exists.
 - Compare thumbprint/fingerprint if exposed.
 - Avoid unnecessary upload when the exact certificate already exists.
+
+Lab finding:
+
+- On the tested SFOS `22.0.0 GA-Build411` / API `2200.1` appliance, this request returned `HTTP 200`, `Content-Type: text/xml`, and `0` response bytes.
+- The same request still generated `/var/API-*.tar`, `/var/APIXMLInput/*.xml`, and `/var/APIXMLOutput/*.xml` on the firewall.
+- The generated XML output contained certificate metadata, and the generated tar contained `Entities.xml`, `snapversion`, certificate PEM files, and private key files.
+
+Connector rule:
+
+- Do not make HTTP certificate export/listing mandatory for deployment.
+- Use the connector-chosen certificate name as the deployment identity after upload.
+- Verify service assignment through `AdminSettings` and `FirewallRule` reads.
+- If HTTP certificate export is empty, show a diagnostics warning and offer SSH/SCP export recovery only when the operator explicitly opts in.
+
+### SSH/SCP Certificate Export Recovery
+
+Provide an optional diagnostics/export recovery path for appliances where `Get <Certificate/>` creates export artifacts on disk but does not stream the tar over HTTPS.
+
+Confirmed lab path:
+
+1. Connect over SSH to the firewall.
+2. Select `5. Device Management`.
+3. Select `3. Advanced Shell`.
+4. Locate the newest matching `/var/API-*.tar`.
+5. Copy it with SCP to a local temporary diagnostics directory.
+6. Inspect `Entities.xml` and archive entry names.
+7. Delete the local copy unless the operator explicitly asks to preserve it.
+
+Automation requirements:
+
+- Require explicit operator opt-in with clear warning text before using SSH export recovery.
+- Require SSH host key pinning. Do not implement a blind host-key accept mode.
+- Treat the export archive as highly sensitive because it contains private keys.
+- Never log tar contents, PEM content, private keys, archive bytes, or passwords.
+- Prefer listing archive entry names over extraction.
+- If extracting is required for diagnostics, extract only into a protected temporary directory and clean it up.
+- Correlate the export artifact to the API request by timestamp and, where possible, matching `/var/APIXMLInput/*.xml` request content and `/var/APIXMLOutput/*.xml` output content.
+- If multiple recent artifacts match, stop and ask the operator to choose instead of guessing.
+
+Design boundary:
+
+- This path is not part of normal certificate deployment.
+- This path is diagnostics/recovery only.
+- Deployment should still use documented API upload and service binding operations.
+- Advanced Shell use may affect vendor support, so the UI must show the Sophos support warning before continuing.
 
 ### Certificate Upload
 
@@ -286,6 +345,11 @@ Extend Sophos schema to include:
 - `cert_path`
 - `key_path`
 - `chain_path`
+- `ssh_export_recovery_enabled`
+- `ssh_port`
+- `ssh_username`
+- `ssh_password_secret_name` or encrypted SSH password reference
+- `ssh_host_key_fingerprint`
 - `bind_admin_portal`
 - `bind_vpn_portal`
 - `bind_user_portal`
@@ -305,6 +369,9 @@ For interactive selection, do not require `selected_waf_rules` in the initial de
 - Prefer read-only discovery before any mutation.
 - Require explicit confirmation before deployment.
 - Store previous binding state in the deployment log for manual rollback.
+- Warn before SSH Advanced Shell export recovery because Sophos displays a vendor support warning for Advanced Shell.
+- Require pinned SSH host key fingerprint for SCP recovery.
+- Treat `/var/API-*.tar` exports as private-key material.
 
 ## Rollback Plan
 
@@ -317,6 +384,8 @@ For each deployment, log:
 - Previous WAF rule certificate per selected rule.
 - Changed services.
 - Verification result.
+- Whether HTTP certificate export returned bytes, returned XML, or returned an empty body.
+- Whether SSH/SCP export recovery was offered or used.
 
 Optional later:
 
@@ -337,6 +406,9 @@ Add tests for:
 - Admin settings update preserving ports and redirect settings.
 - PFX password handling.
 - Rejection of unsupported certificate input combinations.
+- Empty certificate export response handling.
+- SSH export recovery planning without secrets in logs.
+- API export artifact correlation by timestamp and XML input/output metadata.
 
 ### TUI Tests
 
@@ -348,6 +420,8 @@ Add tests for:
 - Sophos form does not write secrets to logs.
 - WhatIf runs before deploy.
 - Real deployment requires `DEPLOY`.
+- SSH export recovery is hidden or blocked unless explicitly enabled.
+- SSH export recovery shows support and private-key warnings.
 
 ### Integration Tests
 
@@ -359,15 +433,19 @@ Gate behind environment variables:
 - `SOPHOS_PASSWORD`
 - `SOPHOS_TEST_CERT_PFX`
 - `SOPHOS_TEST_CERT_PASSWORD`
+- `SOPHOS_TEST_SSH_USERNAME`
+- `SOPHOS_TEST_SSH_PASSWORD`
+- `SOPHOS_TEST_SSH_HOSTKEY`
 
 Integration tests should:
 
 - Log in.
-- List certificates.
+- Attempt certificate inventory/export over HTTPS and accept the known zero-byte response as a diagnostic outcome, not a hard failure.
 - List WAF rules.
 - Upload a test certificate with a unique prefix.
 - Bind to a test WAF rule only when `SOPHOS_TEST_WAF_RULE` is set.
 - Restore previous binding.
+- When SSH test variables are present, call certificate export, locate the matching `/var/API-*.tar`, copy it over SCP, list archive entries, and delete the local copy.
 
 ## Delivery Milestones
 
@@ -377,13 +455,22 @@ Integration tests should:
 - Implement login, generic get/set, response parser, redaction.
 - Add Sophos diagnostics menu action.
 - Add WAF rule discovery and display.
+- Add HTTP certificate export diagnostics, including zero-byte response detection.
 - No mutations yet except login test.
+
+### Milestone 1b: SSH Export Recovery Diagnostics
+
+- Add SSH host-key fingerprint capture instructions.
+- Add optional SSH/SCP export recovery flow behind explicit opt-in.
+- Add artifact correlation for `/var/API-*.tar`, `/var/APIXMLInput/*.xml`, and `/var/APIXMLOutput/*.xml`.
+- Add tests proving no private key material is logged.
+- Keep this separate from normal deployment.
 
 ### Milestone 2: Certificate Upload
 
 - Implement PFX upload with password support.
 - Implement PEM upload only if PowerShell 5.1-compatible.
-- Add idempotency by comparing existing certificate metadata.
+- Add idempotency where certificate metadata is available; otherwise use deterministic connector certificate naming and service binding verification.
 - Add unit tests and mocked response fixtures.
 
 ### Milestone 3: Service Binding
@@ -411,6 +498,8 @@ Integration tests should:
 - Preview shows exact planned changes without secrets.
 - Real deployment requires explicit confirmation.
 - Verification confirms selected services reference the new certificate.
+- Empty HTTP certificate export responses are reported clearly and do not block upload/bind deployment.
+- Optional SSH export recovery can copy and list a generated Sophos export tar without logging or persisting private key material.
 - No secret or private-key material appears in logs.
 - All code parses under Windows PowerShell 5.1.
 
@@ -421,6 +510,8 @@ Integration tests should:
 - What is the exact XML shape returned for WAF rules on XGS 21.5 and 22.0?
 - Does binding a new certificate to admin/web settings restart or interrupt any management/portal service?
 - Does WAF rule update require additional commit/apply semantics, or is the XML update immediately active?
+- Is the zero-byte HTTP certificate export response fixed in later SFOS/API builds?
+- Is there a supported non-Advanced-Shell way to retrieve generated `/var/API-*.tar` artifacts when the web controller fails to stream them?
 
 ## References
 
@@ -431,4 +522,4 @@ Integration tests should:
 - Sophos Firewall 22.0 WAF/firewall rule API reference: https://docs.sophos.com/nsg/sophos-firewall/22.0/api/PROTECT/Firewall/SecurityPolicy/operations/addfirewallrule%26editfirewallrule.html
 - Sophos Firewall admin web settings API reference: https://docs.sophos.com/nsg/sophos-firewall/21.0/api/system/administration/adminsettings/operations/webadminsettings.html
 - Sophos Firewall SDK: https://github.com/sophos/sophos-firewall-sdk
-
+- Lab bug report and SSH workaround notes: `Docs/audit/sophos-certificate-export-bugreport.md`
