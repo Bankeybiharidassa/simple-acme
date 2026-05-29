@@ -321,6 +321,104 @@ Until the export behavior is explained or fixed, the Sophos connector should:
 5. Avoid depending on `Get <Certificate/>` for inventory or post-upload validation.
 6. Surface a warning if the operator asks for certificate inventory/export on appliances with this behavior.
 
+## SSH/CLI Workaround Confirmed
+
+An SSH-based workaround was confirmed on the lab appliance.
+
+The Sophos CLI is available over SSH when SSH administrative access is enabled for the client zone. The login opens the Sophos numbered menu. From there:
+
+1. Select `5. Device Management`.
+2. Select `3. Advanced Shell`.
+3. The session enters a root shell under `/tmp`.
+
+Important Sophos warning shown before entering Advanced Shell:
+
+```text
+NOTE: If not explicitly approved by Sophos support, any modifications
+      done through this option will void your support.
+```
+
+The test was kept read-only except for copying the already-generated API export file from the firewall to the client.
+
+### Findings
+
+Although the HTTPS API response body was empty, the firewall did generate certificate export artifacts on disk:
+
+```text
+/var/API-*.tar
+/var/APIXMLInput/*.xml
+/var/APIXMLOutput/*.xml
+```
+
+The generated XML output for `Get <Certificate/>` contained certificate metadata, including:
+
+- `wildcard itssecured`
+- `ApplianceCertificate`
+- `wildcard-orselen`
+
+The generated tar archive contained:
+
+```text
+./Entities.xml
+./snapversion
+./Files/CertificateFile/0/wildcard itssecured.pem
+./Files/CertificateFile/1/ApplianceCertificate.pem
+./Files/CertificateFile/2/wildcard-orselen.pem
+./Files/PrivateKeyFile/0/wildcard itssecured.key
+./Files/PrivateKeyFile/1/ApplianceCertificate.key
+./Files/PrivateKeyFile/2/wildcard-orselen.key
+```
+
+This proves the export engine succeeds internally, but the web/API controller does not stream the generated tar back to the HTTP client.
+
+### Retrieval Test
+
+The latest generated export tar was copied successfully from `/var` over SCP using PuTTY `pscp.exe` with the SSH host key pinned.
+
+Command shape, with secrets omitted:
+
+```powershell
+pscp.exe -batch `
+  -hostkey "SHA256:<pinned-host-key>" `
+  -pw "<password>" `
+  "admin@<firewall>:/var/API-<id>.tar" `
+  ".\sophos-cert-export-ssh-test.tar"
+```
+
+Local verification:
+
+```powershell
+tar -tf .\sophos-cert-export-ssh-test.tar
+```
+
+The local test copy was deleted after verifying the archive entries.
+
+### Workaround Viability
+
+The workaround is technically viable for lab and diagnostics:
+
+1. Call the documented API export endpoint.
+2. If the HTTP response is empty, connect over SSH.
+3. Find the most recent `/var/API-*.tar` matching the request timestamp.
+4. Copy it with SCP.
+5. Inspect `Entities.xml` and archive entries locally.
+
+This should not be the default production connector path because:
+
+- Advanced Shell displays a vendor support warning.
+- The archive includes private keys.
+- The file naming is internal implementation detail, not public API.
+- Correlating request-to-tar by timestamp is inherently brittle.
+- SSH/SCP requires extra firewall access and host key management.
+
+Recommended connector stance:
+
+- Keep this as an optional diagnostics/export recovery path.
+- Do not use it for normal certificate deployment.
+- Require an explicit operator opt-in before entering SSH/SCP recovery mode.
+- Never log archive contents, private keys, passwords, or decrypted certificate material.
+- Pin the SSH host key if this path is automated.
+
 ## Severity
 
 Suggested severity: medium.
