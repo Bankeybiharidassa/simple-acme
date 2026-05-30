@@ -251,5 +251,8 @@ Describe 'Static guard for WACS preview source of truth' {
         $result = Test-AcmeTuiWiring -ProjectRoot $script:repoRoot
         $result.Passed | Should -BeTrue
         ($result.Checks | Where-Object { $_.Name -eq 'Release manifest file exists: scripts/cert2rds.ps1' }).Passed | Should -BeTrue
+        ($result.Checks | Where-Object { $_.Name -eq 'Release output file exists: scripts/deploy-rds-farm.ps1' }).Passed | Should -BeTrue
+        ($result.Checks | Where-Object { $_.Name -eq 'Release output file exists: scripts/modules/SimpleAcme.Sophos/SophosFirewallXml.psm1' }).Passed | Should -BeTrue
+        ($result.Checks | Where-Object { $_.Name -eq 'Release output file exists: setup/Sophos-Runner.psm1' }).Passed | Should -BeTrue
     }
 }

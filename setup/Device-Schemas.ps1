@@ -1,3 +1,5 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments','DeviceSchemas',Justification='Dot-sourced data table consumed by setup modules and scripts.')]
+param()
 Set-StrictMode -Version Latest
 
 $DeviceSchemas = @{

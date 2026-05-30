@@ -422,7 +422,7 @@ function ConvertTo-HashtableRecursiveLocal {
     return $InputObject
 }
 
-function Mask-EnvDisplayValue {
+function ConvertTo-MaskedEnvDisplayValue {
     param(
         [Parameter(Mandatory)][string]$Name,
         [AllowNull()][string]$Value
@@ -594,6 +594,19 @@ function Test-AcmeTuiWiring {
         Add-AcmeTuiWiringCheck -Name "Release manifest file exists: $relative" -Passed (Test-RepoPathExistsCaseInsensitive -RelativePath $relative) -Detail $relative
     }
 
+    $manifestReleaseFiles = @()
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifestReleaseFiles = @(
+            Get-Content -LiteralPath $manifestPath -Encoding UTF8 |
+                ForEach-Object { ([string]$_).Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith('#') }
+        )
+    }
+    foreach ($relative in $manifestReleaseFiles) {
+        $releasePath = Join-Path (Join-Path $ProjectRoot 'out/release') $relative
+        Add-AcmeTuiWiringCheck -Name "Release output file exists: $relative" -Passed (Test-Path -LiteralPath $releasePath -PathType Leaf) -Detail ("out/release/" + $relative)
+    }
+
     $formText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'setup/Form-Runner.psm1') -Raw -Encoding UTF8
     $coreText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'core/Simple-Acme-Reconciler.psm1') -Raw -Encoding UTF8
     Add-AcmeTuiWiringCheck -Name 'All WACS preview helpers use Get-WacsIssueArguments' -Passed ($coreText -match 'function Get-MaskedWacsIssueCommandPreview[\s\S]*Get-WacsIssueArguments[\s\S]*Get-MaskedWacsArgumentsText[\s\S]*ConvertTo-WacsCommandLineText') -Detail 'Get-MaskedWacsIssueCommandPreview'
@@ -738,7 +751,7 @@ function Invoke-AcmeSettingsMenu {
                 }
                 $envValues = Read-EnvFile -Path $resolvedEnvFilePath
                 foreach ($name in @($envValues.Keys | Sort-Object)) {
-                    $displayValue = Mask-EnvDisplayValue -Name [string]$name -Value ([string]$envValues[$name])
+                    $displayValue = ConvertTo-MaskedEnvDisplayValue -Name [string]$name -Value ([string]$envValues[$name])
                     [Console]::WriteLine("$name=$displayValue")
                 }
                 Wait-ForOperatorReturn
@@ -1579,10 +1592,6 @@ function Invoke-AcmeForm {
         }
     }
 
-    $previousExportable = ''
-    if ($curr.ContainsKey('ACME_PRIVATEKEY_EXPORTABLE')) { $previousExportable = ([string]$curr.ACME_PRIVATEKEY_EXPORTABLE).ToLowerInvariant() }
-    $previousStrategy = if ($curr.ContainsKey('ACME_PRIVATE_KEY_STRATEGY')) { ([string]$curr.ACME_PRIVATE_KEY_STRATEGY).ToLowerInvariant() } else { '' }
-
     if ($distributionMode -eq 'multi') {
         [Console]::WriteLine('')
         [Console]::WriteLine('Certificates used on multiple systems require access to the private key.')
@@ -2303,8 +2312,6 @@ function Invoke-PolicyEditorLegacy {
 function Invoke-FirstRunWizard {
     param([Parameter(Mandatory)][string]$DefaultEnvPath)
 
-    $scriptRoot = Split-Path $PSScriptRoot -Parent
-
     $acmeFields = @(
         @{ Name='ACME_PROVIDER';    Label='ACME provider';              Type='string'; Required=$false; Placeholder='letsencrypt'; HelpText='Provider label for operator reference' },
         @{ Name='ACME_DIRECTORY';   Label='ACME directory URL';         Type='string'; Required=$true; Placeholder='https://acme-v02.api.letsencrypt.org/directory'; HelpText='ACME directory endpoint' },
@@ -2380,6 +2387,12 @@ $FunctionsToExport.Add('Get-ConnectorScriptByIntent')
 $FunctionsToExport.Add('Get-AcmeConnectorRegistry')
 $FunctionsToExport.Add('Get-AcmeConnectorRegistryEntry')
 $FunctionsToExport.Add('Get-AcmeConnectorScriptFileName')
+$FunctionsToExport.Add('ConvertTo-MaskedEnvDisplayValue')
+
+Set-Alias -Name Mask-EnvDisplayValue -Value ConvertTo-MaskedEnvDisplayValue
+
+$AliasesToExport = New-Object System.Collections.Generic.List[string]
+$AliasesToExport.Add('Mask-EnvDisplayValue')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {
@@ -2392,4 +2405,4 @@ if ($MissingExports.Count -gt 0) {
     throw ('Export list contains missing function(s): ' + ($MissingExports -join ', '))
 }
 
-Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray())
+Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray()) -Alias ([string[]]$AliasesToExport.ToArray())

@@ -34,7 +34,11 @@ function Invoke-ScriptAnalyzerCheck {
         (Join-Path $PSScriptRoot '*.ps1')
     )
 
-    $results = @(Invoke-ScriptAnalyzer -Path $analysisTargets -Settings $settingsPath -Recurse)
+    $results = @(
+        foreach ($target in $analysisTargets) {
+            Invoke-ScriptAnalyzer -Path $target -Settings $settingsPath -Recurse
+        }
+    )
     if ($results.Count -gt 0) {
         $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-Host
         throw "ScriptAnalyzer reported $($results.Count) issue(s)."

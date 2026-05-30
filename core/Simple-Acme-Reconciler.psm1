@@ -51,7 +51,7 @@ function Get-SafeCount {
     return @($Value).Count
 }
 
-function As-Array {
+function ConvertTo-Array {
     param([AllowNull()]$Value)
 
     if ($null -eq $Value) {
@@ -277,7 +277,7 @@ function Find-PropertyValues {
 
     $foundValues = [System.Collections.ArrayList]::new()
 
-    function Visit-Node {
+    function Invoke-NodeVisit {
         param($Node)
         if ($null -eq $Node) { return }
 
@@ -286,7 +286,7 @@ function Find-PropertyValues {
                 if ($Names -contains [string]$key) {
                     [void]$foundValues.Add([object]$Node[$key])
                 }
-                Visit-Node -Node $Node[$key]
+                Invoke-NodeVisit -Node $Node[$key]
             }
             return
         }
@@ -296,19 +296,19 @@ function Find-PropertyValues {
                 if ($Names -contains [string]$property.Name) {
                     [void]$foundValues.Add([object]$property.Value)
                 }
-                Visit-Node -Node $property.Value
+                Invoke-NodeVisit -Node $property.Value
             }
             return
         }
 
         if ($Node -is [System.Collections.IEnumerable] -and -not ($Node -is [string])) {
             foreach ($item in $Node) {
-                Visit-Node -Node $item
+                Invoke-NodeVisit -Node $item
             }
         }
     }
 
-    Visit-Node -Node $InputObject
+    Invoke-NodeVisit -Node $InputObject
     return @($foundValues)
 }
 
@@ -537,7 +537,7 @@ function Get-NormalizedCsvValues {
     )
 }
 
-function Normalize-WacsScriptParametersText {
+function ConvertTo-NormalizedWacsScriptParametersText {
     param([AllowNull()][string]$Value)
 
     if ($null -eq $Value) { return '' }
@@ -606,10 +606,10 @@ function Compare-RenewalWithEnv {
         if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
             $mismatches.Add('Script path')
         }
-        $expectedScriptParameters = Normalize-WacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
+        $expectedScriptParameters = ConvertTo-NormalizedWacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
         $normalizedScriptParameters = @(
             $RenewalSummary.ScriptParameters |
-                ForEach-Object { Normalize-WacsScriptParametersText -Value ([string]$_) } |
+                ForEach-Object { ConvertTo-NormalizedWacsScriptParametersText -Value ([string]$_) } |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         )
         if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
@@ -1467,12 +1467,17 @@ $FunctionsToExport.Add('Get-MaskedWacsArgumentsText')
 $FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
 $FunctionsToExport.Add('Get-WacsIssueArguments')
 $FunctionsToExport.Add('Get-MaskedWacsIssueCommandPreview')
-$FunctionsToExport.Add('Normalize-WacsScriptParametersText')
+$FunctionsToExport.Add('ConvertTo-NormalizedWacsScriptParametersText')
 $FunctionsToExport.Add('Get-NormalizedCsvValues')
 $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
+
+Set-Alias -Name Normalize-WacsScriptParametersText -Value ConvertTo-NormalizedWacsScriptParametersText
+
+$AliasesToExport = New-Object System.Collections.Generic.List[string]
+$AliasesToExport.Add('Normalize-WacsScriptParametersText')
 $FunctionsToExport.Add('Write-ReconcileDiagnostics')
 $FunctionsToExport.Add('Write-SimpleAcmeLogDiagnosticSummary')
 $FunctionsToExport.Add('Get-SimpleAcmeLogDiagnosticSummary')
@@ -1488,4 +1493,4 @@ if ((Get-SafeCount $MissingExports) -gt 0) {
     throw ('Export list contains missing function(s): ' + ($MissingExports -join ', '))
 }
 
-Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray())
+Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray()) -Alias ([string[]]$AliasesToExport.ToArray())
