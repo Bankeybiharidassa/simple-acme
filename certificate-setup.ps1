@@ -92,6 +92,7 @@ Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScri
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
 $netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
+$sophosRunnerModulePath = Join-Path $PSScriptRoot 'setup/Sophos-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
 $envLoaderModulePath = Join-Path $PSScriptRoot 'core/Env-Loader.psm1'
 
@@ -152,6 +153,7 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-PolicyViewer' -ExpectedModuleP
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceForm' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ManageCertificatesMenu' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-ViewLogsDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-AcmeTuiDiagnostics' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
@@ -165,6 +167,16 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDeploymentForm' -Expe
 Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDiagnostics' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Convert-NetScalerFormValuesToArguments' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Test-NetScalerTuiWiring' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+$sophosRunnerModule = Import-Module $sophosRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $sophosRunnerModulePath"
+if ($null -eq $sophosRunnerModule) {
+    throw "Unable to import required Sophos setup module from path: $sophosRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDeploymentForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDiagnostics' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateExportRecovery' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Convert-SophosFormValuesToArguments' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Test-SophosTuiWiring' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
 Write-SetupDebugLog -Message "Imported module: $schedulerModulePath"
 if ($null -eq $schedulerModule) {
@@ -207,9 +219,8 @@ function Invoke-InitialAcmeReconcilePrompt {
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
         $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
-        $previewArgs = Get-WacsIssueArguments -EnvValues $envValues -CsrAlgorithm $csrAlgo
-        $maskedPreviewArgs = Get-MaskedWacsArgumentsText -Args $previewArgs
-        [Console]::WriteLine(('wacs.exe ' + (ConvertTo-WacsCommandLineText -Args $maskedPreviewArgs)))
+        $previewLine = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
+        [Console]::WriteLine($previewLine)
     } catch {
         [Console]::WriteLine(('Cannot build WACS command preview: ' + $_.Exception.Message))
         Wait-ForOperatorReturn
@@ -412,9 +423,14 @@ while ($menuStack.Count -gt 0) {
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
         'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
+        'acme-tui-diagnostics' { Write-SetupDebugLog -Message "Executing action: acme-tui-diagnostics"; Invoke-AcmeTuiDiagnostics -ProjectRoot $PSScriptRoot }
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'sophos-deploy'         { Write-SetupDebugLog -Message "Executing action: sophos-deploy"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
+        'sophos-whatif'         { Write-SetupDebugLog -Message "Executing action: sophos-whatif"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
+        'sophos-diagnostics'    { Write-SetupDebugLog -Message "Executing action: sophos-diagnostics"; Invoke-SophosDiagnostics -ProjectRoot $PSScriptRoot }
+        'sophos-export-recovery' { Write-SetupDebugLog -Message "Executing action: sophos-export-recovery"; Invoke-SophosCertificateExportRecovery -ProjectRoot $PSScriptRoot }
         'task-register'  { Write-SetupDebugLog -Message "Executing action: task-register"; Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
         'policies'       { Write-SetupDebugLog -Message "Executing action: policies"; Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
         'policies-view'  { Write-SetupDebugLog -Message "Executing action: policies-view"; Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }

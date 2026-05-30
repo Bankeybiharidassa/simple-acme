@@ -1,3 +1,5 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments','DeviceSchemas',Justification='Dot-sourced data table consumed by setup modules and scripts.')]
+param()
 Set-StrictMode -Version Latest
 
 $DeviceSchemas = @{
@@ -5,6 +7,15 @@ $DeviceSchemas = @{
         @{ Name='site_name'; Label='Site name'; Type='string'; Required=$true; Placeholder='Default Web Site'; HelpText='IIS website name' },
         @{ Name='cert_store_location'; Label='Store location'; Type='choice'; Required=$true; Choices=@('My','WebHosting'); Placeholder='My'; HelpText='Certificate store location for IIS binding' }
     )}
+
+
+    rds = @{ ConnectorType='rds'; Label='Remote Desktop Gateway / RD Web'; Category='local_windows'; Fields=@() }
+    'rds-farm' = @{ ConnectorType='rds-farm'; Label='Remote Desktop Gateway + Session Hosts farm'; Category='local_windows'; Fields=@(
+        @{ Name='session_hosts'; Label='Session hosts'; Type='string'; Required=$true; Placeholder='rdsh01.contoso.local,rdsh02.contoso.local'; HelpText='Comma-separated Session Host FQDNs for farm fan-out' }
+    )}
+    mail = @{ ConnectorType='mail'; Label='Mail server'; Category='server'; Fields=@() }
+    firewall = @{ ConnectorType='firewall'; Label='Firewall / VPN'; Category='network_appliance'; Fields=@() }
+    waf = @{ ConnectorType='waf'; Label='Load balancer / WAF'; Category='network_appliance'; Fields=@() }
 
     adfs = @{ ConnectorType='adfs'; Label='ADFS'; Category='local_windows'; Fields=@() }
     rdp_listener = @{ ConnectorType='rdp_listener'; Label='RDP Listener'; Category='local_windows'; Fields=@() }
@@ -63,6 +74,41 @@ $DeviceSchemas = @{
         @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='KEMP_USER'; HelpText='Environment variable name for API username' },
         @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='KEMP_PASSWORD'; HelpText='Environment variable name for API password' },
         @{ Name='vs_id'; Label='Virtual service ID'; Type='string'; Required=$true; Placeholder='1'; HelpText='LoadMaster virtual service id' }
+    )}
+
+
+    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
+    )}
+    sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; Fields=@(
+        @{ Name='host'; Label='Management hostname or IP'; Type='string'; Required=$true; Placeholder='sophos.example.com'; HelpText='Sophos Firewall management endpoint' },
+        @{ Name='port'; Label='API/admin port'; Type='string'; Required=$true; Placeholder='4444'; HelpText='Sophos XML API/admin port' },
+        @{ Name='username'; Label='API username'; Type='string'; Required=$true; Placeholder='admin'; HelpText='Sophos API username' },
+        @{ Name='password_secret_name'; Label='Password secret name'; Type='string'; Required=$true; Placeholder='SOPHOS_PASSWORD'; HelpText='Secret/environment name used to resolve the Sophos API password' },
+        @{ Name='certificate_name'; Label='Certificate object name'; Type='string'; Required=$true; Placeholder='wildcard-example-com'; HelpText='Sophos certificate object name to upload or update' },
+        @{ Name='pfx_path'; Label='PFX path'; Type='string'; Required=$false; Placeholder='C:\certs\wildcard.pfx'; HelpText='Optional PFX certificate path' },
+        @{ Name='pfx_password_secret_name'; Label='PFX password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_PFX_PASSWORD'; HelpText='Optional secret/environment name used to resolve the PFX password' },
+        @{ Name='pfx_password_secure_file'; Label='PFX password secure file'; Type='string'; Required=$false; Placeholder='C:\secrets\sophos-pfx-password.txt'; HelpText='Optional DPAPI secure string file used to resolve the PFX password' },
+        @{ Name='cert_path'; Label='PEM certificate path'; Type='string'; Required=$false; Placeholder='C:\certs\fullchain.pem'; HelpText='PEM certificate path when not using PFX' },
+        @{ Name='key_path'; Label='PEM private key path'; Type='string'; Required=$false; Placeholder='C:\certs\privkey.pem'; HelpText='PEM private key path when not using PFX' },
+        @{ Name='chain_path'; Label='PEM chain path'; Type='string'; Required=$false; Placeholder=''; HelpText='Optional chain path' },
+        @{ Name='bind_admin_portal'; Label='Bind admin portal'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Bind WebAdminSettings/Certificate' },
+        @{ Name='bind_vpn_portal'; Label='Bind VPN portal'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='On tested SFOS this shares WebAdminSettings/Certificate' },
+        @{ Name='bind_user_portal'; Label='Bind user portal'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='On tested SFOS this shares WebAdminSettings/Certificate' },
+        @{ Name='bind_waf'; Label='Bind WAF rules'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Set true and provide WAF rule names' },
+        @{ Name='waf_rule_names'; Label='WAF rule names'; Type='string'; Required=$false; Placeholder='rdgw,public-web'; HelpText='Comma-separated WAF/HTTPBased rule names' },
+        @{ Name='skip_certificate_check'; Label='Skip TLS certificate check'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Skip validation for the Sophos management endpoint certificate' },
+        @{ Name='enable_ssh_export_recovery'; Label='Enable SSH export recovery'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Diagnostics-only fallback when API certificate export returns an empty body' },
+        @{ Name='ssh_username'; Label='SSH username'; Type='string'; Required=$false; Placeholder='admin'; HelpText='SSH user for diagnostics-only export recovery' },
+        @{ Name='ssh_port'; Label='SSH port'; Type='string'; Required=$false; Placeholder='22'; HelpText='SSH port for diagnostics-only export recovery' },
+        @{ Name='ssh_password_secret_name'; Label='SSH password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_SSH_PASSWORD'; HelpText='Optional SSH password secret name. Leave empty when using an SSH key.' },
+        @{ Name='ssh_private_key_path'; Label='SSH private key path'; Type='string'; Required=$false; Placeholder='C:\keys\sophos.ppk'; HelpText='Optional PuTTY private key for SSH/SCP recovery' },
+        @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Required when SSH export recovery is enabled' },
+        @{ Name='export_recovery_path'; Label='Export recovery output path'; Type='string'; Required=$false; Placeholder='C:\temp\sophos-export.tar'; HelpText='Temporary diagnostics output path for recovered export archive' }
+    )}
+    custom = @{ ConnectorType='custom'; Label='Custom script'; Category='custom'; Fields=@(
+        @{ Name='script_path'; Label='Script path'; Type='string'; Required=$true; Placeholder='Scripts\my-deploy.ps1'; HelpText='Operator-provided deployment script path' },
+        @{ Name='script_parameters'; Label='Script parameters'; Type='string'; Required=$false; Placeholder='{CertThumbprint}'; HelpText='WACS script parameters for the custom script' }
     )}
 
     java_keystore = @{ ConnectorType='java_keystore'; Label='Java KeyStore'; Category='external_dependency'; Disabled=$true; Requires='JDK (keytool.exe)'; Fields=@(

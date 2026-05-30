@@ -34,7 +34,11 @@ function Invoke-ScriptAnalyzerCheck {
         (Join-Path $PSScriptRoot '*.ps1')
     )
 
-    $results = @(Invoke-ScriptAnalyzer -Path $analysisTargets -Settings $settingsPath -Recurse)
+    $results = @(
+        foreach ($target in $analysisTargets) {
+            Invoke-ScriptAnalyzer -Path $target -Settings $settingsPath -Recurse
+        }
+    )
     if ($results.Count -gt 0) {
         $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-Host
         throw "ScriptAnalyzer reported $($results.Count) issue(s)."
@@ -43,7 +47,14 @@ function Invoke-ScriptAnalyzerCheck {
 
 Invoke-ScriptAnalyzerCheck
 
-$testFiles = @(Get-ChildItem -Path $PSScriptRoot -File | Where-Object { $_.Name -like '*.Tests.ps1' -or $_.Name -like 'Test-*.ps1' } | Sort-Object Name)
+$testRoots = @($PSScriptRoot)
+$upperTestsRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Tests'
+if (Test-Path -LiteralPath $upperTestsRoot -PathType Container) { $testRoots += $upperTestsRoot }
+$testFiles = @(
+    foreach ($testRoot in $testRoots) {
+        Get-ChildItem -Path $testRoot -File | Where-Object { $_.Name -like '*.Tests.ps1' -or $_.Name -like 'Test-*.ps1' }
+    }
+) | Sort-Object FullName -Unique
 $pass = 0
 $fail = 0
 $skip = 0
