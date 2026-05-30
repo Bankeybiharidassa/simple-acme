@@ -572,7 +572,7 @@ function Compare-RenewalWithEnv {
     if ([string]$RenewalSummary.EabKid -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) {
         $mismatches.Add('EAB kid')
     }
-    if ([string]$RenewalSummary.SourcePlugin -ne 'manual') {
+    if ([string]$RenewalSummary.SourcePlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual')) {
         $mismatches.Add('Source plugin')
     }
     if ([string]$RenewalSummary.OrderPlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN')) {
@@ -595,23 +595,26 @@ function Compare-RenewalWithEnv {
         $mismatches.Add('Validation plugin none')
     }
 
-    $expectedInstallers = @('script')
+    $expectedInstallers = @(Get-InstallationPlugins -EnvValues $EnvValues | Sort-Object -Unique)
     $actualInstallers = @($RenewalSummary.InstallationPlugins | Sort-Object -Unique)
     if (($expectedInstallers -join ',') -ne ($actualInstallers -join ',')) {
         $mismatches.Add('Installation plugins')
     }
-    $normalizedScriptPaths = @($RenewalSummary.ScriptPaths | ForEach-Object { [string]$_ })
-    if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
-        $mismatches.Add('Script path')
-    }
-    $expectedScriptParameters = Normalize-WacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
-    $normalizedScriptParameters = @(
-        $RenewalSummary.ScriptParameters |
-            ForEach-Object { Normalize-WacsScriptParametersText -Value ([string]$_) } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    )
-    if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
-        $mismatches.Add('Script parameters')
+
+    if ($expectedInstallers -contains 'script') {
+        $normalizedScriptPaths = @($RenewalSummary.ScriptPaths | ForEach-Object { [string]$_ })
+        if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
+            $mismatches.Add('Script path')
+        }
+        $expectedScriptParameters = Normalize-WacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
+        $normalizedScriptParameters = @(
+            $RenewalSummary.ScriptParameters |
+                ForEach-Object { Normalize-WacsScriptParametersText -Value ([string]$_) } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
+            $mismatches.Add('Script parameters')
+        }
     }
 
     $requestedCsr = [string](Get-CsrExecutionPlan -EnvValues $EnvValues | Select-Object -First 1)

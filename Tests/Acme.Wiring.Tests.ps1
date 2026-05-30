@@ -29,6 +29,25 @@ function Assert-ArgValue {
     $idx | Should -BeGreaterThan -1
     $ArgList[$idx + 1] | Should -Be $Value
 }
+
+function New-TestRenewalSummary {
+    param([hashtable]$Overrides = @{})
+    $summary = [ordered]@{
+        Hosts = @('example.com')
+        BaseUri = 'https://acme-v02.api.letsencrypt.org/directory'
+        EabKid = ''
+        SourcePlugin = 'manual'
+        OrderPlugin = 'single'
+        StorePlugins = @('certificatestore')
+        AccountName = ''
+        HasValidationNone = $true
+        InstallationPlugins = @('script')
+        ScriptPaths = @('C:\certificaat\Scripts\cert2rds.ps1')
+        ScriptParameters = @('{CertThumbprint}')
+    }
+    foreach ($key in $Overrides.Keys) { $summary[$key] = $Overrides[$key] }
+    return [pscustomobject]$summary
+}
 }
 
 Describe 'ACME connector registry' {
@@ -132,6 +151,28 @@ Describe 'WACS issue argument arrays' {
             $actualArgs | Should -Contain $required
         }
     }
+
+    It 'rejects rds-farm preview generation without required PFX settings' {
+        $farmTemplate = Get-GuidedPipelineTemplate -TargetSystem 'rds-farm' -ValidationMode 'none'
+        $env = New-TestEnv @{
+            ACME_TARGET_SYSTEM = 'rds-farm'
+            ACME_STORE_PLUGIN = [string]$farmTemplate.ACME_STORE_PLUGIN
+            ACME_SCRIPT_PATH = [string]$farmTemplate.ACME_SCRIPT_PATH
+            ACME_SCRIPT_PARAMETERS = [string]$farmTemplate.ACME_SCRIPT_PARAMETERS
+            ACME_PRIVATE_KEY_STRATEGY = 'pfx-distribution'
+        }
+        { Get-MaskedWacsIssueCommandPreview -EnvValues $env -CsrAlgorithm 'ec' } | Should -Throw '*ACME_PFX_FILE_PATH*'
+    }
+
+    It 'builds rds-farm masked preview with PFX path, hidden password, script, and full script parameters' {
+        $params = "-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}' -ConfigFile 'C:\certificaat\runtime\deployment\rds-farm.env'"
+        $preview = Get-MaskedWacsIssueCommandPreview -EnvValues (New-TestEnv @{ ACME_TARGET_SYSTEM='rds-farm'; ACME_STORE_PLUGIN='pfxfile,certificatestore'; ACME_PFX_FILE_PATH='C:\certs'; ACME_PFX_PASSWORD='pfx-secret'; ACME_SCRIPT_PATH='C:\certificaat\Scripts\deploy-rds-farm.ps1'; ACME_SCRIPT_PARAMETERS=$params; ACME_PRIVATE_KEY_STRATEGY='pfx-distribution' }) -CsrAlgorithm 'rsa'
+        $preview | Should -Match '--pfxfilepath C:\\certs'
+        $preview | Should -Match '--pfxpassword <hidden>'
+        $preview | Should -Match '--script C:\\certificaat\\Scripts\\deploy-rds-farm\.ps1'
+        $preview | Should -Match ([regex]::Escape($params))
+        $preview | Should -Not -Match 'pfx-secret'
+    }
 }
 
 Describe 'Preflight and renewal script parameter validation' {
@@ -154,7 +195,7 @@ Describe 'Preflight and renewal script parameter validation' {
     }
 
     It 'compares renewal parameters against ACME_SCRIPT_PARAMETERS exactly after safe normalization' {
-        $summary = [pscustomobject]@{ Hosts=@('example.com'); BaseUri='https://acme-v02.api.letsencrypt.org/directory'; EabKid=''; SourcePlugin='manual'; OrderPlugin='single'; StorePlugins=@('certificatestore'); AccountName=''; HasValidationNone=$true; InstallationPlugins=@('script'); ScriptPaths=@('C:\certificaat\Scripts\deploy-rds-farm.ps1'); ScriptParameters=@("-CertThumbprint   '{CertThumbprint}'   -CachePassword '{CachePassword}' -CacheFile '{CacheFile}'") }
+        $summary = New-TestRenewalSummary @{ ScriptPaths=@('C:\certificaat\Scripts\deploy-rds-farm.ps1'); ScriptParameters=@("-CertThumbprint   '{CertThumbprint}'   -CachePassword '{CachePassword}' -CacheFile '{CacheFile}'") }
         $env = New-TestEnv @{ ACME_SCRIPT_PATH='C:\certificaat\Scripts\deploy-rds-farm.ps1'; ACME_SCRIPT_PARAMETERS="-CertThumbprint '{CertThumbprint}' -CachePassword '{CachePassword}' -CacheFile '{CacheFile}'" }
         (Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $env).Matches | Should -BeTrue
 
@@ -172,6 +213,31 @@ Describe 'Preflight and renewal script parameter validation' {
         $missing.Matches | Should -BeFalse
         $missing.Mismatches | Should -Contain 'Script parameters'
     }
+
+    It 'validates IIS renewal without script path or parameters' {
+        $summary = New-TestRenewalSummary @{ SourcePlugin='iis'; InstallationPlugins=@('iis'); ScriptPaths=@(); ScriptParameters=@() }
+        $env = New-TestEnv @{ ACME_SOURCE_PLUGIN='iis'; ACME_INSTALLATION_PLUGINS='iis'; ACME_SCRIPT_PATH=''; ACME_SCRIPT_PARAMETERS='' }
+        (Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $env).Matches | Should -BeTrue
+    }
+
+    It 'fails IIS renewal when installer differs' {
+        $summary = New-TestRenewalSummary @{ SourcePlugin='iis'; InstallationPlugins=@('script'); ScriptPaths=@(); ScriptParameters=@() }
+        $env = New-TestEnv @{ ACME_SOURCE_PLUGIN='iis'; ACME_INSTALLATION_PLUGINS='iis'; ACME_SCRIPT_PATH=''; ACME_SCRIPT_PARAMETERS='' }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $env
+        $result.Matches | Should -BeFalse
+        $result.Mismatches | Should -Contain 'Installation plugins'
+    }
+
+    It 'still validates script renewals by exact script path and parameters' {
+        $summary = New-TestRenewalSummary
+        $env = New-TestEnv
+        (Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $env).Matches | Should -BeTrue
+
+        $summary.ScriptPaths = @('C:\wrong.ps1')
+        $wrongPath = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $env
+        $wrongPath.Matches | Should -BeFalse
+        $wrongPath.Mismatches | Should -Contain 'Script path'
+    }
 }
 
 Describe 'Static guard for WACS preview source of truth' {
@@ -179,5 +245,11 @@ Describe 'Static guard for WACS preview source of truth' {
         $formText = Get-Content -LiteralPath (Join-Path $script:repoRoot 'setup/Form-Runner.psm1') -Raw
         $formText | Should -Not -Match 'wacs\.exe --accepttos'
         $formText | Should -Not -Match ' --source manual --order single '
+    }
+
+    It 'diagnostics resolve lower-case release manifest script paths against upper-case Scripts directory' {
+        $result = Test-AcmeTuiWiring -ProjectRoot $script:repoRoot
+        $result.Passed | Should -BeTrue
+        ($result.Checks | Where-Object { $_.Name -eq 'Release manifest file exists: scripts/cert2rds.ps1' }).Passed | Should -BeTrue
     }
 }

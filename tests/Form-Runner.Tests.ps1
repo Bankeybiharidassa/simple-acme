@@ -15,9 +15,13 @@ Describe 'Form runner deployment script wiring' {
             $template.ACME_SCRIPT_PARAMETERS | Should -Be '{CertThumbprint}'
         }
 
-        It 'Placeholder targets fail with a clear not implemented message' {
-            { Get-ConnectorScriptByIntent -TargetIntent 'custom' } | Should -Throw '*This target type is not implemented yet.*'
-            { Get-ConnectorScriptByIntent -TargetIntent 'mail' } | Should -Throw '*This target type is not implemented yet.*'
+        It 'Connector script intent lookup uses registry-backed mappings' {
+            Get-ConnectorScriptByIntent -TargetIntent 'mail' | Should -Be 'cert2mail.ps1'
+            Get-ConnectorScriptByIntent -TargetIntent 'custom' | Should -Be ''
+            Get-ConnectorScriptByIntent -TargetIntent 'kemp' | Should -Be 'cert2kemp.ps1'
+            Get-ConnectorScriptByIntent -TargetIntent 'netscaler' | Should -Be 'cert2netscaler.ps1'
+            Get-ConnectorScriptByIntent -TargetIntent 'paloalto' | Should -Be 'deploy-paloalto.ps1'
+            Get-ConnectorScriptByIntent -TargetIntent 'sophos' | Should -Be 'deploy-sophos.ps1'
         }
 
         It 'Manage existing certificates menu does not expose placeholder or stub wording' {
@@ -33,7 +37,7 @@ Describe 'Form runner deployment script wiring' {
         }
 
         It 'Invoke-AcmeForm keeps existing valid ACME_SCRIPT_PATH for unchanged target' {
-            $envPath = 'TestDrive:\certificate.env'
+            $envPath = Join-Path $TestDrive 'certificate.env'
             Set-Content -Path $envPath -Value '# test' -Encoding UTF8
             $existingScript = Resolve-DeploymentScriptPath -ScriptFileName 'cert2rds.ps1'
 
@@ -45,17 +49,22 @@ Describe 'Form runner deployment script wiring' {
                     CERTIFICATE_API_KEY = 'abc123'
                 }
             }
-            $script:menuAnswers = @('rds','this-server','single')
-            Mock -CommandName Read-MenuChoice -MockWith {
+            $script:menuAnswers = @('rds','this-server','single','letsencrypt','ec','P-256','yes')
+            Mock -CommandName Read-SetupChoice -MockWith {
                 $next = $script:menuAnswers[0]
                 $script:menuAnswers = @($script:menuAnswers | Select-Object -Skip 1)
                 return $next
             }
             Mock -CommandName Read-DomainsInput -MockWith { 'example.com' }
             Mock -CommandName Test-RoleAvailable -MockWith { $true }
-            Mock -CommandName Write-EnvFile
+            $script:lastEnvValues = $null
+            Mock -CommandName Write-EnvFile -MockWith { $script:lastEnvValues = $Values }
             Mock -CommandName Save-SecurePlatformConfig
             Mock -CommandName Save-RenewalMapping
+            Mock -CommandName Assert-ProviderDirectoryConsistency
+            Mock -CommandName Assert-AcmeSetupValues
+            Mock -CommandName Read-EffectiveSavedEnvValues -MockWith { $script:lastEnvValues }
+            Mock -CommandName Assert-SavedEnvMatchesSetup
             Mock -CommandName Read-Host -MockWith { 'host1' }
 
             Invoke-AcmeForm -EnvFilePath $envPath | Out-Null
@@ -70,6 +79,7 @@ Describe 'Form runner deployment script wiring' {
 Describe 'ACME provider state handling' {
     InModuleScope Form-Runner {
         It 'Read-EffectiveSavedEnvValues reads effective values via exported Env-Loader API without private helper calls' {
+            if (-not $IsWindows) { Set-ItResult -Skipped -Because 'DPAPI credential store is Windows-only.'; return }
             $envPath = Join-Path $TestDrive 'certificate.env'
             @(
                 'ACME_DIRECTORY=https://acme.networking4all.com/dv',
@@ -203,7 +213,7 @@ Describe 'ACME provider state handling' {
         }
 
         It 'Read-AcmeProviderSelection preserves existing EAB credentials when switching to Networking4All' {
-            $script:providerAnswers = @('2','1','3')
+            $script:providerAnswers = @('networking4all','production','dv-wildcard')
             Mock -CommandName Read-SetupChoice -MockWith {
                 $next = $script:providerAnswers[0]
                 $script:providerAnswers = @($script:providerAnswers | Select-Object -Skip 1)
@@ -254,13 +264,13 @@ Describe 'Invoke-AcmeForm linear output guards' {
         $eabIndex = $formRunnerText.IndexOf('EAB credentials')
         $previewIndex = $formRunnerText.IndexOf('Effective wacs command preview')
         $saveIndex = $formRunnerText.IndexOf('Save these settings?')
-        $savedIndex = $formRunnerText.IndexOf('Saved bootstrap certificate.env for initial simple-acme setup.')
+        $returnIndex = $formRunnerText.IndexOf("Status = 'saved'")
         $reconcileIndex = $setupScriptText.IndexOf('Run initial ACME reconcile now? [Y/N]')
 
         $eabIndex | Should -BeGreaterThan -1
         $previewIndex | Should -BeGreaterThan $eabIndex
         $saveIndex | Should -BeGreaterThan $previewIndex
-        $savedIndex | Should -BeGreaterThan $saveIndex
+        $returnIndex | Should -BeGreaterThan $saveIndex
         $reconcileIndex | Should -BeGreaterThan -1
     }
 
@@ -274,8 +284,8 @@ Describe 'Invoke-AcmeForm linear output guards' {
     It 'routes setup-new to reconcile prompt only when result status is saved' {
         $setupScriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'certificate-setup.ps1'
         $setupScriptText = Get-Content -LiteralPath $setupScriptPath -Raw -Encoding UTF8
-        $setupScriptText | Should -Match "if \(\$null -eq \$result\)"
-        $setupScriptText | Should -Match "elseif \(\[string\]\$result\.Status -eq 'saved'\)"
+        $setupScriptText | Should -Match 'if \(\$null -eq \$result\)'
+        $setupScriptText | Should -Match 'elseif \(\[string\]\$result\.Status -eq ''saved''\)'
         $setupScriptText | Should -Match 'Invoke-InitialAcmeReconcilePrompt -RootDir \$PSScriptRoot -EnvFilePath \$envPath'
     }
 }

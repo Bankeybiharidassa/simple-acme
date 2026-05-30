@@ -539,17 +539,36 @@ function Show-SimpleAcmeDiagnosticSummary {
 function Test-AcmeTuiWiring {
     param([string]$ProjectRoot = (Split-Path $PSScriptRoot -Parent))
 
+    $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
     $checks = New-Object System.Collections.Generic.List[object]
     function Add-AcmeTuiWiringCheck { param([string]$Name,[bool]$Passed,[string]$Detail = '') $checks.Add([pscustomobject]@{ Name=$Name; Passed=$Passed; Detail=$Detail }) | Out-Null }
+
+    $repoFileSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $excludedRootDirs = @('.git','out','runtime','logs')
+    if (Test-Path -LiteralPath $ProjectRoot -PathType Container) {
+        $pendingDirs = New-Object 'System.Collections.Generic.Stack[string]'
+        $pendingDirs.Push([System.IO.Path]::GetFullPath($ProjectRoot))
+        while ($pendingDirs.Count -gt 0) {
+            $currentDir = $pendingDirs.Pop()
+            foreach ($file in @(Get-ChildItem -LiteralPath $currentDir -File -ErrorAction SilentlyContinue)) {
+                $relative = $file.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+                [void]$repoFileSet.Add($relative)
+            }
+            foreach ($dir in @(Get-ChildItem -LiteralPath $currentDir -Directory -ErrorAction SilentlyContinue)) {
+                $relativeDir = $dir.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+                $firstSegment = ($relativeDir -split '/')[0]
+                if ($excludedRootDirs -contains $firstSegment) { continue }
+                $pendingDirs.Push($dir.FullName)
+            }
+        }
+    }
+
     function Test-RepoPathExistsCaseInsensitive {
         param([Parameter(Mandatory)][string]$RelativePath)
         $literal = Join-Path $ProjectRoot $RelativePath
         if (Test-Path -LiteralPath $literal -PathType Leaf) { return $true }
-        $normalized = ($RelativePath -replace '\\','/').ToLowerInvariant()
-        $match = Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { ($_.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/').ToLowerInvariant() -eq $normalized } |
-            Select-Object -First 1
-        return ($null -ne $match)
+        $normalized = $RelativePath -replace '\\','/'
+        return $repoFileSet.Contains($normalized)
     }
 
     $registry = Get-AcmeConnectorRegistry
@@ -1474,14 +1493,20 @@ function Invoke-AcmeForm {
     }
 
     Start-ConsoleSection -Title 'Certificate distribution selection'
-    [Console]::WriteLine('Will this certificate be used on more than one system?')
-    [Console]::WriteLine('[1] No - only this system (recommended, most secure)')
-    [Console]::WriteLine('[2] Yes - multiple systems (RDS farm, firewall, etc.)')
-    $distributionMode = Read-SetupChoice -Prompt 'Distribution' -Options @{ '1'='single'; '2'='multi' } -DefaultKey '1' -AllowBack
-    if ($distributionMode -in @('__CANCEL__','__BACK__')) {
-        [Console]::WriteLine('')
-        [Console]::WriteLine('Setup cancelled.')
-        return $null
+    if ($target -eq 'rds-farm') {
+        [Console]::WriteLine('RDS Gateway + Session Hosts farm always uses multi-system PFX distribution.')
+        [Console]::WriteLine('The setup will collect a PFX output directory and password before generating the WACS preview.')
+        $distributionMode = 'multi'
+    } else {
+        [Console]::WriteLine('Will this certificate be used on more than one system?')
+        [Console]::WriteLine('[1] No - only this system (recommended, most secure)')
+        [Console]::WriteLine('[2] Yes - multiple systems (RDS farm, firewall, etc.)')
+        $distributionMode = Read-SetupChoice -Prompt 'Distribution' -Options @{ '1'='single'; '2'='multi' } -DefaultKey '1' -AllowBack
+        if ($distributionMode -in @('__CANCEL__','__BACK__')) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
     }
 
     $values = @{}
@@ -1561,14 +1586,19 @@ function Invoke-AcmeForm {
     if ($distributionMode -eq 'multi') {
         [Console]::WriteLine('')
         [Console]::WriteLine('Certificates used on multiple systems require access to the private key.')
-        [Console]::WriteLine('Choose distribution method:')
-        [Console]::WriteLine('[1] Windows systems (enable exportable key)')
-        [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
-        $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
-        if ($multiChoice -in @('__CANCEL__','__BACK__')) {
-            [Console]::WriteLine('')
-            [Console]::WriteLine('Setup cancelled.')
-            return $null
+        if ($target -eq 'rds-farm') {
+            [Console]::WriteLine('RDS farm mode requires PFX distribution so the private key can be imported on Session Hosts.')
+            $multiChoice = 'pfx'
+        } else {
+            [Console]::WriteLine('Choose distribution method:')
+            [Console]::WriteLine('[1] Windows systems (enable exportable key)')
+            [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
+            $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
+            if ($multiChoice -in @('__CANCEL__','__BACK__')) {
+                [Console]::WriteLine('')
+                [Console]::WriteLine('Setup cancelled.')
+                return $null
+            }
         }
         if ($multiChoice -eq 'exportable') {
             [Console]::WriteLine('')
