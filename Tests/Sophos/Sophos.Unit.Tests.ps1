@@ -128,4 +128,69 @@ Describe 'Sophos TUI wiring' {
         @($wiring.SetupDispatchPresent | Where-Object { -not $_.Present }).Count | Should -Be 0
         $wiring.ReleaseManifestIncludesRuntime | Should -BeTrue
     }
+
+    It 'maps Sophos setup fields to deployment arguments' {
+        Import-Module $script:runnerPath -Force
+        $values = @{
+            host = 'fw.example.test'
+            port = '4444'
+            username = 'admin'
+            password_secret_name = 'SOPHOS_PASSWORD'
+            certificate_name = 'wildcard-example'
+            pfx_path = 'C:\certs\wildcard.pfx'
+            pfx_password_secret_name = 'SOPHOS_PFX_PASSWORD'
+            bind_admin_portal = 'true'
+            bind_vpn_portal = 'false'
+            bind_user_portal = 'false'
+            bind_waf = 'false'
+            skip_certificate_check = 'true'
+            enable_ssh_export_recovery = 'false'
+        }
+
+        $arguments = @(Convert-SophosFormValuesToArguments -FormValues $values)
+
+        $arguments | Should -Contain '-Firewall'
+        $arguments | Should -Contain 'fw.example.test'
+        $arguments | Should -Contain '-PfxPasswordSecretName'
+        $arguments | Should -Contain 'SOPHOS_PFX_PASSWORD'
+        $arguments | Should -Contain '-BindAdminPortal'
+        $arguments | Should -Contain '-SkipCertificateCheck'
+        $arguments | Should -Not -Contain '-WafRuleNames'
+    }
+
+    It 'requires WAF rule names when WAF is selected' {
+        Import-Module $script:runnerPath -Force
+        $values = @{
+            host = 'fw.example.test'
+            username = 'admin'
+            password_secret_name = 'SOPHOS_PASSWORD'
+            certificate_name = 'wildcard-example'
+            pfx_path = 'C:\certs\wildcard.pfx'
+            bind_admin_portal = 'false'
+            bind_vpn_portal = 'false'
+            bind_user_portal = 'false'
+            bind_waf = 'true'
+            enable_ssh_export_recovery = 'false'
+        }
+
+        { Convert-SophosFormValuesToArguments -FormValues $values } | Should -Throw '*waf_rule_names*'
+    }
+
+    It 'requires SSH recovery safety fields when SSH recovery is selected' {
+        Import-Module $script:runnerPath -Force
+        $values = @{
+            host = 'fw.example.test'
+            username = 'admin'
+            password_secret_name = 'SOPHOS_PASSWORD'
+            certificate_name = 'wildcard-example'
+            pfx_path = 'C:\certs\wildcard.pfx'
+            bind_admin_portal = 'true'
+            bind_vpn_portal = 'false'
+            bind_user_portal = 'false'
+            bind_waf = 'false'
+            enable_ssh_export_recovery = 'true'
+        }
+
+        { Convert-SophosFormValuesToArguments -FormValues $values } | Should -Throw '*ssh_host_key_fingerprint*'
+    }
 }

@@ -29,6 +29,10 @@ param(
 
     [SecureString]$PfxPassword,
 
+    [string]$PfxPasswordSecretName,
+
+    [string]$PfxPasswordSecureFile,
+
     [string]$CertPath,
 
     [string]$KeyPath,
@@ -148,6 +152,20 @@ try {
     }
 
     $sshPasswordText = Resolve-OptionalSophosPassword -SecurePassword $SshPassword -SecretName $SshPasswordSecretName -SecureFile $SshPasswordSecureFile
+    $resolvedPfxPassword = $PfxPassword
+    if ($null -eq $resolvedPfxPassword) {
+        $pfxPasswordText = Resolve-OptionalSophosPassword -SecurePassword $null -SecretName $PfxPasswordSecretName -SecureFile $PfxPasswordSecureFile
+        if (-not [string]::IsNullOrEmpty($pfxPasswordText)) {
+            $resolvedPfxPassword = ConvertTo-SecureString $pfxPasswordText -AsPlainText -Force
+        }
+    }
+    $normalizedWafRuleNames = @()
+    foreach ($ruleValue in @($WafRuleNames)) {
+        if (-not [string]::IsNullOrWhiteSpace($ruleValue)) {
+            $normalizedWafRuleNames += @([string]$ruleValue -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+    }
+    $WafRuleNames = @($normalizedWafRuleNames)
     $plannedActions = @(Get-SophosDeploymentPlan)
 
     if ($PSCmdlet.ShouldProcess($Firewall, "Deploy Sophos certificate '$CertificateName'")) {
@@ -155,7 +173,7 @@ try {
 
         $exportDiagnostic = Export-SophosCertificateArchive -OutputPath $ExportRecoveryPath -EnableSshExportRecovery:$EnableSshExportRecovery -SshUsername $SshUsername -SshPort $SshPort -SshHostKeyFingerprint $SshHostKeyFingerprint -SshPassword $sshPasswordText -SshPrivateKeyPath $SshPrivateKeyPath
 
-        $null = Import-SophosCertificate -Name $CertificateName -PfxPath $PfxPath -PfxPassword $PfxPassword -CertPath $CertPath -KeyPath $KeyPath -ChainPath $ChainPath
+        $null = Import-SophosCertificate -Name $CertificateName -PfxPath $PfxPath -PfxPassword $resolvedPfxPassword -CertPath $CertPath -KeyPath $KeyPath -ChainPath $ChainPath
 
         if ($BindAdminPortal -or $BindVpnPortal -or $BindUserPortal) {
             $null = Set-SophosAdminWebSettingsCertificate -CertificateName $CertificateName

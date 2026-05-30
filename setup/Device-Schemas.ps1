@@ -85,6 +85,8 @@ $DeviceSchemas = @{
         @{ Name='password_secret_name'; Label='Password secret name'; Type='string'; Required=$true; Placeholder='SOPHOS_PASSWORD'; HelpText='Secret/environment name used to resolve the Sophos API password' },
         @{ Name='certificate_name'; Label='Certificate object name'; Type='string'; Required=$true; Placeholder='wildcard-example-com'; HelpText='Sophos certificate object name to upload or update' },
         @{ Name='pfx_path'; Label='PFX path'; Type='string'; Required=$false; Placeholder='C:\certs\wildcard.pfx'; HelpText='Optional PFX certificate path' },
+        @{ Name='pfx_password_secret_name'; Label='PFX password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_PFX_PASSWORD'; HelpText='Optional secret/environment name used to resolve the PFX password' },
+        @{ Name='pfx_password_secure_file'; Label='PFX password secure file'; Type='string'; Required=$false; Placeholder='C:\secrets\sophos-pfx-password.txt'; HelpText='Optional DPAPI secure string file used to resolve the PFX password' },
         @{ Name='cert_path'; Label='PEM certificate path'; Type='string'; Required=$false; Placeholder='C:\certs\fullchain.pem'; HelpText='PEM certificate path when not using PFX' },
         @{ Name='key_path'; Label='PEM private key path'; Type='string'; Required=$false; Placeholder='C:\certs\privkey.pem'; HelpText='PEM private key path when not using PFX' },
         @{ Name='chain_path'; Label='PEM chain path'; Type='string'; Required=$false; Placeholder=''; HelpText='Optional chain path' },

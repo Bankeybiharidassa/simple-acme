@@ -63,6 +63,44 @@ function Convert-SophosFormValuesToArguments {
         }
     }
 
+    $pfxPath = if ($FormValues.ContainsKey('pfx_path')) { [string]$FormValues['pfx_path'] } else { '' }
+    $certPath = if ($FormValues.ContainsKey('cert_path')) { [string]$FormValues['cert_path'] } else { '' }
+    $keyPath = if ($FormValues.ContainsKey('key_path')) { [string]$FormValues['key_path'] } else { '' }
+    $hasPfx = -not [string]::IsNullOrWhiteSpace($pfxPath)
+    $hasPemPair = (-not [string]::IsNullOrWhiteSpace($certPath)) -or (-not [string]::IsNullOrWhiteSpace($keyPath))
+
+    if ($hasPfx -and $hasPemPair) {
+        throw "Provide either 'pfx_path' or the PEM 'cert_path'/'key_path' pair, not both."
+    }
+    if (-not $hasPfx -and ([string]::IsNullOrWhiteSpace($certPath) -or [string]::IsNullOrWhiteSpace($keyPath))) {
+        throw "Sophos certificate source is missing. Provide 'pfx_path' or both 'cert_path' and 'key_path'."
+    }
+
+    $bindAdminPortal = ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_admin_portal')) { $FormValues['bind_admin_portal'] } else { $false })
+    $bindVpnPortal = ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_vpn_portal')) { $FormValues['bind_vpn_portal'] } else { $false })
+    $bindUserPortal = ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_user_portal')) { $FormValues['bind_user_portal'] } else { $false })
+    $bindWaf = ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_waf')) { $FormValues['bind_waf'] } else { $false })
+    $wafRuleNames = if ($FormValues.ContainsKey('waf_rule_names')) { [string]$FormValues['waf_rule_names'] } else { '' }
+    if (-not ($bindAdminPortal -or $bindVpnPortal -or $bindUserPortal -or $bindWaf)) {
+        throw "Select at least one Sophos certificate target: admin portal, VPN portal, user portal, or WAF."
+    }
+    if ($bindWaf -and [string]::IsNullOrWhiteSpace($wafRuleNames)) {
+        throw "Sophos WAF binding requires 'waf_rule_names'."
+    }
+
+    $enableSshRecovery = ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('enable_ssh_export_recovery')) { $FormValues['enable_ssh_export_recovery'] } else { $false })
+    if ($enableSshRecovery) {
+        $sshHostKey = if ($FormValues.ContainsKey('ssh_host_key_fingerprint')) { [string]$FormValues['ssh_host_key_fingerprint'] } else { '' }
+        $exportPath = if ($FormValues.ContainsKey('export_recovery_path')) { [string]$FormValues['export_recovery_path'] } else { '' }
+        $sshPasswordSecret = if ($FormValues.ContainsKey('ssh_password_secret_name')) { [string]$FormValues['ssh_password_secret_name'] } else { '' }
+        $sshPrivateKey = if ($FormValues.ContainsKey('ssh_private_key_path')) { [string]$FormValues['ssh_private_key_path'] } else { '' }
+        if ([string]::IsNullOrWhiteSpace($sshHostKey)) { throw "Sophos SSH export recovery requires 'ssh_host_key_fingerprint'." }
+        if ([string]::IsNullOrWhiteSpace($exportPath)) { throw "Sophos SSH export recovery requires 'export_recovery_path'." }
+        if ([string]::IsNullOrWhiteSpace($sshPasswordSecret) -and [string]::IsNullOrWhiteSpace($sshPrivateKey)) {
+            throw "Sophos SSH export recovery requires 'ssh_password_secret_name' or 'ssh_private_key_path'."
+        }
+    }
+
     $map = [ordered]@{
         host = '-Firewall'
         port = '-Port'
@@ -70,6 +108,8 @@ function Convert-SophosFormValuesToArguments {
         password_secret_name = '-PasswordSecretName'
         certificate_name = '-CertificateName'
         pfx_path = '-PfxPath'
+        pfx_password_secret_name = '-PfxPasswordSecretName'
+        pfx_password_secure_file = '-PfxPasswordSecureFile'
         cert_path = '-CertPath'
         key_path = '-KeyPath'
         chain_path = '-ChainPath'
@@ -88,13 +128,13 @@ function Convert-SophosFormValuesToArguments {
         }
     }
 
-    if (ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_admin_portal')) { $FormValues['bind_admin_portal'] } else { $false })) { $arguments.Add('-BindAdminPortal') | Out-Null }
-    if (ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_vpn_portal')) { $FormValues['bind_vpn_portal'] } else { $false })) { $arguments.Add('-BindVpnPortal') | Out-Null }
-    if (ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('bind_user_portal')) { $FormValues['bind_user_portal'] } else { $false })) { $arguments.Add('-BindUserPortal') | Out-Null }
+    if ($bindAdminPortal) { $arguments.Add('-BindAdminPortal') | Out-Null }
+    if ($bindVpnPortal) { $arguments.Add('-BindVpnPortal') | Out-Null }
+    if ($bindUserPortal) { $arguments.Add('-BindUserPortal') | Out-Null }
     if (ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('skip_certificate_check')) { $FormValues['skip_certificate_check'] } else { $false })) { $arguments.Add('-SkipCertificateCheck') | Out-Null }
-    if (ConvertTo-SophosTuiBoolean -Value $(if ($FormValues.ContainsKey('enable_ssh_export_recovery')) { $FormValues['enable_ssh_export_recovery'] } else { $false })) { $arguments.Add('-EnableSshExportRecovery') | Out-Null }
+    if ($enableSshRecovery) { $arguments.Add('-EnableSshExportRecovery') | Out-Null }
 
-    if ($FormValues.ContainsKey('waf_rule_names') -and -not [string]::IsNullOrWhiteSpace([string]$FormValues['waf_rule_names'])) {
+    if ($bindWaf -and $FormValues.ContainsKey('waf_rule_names') -and -not [string]::IsNullOrWhiteSpace([string]$FormValues['waf_rule_names'])) {
         $arguments.Add('-WafRuleNames') | Out-Null
         $arguments.Add([string]$FormValues['waf_rule_names']) | Out-Null
     }
@@ -214,7 +254,7 @@ function Test-SophosTuiWiring {
     $menuText = if (Test-Path -LiteralPath $menuPath) { Get-Content -LiteralPath $menuPath -Raw } else { '' }
     $setupText = if (Test-Path -LiteralPath $setupPath) { Get-Content -LiteralPath $setupPath -Raw } else { '' }
     $releaseText = if (Test-Path -LiteralPath $releasePath) { Get-Content -LiteralPath $releasePath -Raw } else { '' }
-    $requiredFields = @('host','port','username','password_secret_name','certificate_name','bind_admin_portal','bind_waf','waf_rule_names','enable_ssh_export_recovery','ssh_host_key_fingerprint')
+    $requiredFields = @('host','port','username','password_secret_name','certificate_name','pfx_path','pfx_password_secret_name','pfx_password_secure_file','cert_path','key_path','bind_admin_portal','bind_vpn_portal','bind_user_portal','bind_waf','waf_rule_names','enable_ssh_export_recovery','ssh_host_key_fingerprint','export_recovery_path')
 
     [pscustomobject]@{
         ScriptExists = Test-Path -LiteralPath $scriptPath -PathType Leaf
