@@ -594,6 +594,19 @@ function Test-AcmeTuiWiring {
         Add-AcmeTuiWiringCheck -Name "Release manifest file exists: $relative" -Passed (Test-RepoPathExistsCaseInsensitive -RelativePath $relative) -Detail $relative
     }
 
+    $manifestReleaseFiles = @()
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifestReleaseFiles = @(
+            Get-Content -LiteralPath $manifestPath -Encoding UTF8 |
+                ForEach-Object { ([string]$_).Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith('#') }
+        )
+    }
+    foreach ($relative in $manifestReleaseFiles) {
+        $releasePath = Join-Path (Join-Path $ProjectRoot 'out/release') $relative
+        Add-AcmeTuiWiringCheck -Name "Release output file exists: $relative" -Passed (Test-Path -LiteralPath $releasePath -PathType Leaf) -Detail ("out/release/" + $relative)
+    }
+
     $formText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'setup/Form-Runner.psm1') -Raw -Encoding UTF8
     $coreText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'core/Simple-Acme-Reconciler.psm1') -Raw -Encoding UTF8
     Add-AcmeTuiWiringCheck -Name 'All WACS preview helpers use Get-WacsIssueArguments' -Passed ($coreText -match 'function Get-MaskedWacsIssueCommandPreview[\s\S]*Get-WacsIssueArguments[\s\S]*Get-MaskedWacsArgumentsText[\s\S]*ConvertTo-WacsCommandLineText') -Detail 'Get-MaskedWacsIssueCommandPreview'
