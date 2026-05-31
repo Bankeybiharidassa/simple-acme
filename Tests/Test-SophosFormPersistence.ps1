@@ -3,36 +3,42 @@ Set-StrictMode -Version Latest
 function Invoke-TestSophosFormPersistence {
     param([scriptblock]$Assert)
 
-    & $Assert 'Sophos deployment form loads and saves persisted current values' {
-        $path = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
+    & $Assert 'Device profile runner loads and saves persisted current values for any connector' {
+        $path = Join-Path $PSScriptRoot '..\setup\Device-Profile-Runner.psm1'
         $raw = Get-Content -LiteralPath $path -Raw
         foreach ($text in @(
-            'function Resolve-SophosTuiConfigDir',
-            'function Get-SophosDeploymentCurrentValues',
-            'function Save-SophosDeploymentCurrentValues',
-            'function Add-SophosFieldDefaults',
-            'function Invoke-SophosProfileForm',
-            'function Get-SophosCertificateDeploymentContext',
+            'function Resolve-DeviceProfileConfigDir',
+            'function Get-DeviceProfileCurrentValues',
+            'function Save-DeviceProfile',
+            'function Add-DeviceProfileDefaults',
+            'function Invoke-DeviceProfileForm',
+            '[Parameter(Mandatory)][string]$ConnectorType',
+            '[string[]]$CertificateRuntimeKeys = @()',
+            '[hashtable]$PlaintextSecretNameFields = @{}',
             'Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues',
-            'Save-SophosDeploymentCurrentValues -ConfigDir $configDir -Values $values'
+            'Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {
-                throw "Missing Sophos form persistence wiring: $text"
+                throw "Missing generic device profile wiring: $text"
             }
         }
     }
 
-    & $Assert 'Sophos deployment form persists into device config store' {
+    & $Assert 'Sophos profile form uses the generic device profile runner' {
         $path = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
         $raw = Get-Content -LiteralPath $path -Raw
-        if ($raw -notmatch "connector_type\s*=\s*'sophos'") {
-            throw 'Sophos deployment values are not saved as a sophos device config.'
-        }
-        if ($raw -notmatch 'device_id\s*=\s*\$deviceId') {
-            throw 'Sophos deployment values do not use a stable device id.'
-        }
-        if ($raw -notmatch 'Save-DeviceConfig -Device \$device -ConfigDir \$ConfigDir') {
-            throw 'Sophos deployment values are not saved through Config-Store.'
+        foreach ($text in @(
+            'Import-Module "$PSScriptRoot/Device-Profile-Runner.psm1"',
+            'function Invoke-SophosProfileForm',
+            'Invoke-DeviceProfileForm `',
+            "-ConnectorType 'sophos'",
+            "-DefaultDeviceId 'sophos-firewall'",
+            "-SecretFields @('password')",
+            'function Get-SophosCertificateDeploymentContext'
+        )) {
+            if ($raw -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos generic profile runner wiring: $text"
+            }
         }
     }
 
@@ -52,7 +58,7 @@ function Invoke-TestSophosFormPersistence {
         foreach ($text in @(
             'function Write-SophosTuiSecureValueFile',
             'function Resolve-SophosDefaultPfxPath',
-            "Save-DeviceConfig -Device `$device -ConfigDir `$ConfigDir -SecretFields @('password')",
+            "-SecretFields @('password')",
             'Sophos admin password is missing.',
             '-PasswordSecureFile'
         )) {
@@ -84,17 +90,17 @@ function Invoke-TestSophosFormPersistence {
         }
     }
 
-    & $Assert 'Sophos deployment form strips placeholder examples before validation and persistence' {
-        $path = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
+    & $Assert 'Device profile form strips placeholder examples before validation and persistence' {
+        $path = Join-Path $PSScriptRoot '..\setup\Device-Profile-Runner.psm1'
         $raw = Get-Content -LiteralPath $path -Raw
-        if ($raw -notmatch 'function\s+Remove-SophosPlaceholderValues') {
-            throw 'Sophos placeholder cleanup helper is missing.'
+        if ($raw -notmatch 'function\s+Remove-DeviceProfilePlaceholderValues') {
+            throw 'Device profile placeholder cleanup helper is missing.'
         }
-        if ($raw -notmatch 'Remove-SophosPlaceholderValues -Values \(Get-SophosDeploymentCurrentValues') {
-            throw 'Persisted Sophos values are not cleaned before reopening the form.'
+        if ($raw -notmatch 'Remove-DeviceProfilePlaceholderValues -Values \(Get-DeviceProfileCurrentValues') {
+            throw 'Persisted device profile values are not cleaned before reopening the form.'
         }
-        if ($raw -notmatch 'Remove-SophosPlaceholderValues -Values \$values') {
-            throw 'Submitted Sophos values are not cleaned before validation/persistence.'
+        if ($raw -notmatch 'Remove-DeviceProfilePlaceholderValues -Values \$values') {
+            throw 'Submitted device profile values are not cleaned before validation/persistence.'
         }
         if ($raw -notmatch 'if \(\$field\.ContainsKey\(''Default''\)\) \{ continue \}') {
             throw 'Sophos placeholder cleanup still strips explicit defaults.'

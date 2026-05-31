@@ -64,6 +64,7 @@ scripts/deploy-paloalto.ps1
 scripts/deploy-sophos.ps1
 setup/Connector-Registry.ps1
 setup/Device-Schemas.ps1
+setup/Device-Profile-Runner.psm1
 setup/Form-Runner.psm1
 setup/Menu-Tree.ps1
 setup/NetScaler-Runner.psm1
