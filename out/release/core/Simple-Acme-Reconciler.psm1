@@ -51,7 +51,7 @@ function Get-SafeCount {
     return @($Value).Count
 }
 
-function As-Array {
+function ConvertTo-Array {
     param([AllowNull()]$Value)
 
     if ($null -eq $Value) {
@@ -76,7 +76,7 @@ function Get-EnvValue {
         return $Default
     }
 
-    if ($EnvValues.ContainsKey($Key)) {
+    if (([System.Collections.IDictionary]$EnvValues).Contains($Key)) {
         $value = $EnvValues[$Key]
         if ($null -eq $value) {
             return $Default
@@ -101,7 +101,7 @@ function Resolve-WacsExecutable {
     param([hashtable]$EnvValues = @{})
 
     $candidates = New-Object System.Collections.Generic.List[string]
-    if ($null -ne $EnvValues -and $EnvValues.ContainsKey('ACME_WACS_PATH')) {
+    if ($null -ne $EnvValues -and ([System.Collections.IDictionary]$EnvValues).Contains('ACME_WACS_PATH')) {
         $configured = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_PATH')
         if (-not [string]::IsNullOrWhiteSpace($configured)) {
             $candidates.Add($configured)
@@ -110,6 +110,7 @@ function Resolve-WacsExecutable {
 
     $projectRoot = Split-Path $PSScriptRoot -Parent
     $candidates.Add((Join-Path $projectRoot 'wacs.exe'))
+    $candidates.Add((Join-Path $projectRoot 'simple-acme.exe'))
 
     foreach ($cmdName in @('wacs.exe','wacs')) {
         $cmd = Get-Command $cmdName -ErrorAction SilentlyContinue
@@ -277,7 +278,7 @@ function Find-PropertyValues {
 
     $foundValues = [System.Collections.ArrayList]::new()
 
-    function Visit-Node {
+    function Invoke-NodeVisit {
         param($Node)
         if ($null -eq $Node) { return }
 
@@ -286,7 +287,7 @@ function Find-PropertyValues {
                 if ($Names -contains [string]$key) {
                     [void]$foundValues.Add([object]$Node[$key])
                 }
-                Visit-Node -Node $Node[$key]
+                Invoke-NodeVisit -Node $Node[$key]
             }
             return
         }
@@ -296,19 +297,19 @@ function Find-PropertyValues {
                 if ($Names -contains [string]$property.Name) {
                     [void]$foundValues.Add([object]$property.Value)
                 }
-                Visit-Node -Node $property.Value
+                Invoke-NodeVisit -Node $property.Value
             }
             return
         }
 
         if ($Node -is [System.Collections.IEnumerable] -and -not ($Node -is [string])) {
             foreach ($item in $Node) {
-                Visit-Node -Node $item
+                Invoke-NodeVisit -Node $item
             }
         }
     }
 
-    Visit-Node -Node $InputObject
+    Invoke-NodeVisit -Node $InputObject
     return @($foundValues)
 }
 
@@ -441,6 +442,16 @@ function Get-RenewalSummary {
     }
 
     if ($isNewFormat) {
+        $validationOptions = $renewal.PSObject.Properties['ValidationPluginOptions']
+        if ($null -ne $validationOptions -and $null -ne $validationOptions.Value) {
+            $validationPluginId = ''
+            $pluginProperty = $validationOptions.Value.PSObject.Properties['Plugin']
+            if ($null -ne $pluginProperty) { $validationPluginId = [string]$pluginProperty.Value }
+            if ($validationPluginId -eq 'a37b41dc-b45a-42fe-8d81-82ca409a5491') {
+                $validationCandidates = @($validationCandidates + 'none')
+            }
+        }
+
         # Derive store plugin names from StorePluginOptions structure:
         #   entry with a non-empty Path property → pfxfile; entry without Path → certificatestore
         $spoRaw = $renewal.PSObject.Properties['StorePluginOptions']
@@ -510,6 +521,7 @@ function Get-RenewalSummary {
         StorePlugins     = $normalizedStoreCandidates
         InstallationPlugins = $normalizedInstallCandidates
         AccountName      = ($accountCandidates | Where-Object { $_ -is [string] } | Select-Object -First 1)
+        HasValidationMetadata = ((Get-SafeCount $normalizedValidationCandidates) -gt 0)
         HasValidationNone = ((Get-SafeCount (@($normalizedValidationCandidates | Where-Object { $_ -eq 'none' }))) -gt 0)
         HasScriptInstallation = ((Get-SafeCount (@($normalizedInstallCandidates | Where-Object { $_ -eq 'script' }))) -gt 0)
         ScriptPaths      = @($scriptCandidates | Where-Object { $_ -is [string] })
@@ -537,7 +549,7 @@ function Get-NormalizedCsvValues {
     )
 }
 
-function Normalize-WacsScriptParametersText {
+function ConvertTo-NormalizedWacsScriptParametersText {
     param([AllowNull()][string]$Value)
 
     if ($null -eq $Value) { return '' }
@@ -558,10 +570,15 @@ function Compare-RenewalWithEnv {
     $expectedHosts = Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS')
     $actualHosts = @($RenewalSummary.Hosts | Sort-Object -Unique)
     $expectedScriptPath = (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PATH')
+    $scriptParametersProperty = $RenewalSummary.PSObject.Properties['ScriptParameters']
+    $renewalScriptParameters = @()
+    if ($null -ne $scriptParametersProperty) {
+        $renewalScriptParameters = @($scriptParametersProperty.Value)
+    }
 
     $mismatches = New-Object System.Collections.Generic.List[string]
 
-    if ([string]$RenewalSummary.BaseUri -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY')) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.BaseUri) -and [string]$RenewalSummary.BaseUri -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY')) {
         $mismatches.Add('BaseUri')
     }
 
@@ -569,10 +586,10 @@ function Compare-RenewalWithEnv {
         $mismatches.Add('Domains')
     }
 
-    if ([string]$RenewalSummary.EabKid -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.EabKid) -and [string]$RenewalSummary.EabKid -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_KID')) {
         $mismatches.Add('EAB kid')
     }
-    if ([string]$RenewalSummary.SourcePlugin -ne 'manual') {
+    if ([string]$RenewalSummary.SourcePlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual')) {
         $mismatches.Add('Source plugin')
     }
     if ([string]$RenewalSummary.OrderPlugin -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN')) {
@@ -587,31 +604,37 @@ function Compare-RenewalWithEnv {
     if (($expectedStores -join ',') -ne ($actualStores -join ',')) {
         $mismatches.Add('Store plugin')
     }
-    if ([string]$RenewalSummary.AccountName -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.AccountName) -and [string]$RenewalSummary.AccountName -ne (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ACCOUNT_NAME')) {
         $mismatches.Add('Account name')
     }
 
-    if (-not $RenewalSummary.HasValidationNone) {
+    $hasValidationMetadata = $true
+    if ($RenewalSummary.PSObject.Properties.Name -contains 'HasValidationMetadata') {
+        $hasValidationMetadata = [bool]$RenewalSummary.HasValidationMetadata
+    }
+    if ($hasValidationMetadata -and -not $RenewalSummary.HasValidationNone) {
         $mismatches.Add('Validation plugin none')
     }
 
-    $expectedInstallers = @('script')
+    $expectedInstallers = @(Get-InstallationPlugins -EnvValues $EnvValues | Sort-Object -Unique)
     $actualInstallers = @($RenewalSummary.InstallationPlugins | Sort-Object -Unique)
     if (($expectedInstallers -join ',') -ne ($actualInstallers -join ',')) {
         $mismatches.Add('Installation plugins')
     }
-    $normalizedScriptPaths = @($RenewalSummary.ScriptPaths | ForEach-Object { [string]$_ })
-    if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
-        $mismatches.Add('Script path')
-    }
-    $expectedScriptParameters = Normalize-WacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
-    $normalizedScriptParameters = @(
-        $RenewalSummary.ScriptParameters |
-            ForEach-Object { Normalize-WacsScriptParametersText -Value ([string]$_) } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    )
-    if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
-        $mismatches.Add('Script parameters')
+    if ($expectedInstallers -contains 'script') {
+        $normalizedScriptPaths = @($RenewalSummary.ScriptPaths | ForEach-Object { [string]$_ })
+        if (-not ($normalizedScriptPaths -contains $expectedScriptPath)) {
+            $mismatches.Add('Script path')
+        }
+        $expectedScriptParameters = ConvertTo-NormalizedWacsScriptParametersText -Value (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}')
+        $normalizedScriptParameters = @(
+            $renewalScriptParameters |
+                ForEach-Object { ConvertTo-NormalizedWacsScriptParametersText -Value ([string]$_) } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ([string]::IsNullOrWhiteSpace($expectedScriptParameters) -or -not ($normalizedScriptParameters -contains $expectedScriptParameters)) {
+            $mismatches.Add('Script parameters')
+        }
     }
 
     $requestedCsr = [string](Get-CsrExecutionPlan -EnvValues $EnvValues | Select-Object -First 1)
@@ -654,7 +677,7 @@ function Test-ReconcilePreflight {
 
     $missing = @()
     foreach ($key in @('ACME_DIRECTORY','DOMAINS')) {
-        if (-not $EnvValues.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$EnvValues[$key])) {
+        if (-not ([System.Collections.IDictionary]$EnvValues).Contains($key) -or [string]::IsNullOrWhiteSpace([string]$EnvValues[$key])) {
             $missing += $key
         }
     }
@@ -803,7 +826,12 @@ function Get-InstallationPlugins {
 
     $storeTokensInInstallation = @($plugins | Where-Object { $_ -eq 'pfxfile' })
     if ((Get-SafeCount $storeTokensInInstallation) -gt 0) {
-        Write-CertificateLog -Level WARN -Message 'ACME_INSTALLATION_PLUGINS contains pfxfile. pfxfile is a store plugin; move it to ACME_STORE_PLUGIN. Ignoring pfxfile in installation list.'
+        $warningMessage = 'ACME_INSTALLATION_PLUGINS contains pfxfile. pfxfile is a store plugin; move it to ACME_STORE_PLUGIN. Ignoring pfxfile in installation list.'
+        if (Get-Command -Name Write-CertificateLog -ErrorAction SilentlyContinue) {
+            Write-CertificateLog -Level WARN -Message $warningMessage
+        } else {
+            Write-Warning $warningMessage
+        }
         $plugins = @($plugins | Where-Object { $_ -ne 'pfxfile' })
     }
 
@@ -826,7 +854,7 @@ function Get-CsrExecutionPlan {
     $fallbackEnabled = ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '1').Trim() -eq '1')
     if ($preferred -notin @('ec','rsa')) { throw "Unsupported ACME_CSR_ALGORITHM value '$preferred'. Supported values: ec, rsa." }
     if ($preferred -eq 'ec' -and $fallbackEnabled) { return @('ec','rsa') }
-    return @($preferred)
+    return $preferred
 }
 
 function Get-MaskedWacsArgumentsText {
@@ -1215,7 +1243,6 @@ function Invoke-WacsIssue {
 
     Add-Content -LiteralPath $wrapperLog -Value ('timestamp=' + (Get-Date).ToString('o')) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('env_path=' + [string]([Environment]::GetEnvironmentVariable('CERTIFICATE_ENV_FILE'))) -Encoding UTF8
-    Add-Content -LiteralPath $wrapperLog -Value ('wacs_path=' + [string](Resolve-WacsExecutable -EnvValues $EnvValues)) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('csr_selected=' + [string](Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CSR_ALGORITHM' -Default 'ec')) -Encoding UTF8
     Add-Content -LiteralPath $wrapperLog -Value ('csr_fallback=' + $(if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ALLOW_CSR_FALLBACK' -Default '1') -eq '1') { 'enabled' } else { 'disabled' })) -Encoding UTF8
 
@@ -1223,6 +1250,7 @@ function Invoke-WacsIssue {
     for ($idx = 0; $idx -lt (Get-SafeCount $csrAlgorithms); $idx++) {
         $algorithm = [string]$csrAlgorithms[$idx]
         $commandArgs = Get-WacsIssueArguments -EnvValues $EnvValues -CsrAlgorithm $algorithm -EnsurePfxDirectory
+        Add-Content -LiteralPath $wrapperLog -Value ('wacs_path=' + [string](Resolve-WacsExecutable -EnvValues $EnvValues)) -Encoding UTF8
         $maskedArgs = Get-MaskedWacsArgumentsText -Args $commandArgs
         $attemptNumber = $idx + 1
         Add-Content -LiteralPath $wrapperLog -Value ('attempt=' + $attemptNumber) -Encoding UTF8
@@ -1446,6 +1474,7 @@ $FunctionsToExport.Add('Resolve-WacsExecutable')
 $FunctionsToExport.Add('Compare-RenewalWithEnv')
 $FunctionsToExport.Add('Test-ReconcilePreflight')
 $FunctionsToExport.Add('Set-SimpleAcmeSettings')
+$FunctionsToExport.Add('ConvertTo-HashtableRecursive')
 $FunctionsToExport.Add('Get-NormalizedDomains')
 $FunctionsToExport.Add('Get-SafeCount')
 $FunctionsToExport.Add('Get-RenewalFiles')
@@ -1453,6 +1482,7 @@ $FunctionsToExport.Add('Get-RenewalSummary')
 $FunctionsToExport.Add('Get-RenewalSummarySafe')
 $FunctionsToExport.Add('Remove-MalformedRenewalFiles')
 $FunctionsToExport.Add('Get-InstallationPlugins')
+$FunctionsToExport.Add('Get-CsrExecutionPlan')
 $FunctionsToExport.Add('Get-RenewalIdForCancel')
 $FunctionsToExport.Add('Invoke-SimpleAcmeReconcile')
 $FunctionsToExport.Add('Get-WacsFileVersion')
@@ -1464,12 +1494,17 @@ $FunctionsToExport.Add('Get-MaskedWacsArgumentsText')
 $FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
 $FunctionsToExport.Add('Get-WacsIssueArguments')
 $FunctionsToExport.Add('Get-MaskedWacsIssueCommandPreview')
-$FunctionsToExport.Add('Normalize-WacsScriptParametersText')
+$FunctionsToExport.Add('ConvertTo-NormalizedWacsScriptParametersText')
 $FunctionsToExport.Add('Get-NormalizedCsvValues')
 $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
+
+Set-Alias -Name Normalize-WacsScriptParametersText -Value ConvertTo-NormalizedWacsScriptParametersText
+
+$AliasesToExport = New-Object System.Collections.Generic.List[string]
+$AliasesToExport.Add('Normalize-WacsScriptParametersText')
 $FunctionsToExport.Add('Write-ReconcileDiagnostics')
 $FunctionsToExport.Add('Write-SimpleAcmeLogDiagnosticSummary')
 $FunctionsToExport.Add('Get-SimpleAcmeLogDiagnosticSummary')
@@ -1485,4 +1520,4 @@ if ((Get-SafeCount $MissingExports) -gt 0) {
     throw ('Export list contains missing function(s): ' + ($MissingExports -join ', '))
 }
 
-Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray())
+Export-ModuleMember -Function ([string[]]$FunctionsToExport.ToArray()) -Alias ([string[]]$AliasesToExport.ToArray())

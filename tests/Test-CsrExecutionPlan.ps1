@@ -4,7 +4,7 @@ Import-Module (Join-Path $PSScriptRoot '..\core\Simple-Acme-Reconciler.psm1') -F
 function Invoke-TestCsrExecutionPlan {
     param([scriptblock]$Assert)
     & $Assert 'ec with fallback disabled produces ec only' {
-        $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' }
+        $plan = @(Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' })
         if (@($plan).Count -ne 1 -or $plan[0] -ne 'ec') { throw 'Unexpected plan for ec/0' }
     }
     & $Assert 'ec with fallback enabled produces ec then rsa' {
@@ -13,9 +13,8 @@ function Invoke-TestCsrExecutionPlan {
     }
     & $Assert 'single-element plan does not unroll to string when indexed' {
         # PowerShell unrolls single-element arrays to scalars on assignment.
-        # Without @(), $arr[0] on the string 'ec' returns 'e' (first char).
-        $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' }
-        $wrapped = @($plan)
-        if ($wrapped[0] -ne 'ec') { throw "Array unrolling bug: got '$($wrapped[0])' instead of 'ec'" }
+        # Callers that index plans must capture function output with @().
+        $plan = @(Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM='ec'; ACME_ALLOW_CSR_FALLBACK='0' })
+        if ($plan[0] -ne 'ec') { throw "Array unrolling bug: got '$($plan[0])' instead of 'ec'" }
     }
 }

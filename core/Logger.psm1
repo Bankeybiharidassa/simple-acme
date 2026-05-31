@@ -23,8 +23,12 @@ function Write-CertificateLog {
         [string]$Step = ''
     )
 
+    $levelText = ''
+    if ($null -ne $Level) {
+        $levelText = [string]$Level
+    }
 
-    $normalizedLevel = switch -Regex (($Level ?? '').Trim().ToUpperInvariant()) {
+    $normalizedLevel = switch -Regex ($levelText.Trim().ToUpperInvariant()) {
         '^INFO(RMATION)?$' { 'INFO'; break }
         '^WARN(ING)?$' { 'WARN'; break }
         '^ERR(OR)?$' { 'ERROR'; break }

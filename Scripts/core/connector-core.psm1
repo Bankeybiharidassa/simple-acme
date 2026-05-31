@@ -254,7 +254,7 @@ function Write-ConnectorLog {
     )
 
     $resolvedLogDir = if ([string]::IsNullOrWhiteSpace($LogDir)) {
-        if ($IsWindows) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot '..\logs' }
+        if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot '..\logs' }
     } else { $LogDir }
     if (-not (Test-Path -LiteralPath $resolvedLogDir)) {
         New-Item -Path $resolvedLogDir -ItemType Directory -Force | Out-Null

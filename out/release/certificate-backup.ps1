@@ -135,7 +135,7 @@ try {
         }
     }
 
-    $simpleAcmeDir = if (-not [string]::IsNullOrWhiteSpace([string]$envValues.ACME_DATA_DIR)) { [string]$envValues.ACME_DATA_DIR } else { Join-Path $env:ProgramData 'simple-acme' }
+    $simpleAcmeDir = if (-not [string]::IsNullOrWhiteSpace([string]$envValues['ACME_DATA_DIR'])) { [string]$envValues['ACME_DATA_DIR'] } else { Join-Path $env:ProgramData 'simple-acme' }
     $simpleAcmeStateFound = $false
     $renewalCount = 0
     if (Test-Path -LiteralPath $simpleAcmeDir -PathType Container) {
@@ -173,6 +173,9 @@ try {
         'config.ps1'
     )
 
+
+    [void](Add-BackupFileEntry -Collection $files -Category 'project' -Path (Join-Path $ProjectRoot 'deployment-targets.json') -Destination 'project/deployment-targets.json')
+
     foreach ($pattern in $projectPatterns) {
         foreach ($f in @(Get-Item -Path (Join-Path $ProjectRoot $pattern) -ErrorAction SilentlyContinue)) {
             if ($f -is [System.IO.FileInfo]) {
@@ -182,8 +185,8 @@ try {
     }
 
     $configDirCandidate = ''
-    if (-not [string]::IsNullOrWhiteSpace([string]$envValues.CERTIFICATE_CONFIG_DIR)) {
-        $configDirCandidate = [string]$envValues.CERTIFICATE_CONFIG_DIR
+    if (-not [string]::IsNullOrWhiteSpace([string]$envValues['CERTIFICATE_CONFIG_DIR'])) {
+        $configDirCandidate = [string]$envValues['CERTIFICATE_CONFIG_DIR']
     } elseif (Test-Path -LiteralPath (Join-Path $ProjectRoot 'config') -PathType Container) {
         $configDirCandidate = Join-Path $ProjectRoot 'config'
     }
@@ -235,15 +238,15 @@ try {
             warnings = @($warnings)
         }
         env = [ordered]@{
-            ACME_DIRECTORY = [string]$envValues.ACME_DIRECTORY
-            ACME_KID = [string]$envValues.ACME_KID
-            ACME_HMAC_SECRET = [string]$envValues.ACME_HMAC_SECRET
-            DOMAINS = [string]$envValues.DOMAINS
-            CERTIFICATE_CONFIG_DIR = [string]$envValues.CERTIFICATE_CONFIG_DIR
-            CERTIFICATE_DROP_DIR = [string]$envValues.CERTIFICATE_DROP_DIR
-            CERTIFICATE_STATE_DIR = [string]$envValues.CERTIFICATE_STATE_DIR
-            CERTIFICATE_LOG_DIR = [string]$envValues.CERTIFICATE_LOG_DIR
-            CERTIFICATE_API_KEY = [string]$envValues.CERTIFICATE_API_KEY
+            ACME_DIRECTORY = [string]$envValues['ACME_DIRECTORY']
+            ACME_KID = [string]$envValues['ACME_KID']
+            ACME_HMAC_SECRET = [string]$envValues['ACME_HMAC_SECRET']
+            DOMAINS = [string]$envValues['DOMAINS']
+            CERTIFICATE_CONFIG_DIR = [string]$envValues['CERTIFICATE_CONFIG_DIR']
+            CERTIFICATE_DROP_DIR = [string]$envValues['CERTIFICATE_DROP_DIR']
+            CERTIFICATE_STATE_DIR = [string]$envValues['CERTIFICATE_STATE_DIR']
+            CERTIFICATE_LOG_DIR = [string]$envValues['CERTIFICATE_LOG_DIR']
+            CERTIFICATE_API_KEY = [string]$envValues['CERTIFICATE_API_KEY']
             ACME_DATA_DIR = [string]$simpleAcmeDir
         }
         files = @($files)

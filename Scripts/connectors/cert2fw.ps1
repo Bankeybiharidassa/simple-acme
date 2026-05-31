@@ -10,9 +10,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '../core/connector-core.psm1') -Force
 
-$resolvedConfigDir = if ($PSBoundParameters.ContainsKey('ConfigDir')) { [string]$ConfigDir } else { Resolve-ConnectorConfigDir -ConfigFile $ConfigFile -FallbackConfigDir $ConfigDir }
-$mapping = Resolve-RenewalMapping -ConfigDir $resolvedConfigDir -RenewalId $RenewalId
-$endpoints = if ($mapping.endpoints) { @($mapping.endpoints) } else { throw 'Firewall connector requires endpoint mapping.' }
+$mapping = $null
+try {
+    $resolvedConfigDir = if ($PSBoundParameters.ContainsKey('ConfigDir')) { [string]$ConfigDir } else { Resolve-ConnectorConfigDir -ConfigFile $ConfigFile -FallbackConfigDir $ConfigDir }
+    $mapping = Resolve-RenewalMapping -ConfigDir $resolvedConfigDir -RenewalId $RenewalId
+} catch {
+    Write-ConnectorLog -Component 'cert2fw' -Action 'mapping' -Target 'generic-firewall-hook' -Result 'info' -Details @{ message = $_.Exception.Message } -EmitConsole
+}
+$endpointsProperty = if ($null -ne $mapping -and $null -ne $mapping.PSObject.Properties['endpoints']) { $mapping.PSObject.Properties['endpoints'].Value } else { $null }
+$endpoints = if ($null -ne $endpointsProperty -and @($endpointsProperty).Count -gt 0) {
+    @($endpointsProperty)
+} else {
+    @([pscustomobject]@{ host = $(if ([string]::IsNullOrWhiteSpace([string]$env:COMPUTERNAME)) { 'local-firewall-hook' } else { [string]$env:COMPUTERNAME }); method = 'local' })
+}
 $stateDir = Join-Path $PSScriptRoot '..\..\runtime\connector-state'
 if (-not (Test-Path -LiteralPath $stateDir)) { New-Item -ItemType Directory -Path $stateDir -Force | Out-Null }
 

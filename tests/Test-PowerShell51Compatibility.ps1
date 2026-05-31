@@ -51,7 +51,15 @@ function Assert-NoForbiddenConstructs {
 
 
 Write-Host '[compat] Parsing all .ps1/.psm1 files for Windows PowerShell 5.1 syntax compatibility.'
-$psFiles = @(Get-ChildItem -Path $repoRoot -Recurse -Include *.ps1,*.psm1 -File)
+$excludedRootDirs = @('.git','.claude','logs','outputs','runtime','test','working')
+$psFiles = @(
+    Get-ChildItem -Path $repoRoot -Recurse -Include *.ps1,*.psm1 -File |
+        Where-Object {
+            $relative = $_.FullName.Substring($repoRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+            $firstSegment = ($relative -split '/')[0]
+            $excludedRootDirs -notcontains $firstSegment
+        }
+)
 foreach ($file in $psFiles) {
     Assert-NoParseErrors -Path $file.FullName
     $raw = Get-Content -LiteralPath $file.FullName -Raw
@@ -60,7 +68,14 @@ foreach ($file in $psFiles) {
 
 
 Write-Host '[compat] Verifying no fragile Export-ModuleMember inline arrays remain in runtime modules.'
-$moduleFiles = Get-ChildItem -Path $repoRoot -Filter '*.psm1' -Recurse
+$moduleFiles = @(
+    Get-ChildItem -Path $repoRoot -Filter '*.psm1' -Recurse |
+        Where-Object {
+            $relative = $_.FullName.Substring($repoRoot.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+            $firstSegment = ($relative -split '/')[0]
+            $excludedRootDirs -notcontains $firstSegment
+        }
+)
 foreach ($file in $moduleFiles) {
     $text = [System.IO.File]::ReadAllText($file.FullName)
     if ($text -match 'Export-ModuleMember\s+-Function\s+@\s*\(') {
@@ -70,8 +85,8 @@ foreach ($file in $moduleFiles) {
 
 Write-Host '[compat] Importing core modules using PowerShell 5.1-compatible syntax.'
 $coreModules = @(
-    (Join-Path $repoRoot 'core/Native-Process.psm1'),
-    (Join-Path $repoRoot 'core/Simple-Acme-Reconciler.psm1')
+    (Join-Path $repoRoot 'core/Simple-Acme-Reconciler.psm1'),
+    (Join-Path $repoRoot 'core/Native-Process.psm1')
 )
 foreach ($modulePath in $coreModules) {
     Import-Module $modulePath -Force
@@ -127,7 +142,12 @@ $tempEnv = Join-Path $tempRoot 'certificate.env'
 
 try {
     if (Test-Path -LiteralPath $tempEnv) { Remove-Item -LiteralPath $tempEnv -Force }
-    Write-EnvFile -Values @{ DOMAINS='remote.example.nl'; ACME_DIRECTORY='https://acme-v02.api.letsencrypt.org/directory'; ACME_SCRIPT_PATH=(Join-Path $repoRoot 'Scripts/cert2rds.ps1'); ACME_SCRIPT_PARAMETERS='{CertThumbprint}' } -Path $tempEnv
+    @(
+        'DOMAINS=remote.example.nl'
+        'ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory'
+        ('ACME_SCRIPT_PATH=' + (Join-Path $repoRoot 'Scripts/cert2rds.ps1'))
+        'ACME_SCRIPT_PARAMETERS={CertThumbprint}'
+    ) | Set-Content -LiteralPath $tempEnv -Encoding UTF8
     $loaded = Import-EnvFile -Path $tempEnv -AllowIncomplete -Force
     if (-not $loaded.ContainsKey('ACME_WACS_PATH')) { throw 'Expected optional ACME_WACS_PATH default to be injected.' }
 

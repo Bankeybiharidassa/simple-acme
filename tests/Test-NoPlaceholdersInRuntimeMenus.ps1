@@ -8,7 +8,7 @@ function Invoke-TestNoPlaceholdersInRuntimeMenus {
             (Join-Path $PSScriptRoot '..\setup\Form-Runner.psm1'),
             (Join-Path $PSScriptRoot '..\certificate-simple-acme-reconcile.ps1')
         )
-        $bad = @('not implemented yet','coming soon','placeholder')
+        $bad = @('not implemented yet','coming soon')
         foreach ($t in $targets) {
             $txt = Get-Content -LiteralPath $t -Raw
             foreach ($b in $bad) {

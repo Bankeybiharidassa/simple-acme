@@ -1,3 +1,5 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments','CertificateMenuTree',Justification='Dot-sourced data table consumed by setup modules and scripts.')]
+param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
