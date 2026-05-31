@@ -25,6 +25,72 @@ function Test-DeviceProfileLikelyPlaintextSecret {
     return $false
 }
 
+function ConvertTo-DeviceProfileDisplayValue {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()][object]$Value
+    )
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return '<empty>' }
+    if ($Name -match '(?i)password|secret|private_key|api_key|token') { return '<hidden>' }
+    return [string]$Value
+}
+
+function Show-DeviceProfileSummary {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][object[]]$Fields
+    )
+
+    Write-Host ''
+    Write-Host $Title
+    Write-Host ('-' * $Title.Length)
+    foreach ($field in @($Fields)) {
+        if (-not ($field -is [System.Collections.IDictionary]) -or -not $field.ContainsKey('Name')) { continue }
+        $name = [string]$field['Name']
+        $label = if ($field.ContainsKey('Label') -and -not [string]::IsNullOrWhiteSpace([string]$field['Label'])) { [string]$field['Label'] } else { $name }
+        $value = if ($Values.ContainsKey($name)) { $Values[$name] } else { $null }
+        Write-Host ('{0}: {1}' -f $label, (ConvertTo-DeviceProfileDisplayValue -Name $name -Value $value))
+    }
+}
+
+function Write-DeviceProfileJsonLog {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConnectorType,
+        [Parameter(Mandatory)][object]$Data
+    )
+
+    $configuredRoot = if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_LOG_DIR)) { [string]$env:CERTIFICATE_LOG_DIR } else { Join-Path $ProjectRoot 'logs' }
+    $logRoot = [IO.Path]::GetFullPath($configuredRoot)
+    if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+    }
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+    $path = Join-Path $logRoot ("device-profile-{0}-{1}.json" -f $ConnectorType, $stamp)
+    $Data | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $path -Encoding UTF8
+    return [string]$path
+}
+
+function Read-DeviceProfileYesNo {
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [bool]$Default = $true
+    )
+
+    $suffix = if ($Default) { 'Y/n' } else { 'y/N' }
+    while ($true) {
+        $answer = [string](Read-Host ("{0} ({1})" -f $Prompt, $suffix))
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+        switch ($answer.Trim().ToLowerInvariant()) {
+            { $_ -in @('y','yes','j','ja') } { return $true }
+            { $_ -in @('n','no','nee') } { return $false }
+            default { Write-Host 'Please answer y or n.' -ForegroundColor Yellow }
+        }
+    }
+}
+
 function Get-DeviceProfileCurrentValues {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
@@ -151,7 +217,8 @@ function Invoke-DeviceProfileForm {
         [string]$DefaultDeviceId = '',
         [string[]]$CertificateRuntimeKeys = @(),
         [hashtable]$PlaintextSecretNameFields = @{},
-        [string[]]$SecretFields = @()
+        [string[]]$SecretFields = @(),
+        [scriptblock]$CommunicationTest = $null
     )
 
     $schemaPath = Join-Path $ProjectRoot 'setup/Device-Schemas.ps1'
@@ -169,9 +236,41 @@ function Invoke-DeviceProfileForm {
     $values = Remove-DeviceProfilePlaceholderValues -Values $values -Fields @($schema.Fields)
     $values = Add-DeviceProfileDefaults -Values $values -Fields @($schema.Fields)
     Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId
+    Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $label) -Values $values -Fields @($schema.Fields)
+
+    $testResult = $null
+    $testLogPath = $null
+    if ($null -ne $CommunicationTest) {
+        $shouldTest = Read-DeviceProfileYesNo -Prompt ("Test communication with {0} now?" -f $label) -Default $true
+        if ($shouldTest) {
+            Write-Host ''
+            Write-Host ("Testing communication with {0}..." -f $label)
+            try {
+                $testResult = & $CommunicationTest -ProjectRoot $ProjectRoot -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -Schema $schema
+            } catch {
+                $testResult = [pscustomobject]@{
+                    Status = 'Failed'
+                    Message = $_.Exception.Message
+                    ErrorType = $_.Exception.GetType().FullName
+                }
+            }
+            $testLogPath = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType $ConnectorType -Data $testResult
+            Write-Host ''
+            Write-Host 'Communication test summary'
+            Write-Host '--------------------------'
+            Write-Host ("Status: {0}" -f $testResult.Status)
+            if ($testResult.PSObject.Properties.Name -contains 'Message') { Write-Host ("Message: {0}" -f $testResult.Message) }
+            if ($testResult.PSObject.Properties.Name -contains 'Endpoint') { Write-Host ("Endpoint: {0}" -f $testResult.Endpoint) }
+            Write-Host ("Log: {0}" -f $testLogPath)
+        } else {
+            Write-Host ''
+            Write-Host 'Communication test skipped by operator.'
+        }
+    }
+
     Show-TuiStatus -Message ("{0} device profile saved." -f $label) -Type Success -Row ([Math]::Max(0,[Console]::WindowHeight)-2)
     Start-Sleep -Milliseconds 1200
-    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir }
+    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
 }
 
-Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Save-DeviceProfile,Invoke-DeviceProfileForm,Test-DeviceProfileLikelyPlaintextSecret
+Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Save-DeviceProfile,Invoke-DeviceProfileForm,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo

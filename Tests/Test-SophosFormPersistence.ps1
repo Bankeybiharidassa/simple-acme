@@ -15,8 +15,12 @@ function Invoke-TestSophosFormPersistence {
             '[Parameter(Mandatory)][string]$ConnectorType',
             '[string[]]$CertificateRuntimeKeys = @()',
             '[hashtable]$PlaintextSecretNameFields = @{}',
+            '[scriptblock]$CommunicationTest = $null',
             'Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues',
-            'Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType'
+            'Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType',
+            'Test communication with {0} now?',
+            'Communication test summary',
+            'Show-DeviceProfileSummary'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {
                 throw "Missing generic device profile wiring: $text"
@@ -34,6 +38,9 @@ function Invoke-TestSophosFormPersistence {
             "-ConnectorType 'sophos'",
             "-DefaultDeviceId 'sophos-firewall'",
             "-SecretFields @('password')",
+            '-CommunicationTest ${function:Invoke-SophosProfileCommunicationTest}',
+            'function Invoke-SophosProfileCommunicationTest',
+            'Connect-SophosFirewallApi',
             'function Get-SophosCertificateDeploymentContext'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {

@@ -7,6 +7,8 @@ Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
 Import-Module "$PSScriptRoot/Device-Profile-Runner.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Crypto.psm1" -Force -Global
 
+$script:SophosModulePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts/Modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1'
+
 function ConvertTo-SophosTuiBoolean {
     param([object]$Value, [bool]$Default = $false)
     if ($null -eq $Value) { return $Default }
@@ -76,6 +78,77 @@ function Write-SophosTuiSecureValueFile {
     $path = Join-Path $secretDir ("{0}.json" -f $Name)
     $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding UTF8
     return [string]$path
+}
+
+function Resolve-SophosProfilePassword {
+    param(
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+
+    if ($Values.ContainsKey('password') -and -not [string]::IsNullOrWhiteSpace([string]$Values['password'])) {
+        return [string]$Values['password']
+    }
+
+    Import-Module $script:SophosModulePath -Force
+    if ($Values.ContainsKey('password_secret_name') -and -not [string]::IsNullOrWhiteSpace([string]$Values['password_secret_name'])) {
+        return Resolve-SophosPassword -PasswordSecretName ([string]$Values['password_secret_name'])
+    }
+
+    if ($Values.ContainsKey('password_secure_file') -and -not [string]::IsNullOrWhiteSpace([string]$Values['password_secure_file'])) {
+        $path = [string]$Values['password_secure_file']
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Sophos admin password file was not found: $path" }
+        $raw = (Get-Content -LiteralPath $path -Raw).Trim()
+        if ($raw.StartsWith('{')) {
+            $payload = $raw | ConvertFrom-Json
+            if (-not $payload.ciphertext) { throw "Sophos admin password file '$path' does not contain a ciphertext value." }
+            return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext)
+        }
+        $secure = $raw | ConvertTo-SecureString
+        return ConvertFrom-SophosSecureString -SecureString $secure
+    }
+
+    throw 'Sophos admin password is missing. Enter Admin password, Admin password secret, or Admin password file in the device profile.'
+}
+
+function Invoke-SophosProfileCommunicationTest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$ConnectorType,
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)]$Schema
+    )
+
+    $null = $ProjectRoot
+    $null = $ConfigDir
+    $null = $ConnectorType
+    $null = $Label
+    $null = $Schema
+
+    Import-Module $script:SophosModulePath -Force
+    $firewall = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [int]$Values['port'] } else { 4444 }
+    $username = if ($Values.ContainsKey('username')) { [string]$Values['username'] } else { 'admin' }
+    $skipCertificateCheck = ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $false })
+    $endpoint = New-SophosApiEndpoint -Firewall $firewall -Port $port
+    $password = Resolve-SophosProfilePassword -Values $Values
+
+    $started = Get-Date
+    $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 30
+    $elapsed = [int]((Get-Date) - $started).TotalMilliseconds
+    [pscustomobject]@{
+        Status = 'Succeeded'
+        Message = 'Sophos XML API login and AdminSettings read succeeded.'
+        Endpoint = $endpoint
+        Firewall = $firewall
+        Port = $port
+        Username = $username
+        SkipCertificateCheck = $skipCertificateCheck
+        ElapsedMilliseconds = $elapsed
+        SessionEndpoint = $session.Endpoint
+    }
 }
 
 function Resolve-SophosDefaultPfxPath {
@@ -293,7 +366,8 @@ function Invoke-SophosProfileForm {
         -DefaultDeviceId 'sophos-firewall' `
         -CertificateRuntimeKeys @('certificate_name','pfx_path','pfx_password','pfx_password_secret_name','pfx_password_secure_file','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') `
         -PlaintextSecretNameFields @{ password_secret_name = 'password' } `
-        -SecretFields @('password')
+        -SecretFields @('password') `
+        -CommunicationTest ${function:Invoke-SophosProfileCommunicationTest}
 }
 
 function Invoke-SophosDeploymentForm {
