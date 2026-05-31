@@ -11,6 +11,8 @@ function Invoke-TestSophosFormPersistence {
             'function Get-SophosDeploymentCurrentValues',
             'function Save-SophosDeploymentCurrentValues',
             'function Add-SophosFieldDefaults',
+            'function Invoke-SophosProfileForm',
+            'function Get-SophosCertificateDeploymentContext',
             'Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues',
             'Save-SophosDeploymentCurrentValues -ConfigDir $configDir -Values $values'
         )) {
@@ -34,15 +36,14 @@ function Invoke-TestSophosFormPersistence {
         }
     }
 
-    & $Assert 'Sophos API password can be entered directly and is stored encrypted' {
+    & $Assert 'Sophos admin password can be entered directly and is stored encrypted' {
         $runnerPath = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
         $schemaPath = Join-Path $PSScriptRoot '..\setup\Device-Schemas.ps1'
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         $schema = Get-Content -LiteralPath $schemaPath -Raw
         foreach ($text in @(
             "Name='password'; Label='Admin password'; Type='secret'",
-            "Name='password_secure_file'; Label='Admin password file'",
-            "Name='pfx_password'; Label='PFX password'; Type='secret'"
+            "Name='password_secure_file'; Label='Admin password file'"
         )) {
             if ($schema -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos password schema wiring: $text"
@@ -51,8 +52,8 @@ function Invoke-TestSophosFormPersistence {
         foreach ($text in @(
             'function Write-SophosTuiSecureValueFile',
             'function Resolve-SophosDefaultPfxPath',
-            "Save-DeviceConfig -Device `$device -ConfigDir `$ConfigDir -SecretFields @('password','pfx_password')",
-            "Sophos API authentication is missing. Enter 'password', 'password_secret_name', or 'password_secure_file'.",
+            "Save-DeviceConfig -Device `$device -ConfigDir `$ConfigDir -SecretFields @('password')",
+            'Sophos admin password is missing.',
             '-PasswordSecureFile'
         )) {
             if ($runner -notmatch [regex]::Escape($text)) {
@@ -114,6 +115,26 @@ function Invoke-TestSophosFormPersistence {
         )) {
             if ($schema -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos default/schema wording: $text"
+            }
+        }
+    }
+
+    & $Assert 'Sophos device profile does not ask for certificate artifacts' {
+        $schemaPath = Join-Path $PSScriptRoot '..\setup\Device-Schemas.ps1'
+        $schema = Get-Content -LiteralPath $schemaPath -Raw
+        $match = [regex]::Match($schema, "sophos\s*=\s*@\{.*?custom\s*=\s*@\{", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        if (-not $match.Success) { throw 'Could not isolate Sophos schema block.' }
+        $sophosSchema = $match.Value
+        foreach ($text in @(
+            "Name='certificate_name'",
+            "Name='pfx_path'",
+            "Name='pfx_password'",
+            "Name='cert_path'",
+            "Name='key_path'",
+            "Name='enable_ssh_export_recovery'"
+        )) {
+            if ($sophosSchema -match [regex]::Escape($text)) {
+                throw "Sophos device profile still asks for certificate/deploy-time field: $text"
             }
         }
     }
