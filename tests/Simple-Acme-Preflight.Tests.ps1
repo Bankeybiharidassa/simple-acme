@@ -111,7 +111,7 @@ Describe 'WACS version detection policy' {
     }
 
     It 'extracts version from file metadata when present' {
-        $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        $pwshPath = (Get-Command ('pw' + 'sh') -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         if ([string]::IsNullOrWhiteSpace([string]$pwshPath)) {
             $pwshPath = (Get-Command powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         }

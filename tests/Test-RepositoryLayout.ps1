@@ -35,6 +35,7 @@ function Invoke-TestRepositoryLayout {
     & $Assert 'Deployment scripts exist under Scripts directory' {
         $required = @(
             (Join-Path $repoRoot 'Scripts/cert2rds.ps1'),
+            (Join-Path $repoRoot 'Scripts/core/connector-core.psm1'),
             (Join-Path $repoRoot 'Scripts/deploy-rds-farm.ps1'),
             (Join-Path $repoRoot 'Scripts/deploy-rds-sessionhost.ps1'),
             (Join-Path $repoRoot 'Scripts/deploy-paloalto.ps1'),

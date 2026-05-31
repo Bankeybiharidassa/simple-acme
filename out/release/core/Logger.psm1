@@ -16,17 +16,29 @@ function Ensure-EventSource {
 
 function Write-CertificateLog {
     param(
-        [ValidateSet('INFO','WARN','ERROR')][string]$Level,
+        [string]$Level,
         [string]$Message,
         [string]$JobId = '',
         [string]$Domain = '',
         [string]$Step = ''
     )
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    $line = '{0} [{1,-5}] [job:{2}] [domain:{3}] [step:{4}] {5}' -f $timestamp, $Level, $JobId, $Domain, $Step, $Message
+    $levelText = ''
+    if ($null -ne $Level) {
+        $levelText = [string]$Level
+    }
 
-    $entryType = switch ($Level) {
+    $normalizedLevel = switch -Regex ($levelText.Trim().ToUpperInvariant()) {
+        '^INFO(RMATION)?$' { 'INFO'; break }
+        '^WARN(ING)?$' { 'WARN'; break }
+        '^ERR(OR)?$' { 'ERROR'; break }
+        default { 'INFO' }
+    }
+
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $line = '{0} [{1,-5}] [job:{2}] [domain:{3}] [step:{4}] {5}' -f $timestamp, $normalizedLevel, $JobId, $Domain, $Step, $Message
+
+    $entryType = switch ($normalizedLevel) {
         'INFO' { 'Information' }
         'WARN' { 'Warning' }
         'ERROR' { 'Error' }
@@ -40,9 +52,16 @@ function Write-CertificateLog {
     }
 
     $logDir = $env:CERTIFICATE_LOG_DIR
-    if ($logDir -and (Test-Path -LiteralPath $logDir)) {
-        $path = Join-Path $logDir 'orchestrator.log'
-        try { Add-Content -Path $path -Value $line -Encoding UTF8 } catch { Write-Warning "Log file write failed: $($_.Exception.Message)" }
+    if ([string]::IsNullOrWhiteSpace($logDir)) {
+        $logDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' 'logs'))
+    }
+    if (-not (Test-Path -LiteralPath $logDir)) {
+        try { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } catch { Write-Warning "Cannot create log directory '$logDir': $($_.Exception.Message)" }
+    }
+    if (Test-Path -LiteralPath $logDir) {
+        $datestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd')
+        $path = Join-Path $logDir "orchestrator-$datestamp.log"
+        try { Add-Content -LiteralPath $path -Value $line -Encoding UTF8 } catch { Write-Warning "Log file write failed: $($_.Exception.Message)" }
     }
 }
 

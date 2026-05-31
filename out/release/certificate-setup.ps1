@@ -92,6 +92,7 @@ Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScri
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
 $netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
+$sophosRunnerModulePath = Join-Path $PSScriptRoot 'setup/Sophos-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
 $envLoaderModulePath = Join-Path $PSScriptRoot 'core/Env-Loader.psm1'
 
@@ -166,6 +167,16 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDeploymentForm' -Expe
 Assert-SetupCommandAvailable -CommandName 'Invoke-NetScalerDiagnostics' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Convert-NetScalerFormValuesToArguments' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Test-NetScalerTuiWiring' -ExpectedModulePath $netScalerRunnerModulePath -ModuleInfo $netScalerRunnerModule
+$sophosRunnerModule = Import-Module $sophosRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $sophosRunnerModulePath"
+if ($null -eq $sophosRunnerModule) {
+    throw "Unable to import required Sophos setup module from path: $sophosRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDeploymentForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDiagnostics' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateExportRecovery' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Convert-SophosFormValuesToArguments' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Test-SophosTuiWiring' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 $schedulerModule = Import-Module $schedulerModulePath -Force -Global -PassThru
 Write-SetupDebugLog -Message "Imported module: $schedulerModulePath"
 if ($null -eq $schedulerModule) {
@@ -176,6 +187,161 @@ Import-Module $envLoaderModulePath -Force -Global | Out-Null
 Write-SetupDebugLog -Message "Imported module: $envLoaderModulePath"
 . "$PSScriptRoot/setup/Menu-Tree.ps1"
 Write-SetupDebugLog -Message "Loaded menu tree."
+
+function Test-CurrentProcessElevated {
+    if (-not ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)) { return $true }
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function ConvertTo-SingleQuotedLiteral {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return "''" }
+    return "'" + ([string]$Value).Replace("'", "''") + "'"
+}
+
+function Start-ElevatedSetupRelaunch {
+    param([Parameter(Mandatory)][string]$Reason)
+
+    $scriptPath = [System.IO.Path]::GetFullPath($PSCommandPath)
+    $envAssignments = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @('CERTIFICATE_ENV_FILE','CERTIFICATE_LOG_DIR','CERTIFICATE_CONFIG_DIR','CERTIFICATE_VERBOSE_DIAGNOSTICS','CERTIFICATE_TRANSCRIPT_LOGGING')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $envAssignments.Add(('$env:{0} = {1}' -f $name, (ConvertTo-SingleQuotedLiteral -Value $value)))
+        }
+    }
+
+    $commandLines = @($envAssignments)
+    $commandLines += ('$DebugPreference = {0}' -f (ConvertTo-SingleQuotedLiteral -Value ([string]$DebugPreference)))
+    $commandLines += ('Set-Location -LiteralPath {0}' -f (ConvertTo-SingleQuotedLiteral -Value $PSScriptRoot))
+    $commandLines += ('& {0} -EnableDebugFileLog' -f (ConvertTo-SingleQuotedLiteral -Value $scriptPath))
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes(($commandLines -join "`r`n")))
+
+    Write-SetupDebugLog -Message ("Requesting elevated relaunch. reason='{0}' script='{1}'" -f $Reason, $scriptPath)
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-EncodedCommand',$encodedCommand) | Out-Null
+    [Console]::WriteLine('')
+    [Console]::WriteLine('An elevated PowerShell window was requested. Continue there to perform the privileged action.')
+    [Console]::WriteLine('This non-elevated setup window will stay open; return here only if you choose not to use elevation.')
+}
+
+function Request-ElevationForPrivilegedAction {
+    param([Parameter(Mandatory)][string]$Reason)
+
+    if (Test-CurrentProcessElevated) { return $true }
+
+    [Console]::WriteLine('')
+    [Console]::WriteLine('Administrator rights may be required.')
+    [Console]::WriteLine($Reason)
+    [Console]::WriteLine('')
+    $answer = [string](Read-Host 'Open an elevated PowerShell setup window now? [Y/N]')
+    if ($answer.Trim().ToLowerInvariant() -in @('y','yes')) {
+        Start-ElevatedSetupRelaunch -Reason $Reason
+        Wait-ForOperatorReturn
+        return $false
+    }
+
+    [Console]::WriteLine('')
+    $continueAnswer = [string](Read-Host 'Continue in this non-elevated window anyway? [Y/N]')
+    $continue = $continueAnswer.Trim().ToLowerInvariant() -in @('y','yes')
+    Write-SetupDebugLog -Message ("Elevation prompt declined. continue_without_elevation='{0}' reason='{1}'" -f $continue, $Reason)
+    return $continue
+}
+
+function Test-SetupFileReadable {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $stream.Dispose()
+        return $true
+    } catch [System.IO.FileNotFoundException] {
+        return $true
+    } catch [System.IO.DirectoryNotFoundException] {
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Repair-SetupFileAcl {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)) { return $true }
+
+    try {
+        Set-EnvFileAcl -Path $Path
+        if (Test-SetupFileReadable -Path $Path) { return $true }
+    } catch {
+        Write-SetupDebugLog -Message ("Set-EnvFileAcl repair failed for '{0}': {1}" -f $Path, $_.Exception.Message)
+    }
+
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $account = $identity.Name
+        if ([string]::IsNullOrWhiteSpace($account)) { return $false }
+        $grant = ('{0}:(F)' -f $account)
+        $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+        if (-not (Test-Path -LiteralPath $icacls -PathType Leaf)) { $icacls = 'icacls.exe' }
+        $process = Start-Process -FilePath $icacls -ArgumentList @($Path, '/grant', $grant) -Wait -PassThru -WindowStyle Hidden
+        Write-SetupDebugLog -Message ("icacls repair for '{0}' exited with code {1}." -f $Path, $process.ExitCode)
+        return ($process.ExitCode -eq 0 -and (Test-SetupFileReadable -Path $Path))
+    } catch {
+        Write-SetupDebugLog -Message ("icacls repair failed for '{0}': {1}" -f $Path, $_.Exception.Message)
+        return $false
+    }
+}
+
+function Ensure-SetupEnvFileReadable {
+    param([Parameter(Mandatory)][string]$EnvFilePath)
+
+    if (Test-SetupFileReadable -Path $EnvFilePath) { return $true }
+
+    Write-SetupDebugLog -Message ("Env file is not readable by current process: {0}" -f $EnvFilePath)
+    [Console]::WriteLine('')
+    [Console]::WriteLine('The configured certificate.env exists, but this PowerShell cannot read it.')
+    [Console]::WriteLine($EnvFilePath)
+    [Console]::WriteLine('This usually means the file ACL was hardened by an earlier elevated or SYSTEM run.')
+
+    if (Repair-SetupFileAcl -Path $EnvFilePath) {
+        [Console]::WriteLine('Repaired certificate.env permissions for the current operator.')
+        return $true
+    }
+
+    if (-not (Test-CurrentProcessElevated)) {
+        [Console]::WriteLine('')
+        $answer = [string](Read-Host 'Open an elevated PowerShell setup window to repair/read this file? [Y/N]')
+        if ($answer.Trim().ToLowerInvariant() -in @('y','yes')) {
+            Start-ElevatedSetupRelaunch -Reason "certificate.env is not readable by the current non-elevated process: $EnvFilePath"
+            Wait-ForOperatorReturn
+            return $false
+        }
+
+        [Console]::WriteLine('')
+        $continueAnswer = [string](Read-Host 'Continue in this non-elevated window anyway? [Y/N]')
+        return ($continueAnswer.Trim().ToLowerInvariant() -in @('y','yes'))
+    }
+
+    [Console]::WriteLine('Permission repair failed even though this process is elevated. Check file ownership/ACL manually.')
+    Wait-ForOperatorReturn
+    return $false
+}
+
+function Test-ReconcileLikelyRequiresElevation {
+    param([Parameter(Mandatory)][hashtable]$EnvValues)
+
+    $storePlugin = if ($EnvValues.ContainsKey('ACME_STORE_PLUGIN')) { [string]$EnvValues['ACME_STORE_PLUGIN'] } else { '' }
+    $installationPlugin = if ($EnvValues.ContainsKey('ACME_INSTALLATION_PLUGINS')) { [string]$EnvValues['ACME_INSTALLATION_PLUGINS'] } else { '' }
+    $targetSystem = if ($EnvValues.ContainsKey('ACME_TARGET_SYSTEM')) { [string]$EnvValues['ACME_TARGET_SYSTEM'] } elseif ($EnvValues.ContainsKey('TARGET_SYSTEM')) { [string]$EnvValues['TARGET_SYSTEM'] } else { '' }
+    $scriptPath = if ($EnvValues.ContainsKey('ACME_SCRIPT_PATH')) { [string]$EnvValues['ACME_SCRIPT_PATH'] } else { '' }
+
+    if ($storePlugin -match '(?i)(^|[,;\s])certificatestore($|[,;\s])') { return $true }
+    if ($installationPlugin -match '(?i)(^|[,;\s])iis($|[,;\s])') { return $true }
+    if ($targetSystem -match '(?i)^(iis|rds|rds-farm)$') { return $true }
+    if ($scriptPath -match '(?i)(cert2rds|deploy-rds-farm|cert2iis)\.ps1$') { return $true }
+    return $false
+}
 
 function Invoke-InitialAcmeReconcilePrompt {
     param(
@@ -202,12 +368,12 @@ function Invoke-InitialAcmeReconcilePrompt {
 
     [Console]::WriteLine('')
     [Console]::WriteLine('Issuance ACME directory:')
-    [Console]::WriteLine([string]$envValues.ACME_DIRECTORY)
+    [Console]::WriteLine([string]$envValues['ACME_DIRECTORY'])
     [Console]::WriteLine('')
     [Console]::WriteLine('Effective wacs command preview:')
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
-        $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+        $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues['ACME_CSR_ALGORITHM'] } else { 'ec' }
         $previewLine = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
         [Console]::WriteLine($previewLine)
     } catch {
@@ -231,6 +397,14 @@ function Invoke-InitialAcmeReconcilePrompt {
         return
     }
 
+    if (Test-ReconcileLikelyRequiresElevation -EnvValues $envValues) {
+        $elevationReason = 'The certificate request/install preview includes local machine certificate store or Windows binding work. This commonly needs Administrator rights.'
+        if (-not (Request-ElevationForPrivilegedAction -Reason $elevationReason)) {
+            Write-SetupDebugLog -Message 'Initial reconcile deferred after elevation prompt.'
+            return
+        }
+    }
+
     $logDir = [string][Environment]::GetEnvironmentVariable('CERTIFICATE_LOG_DIR')
     if ([string]::IsNullOrWhiteSpace($logDir)) {
         $logDir = [System.IO.Path]::GetFullPath((Join-Path $RootDir 'logs'))
@@ -246,7 +420,7 @@ function Invoke-InitialAcmeReconcilePrompt {
 
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
-        Write-SetupDebugLog -Message ("Starting initial reconcile. domains='{0}' acme_directory='{1}' script_path='{2}'" -f [string]$envValues.DOMAINS, [string]$envValues.ACME_DIRECTORY, [string]$envValues.ACME_SCRIPT_PATH)
+        Write-SetupDebugLog -Message ("Starting initial reconcile. domains='{0}' acme_directory='{1}' script_path='{2}'" -f [string]$envValues['DOMAINS'], [string]$envValues['ACME_DIRECTORY'], [string]$envValues['ACME_SCRIPT_PATH'])
         $action = Invoke-SimpleAcmeReconcile -EnvValues $envValues
         Write-SetupDebugLog -Message ("Initial reconcile completed successfully. action='{0}' completed_utc='{1}'" -f [string]$action, (Get-Date).ToUniversalTime().ToString('o'))
         [Console]::WriteLine('')
@@ -306,7 +480,7 @@ function Invoke-PostSetupValidation {
     $statusRow = [Math]::Max(0, [Console]::WindowHeight - 2)
     try {
         Import-Module (Join-Path $RootDir 'core/Simple-Acme-Reconciler.psm1') -Force | Out-Null
-        $domains = Get-NormalizedDomains -Domains ([string]$EnvValues.DOMAINS)
+        $domains = Get-NormalizedDomains -Domains ([string]$EnvValues['DOMAINS'])
         $renewals = @()
         foreach ($file in Get-RenewalFiles) {
             $summary = Get-RenewalSummary -File $file
@@ -327,17 +501,23 @@ function Invoke-OrchestratorTaskRegistration {
     param([Parameter(Mandatory)][string]$RootDir)
 
     $statusRow = [Math]::Max(0, [Console]::WindowHeight - 2)
+    if (-not (Request-ElevationForPrivilegedAction -Reason 'Registering or repairing the orchestrator scheduled task can require Administrator rights, especially when using SYSTEM as the task user.')) {
+        Show-TuiStatus -Message 'Scheduled task registration deferred. Continue in the elevated setup window to register it.' -Type Warning -Row $statusRow
+        Start-Sleep -Milliseconds 2200
+        return
+    }
+
     try {
         $envValues = Import-EnvFile -Path (Resolve-BootstrapEnvPath -ProjectRoot $RootDir) -Force
-        $taskName = if (-not [string]::IsNullOrWhiteSpace([string]$envValues.CERTIFICATE_TASK_NAME)) { [string]$envValues.CERTIFICATE_TASK_NAME } else { 'Certificate-Orchestrator' }
+        $taskName = if (-not [string]::IsNullOrWhiteSpace([string]$envValues['CERTIFICATE_TASK_NAME'])) { [string]$envValues['CERTIFICATE_TASK_NAME'] } else { 'Certificate-Orchestrator' }
         $interval = 5
-        if (-not [string]::IsNullOrWhiteSpace([string]$envValues.CERTIFICATE_TASK_INTERVAL_MINUTES)) {
-            if (-not [int]::TryParse([string]$envValues.CERTIFICATE_TASK_INTERVAL_MINUTES, [ref]$interval)) {
-                throw "CERTIFICATE_TASK_INTERVAL_MINUTES must be an integer. Value: '$($envValues.CERTIFICATE_TASK_INTERVAL_MINUTES)'"
+        if (-not [string]::IsNullOrWhiteSpace([string]$envValues['CERTIFICATE_TASK_INTERVAL_MINUTES'])) {
+            if (-not [int]::TryParse([string]$envValues['CERTIFICATE_TASK_INTERVAL_MINUTES'], [ref]$interval)) {
+                throw "CERTIFICATE_TASK_INTERVAL_MINUTES must be an integer. Value: '$($envValues['CERTIFICATE_TASK_INTERVAL_MINUTES'])'"
             }
         }
-        $taskUser = if (-not [string]::IsNullOrWhiteSpace([string]$envValues.CERTIFICATE_TASK_USER)) { [string]$envValues.CERTIFICATE_TASK_USER } else { 'SYSTEM' }
-        $psExe = if (-not [string]::IsNullOrWhiteSpace([string]$envValues.CERTIFICATE_TASK_POWERSHELL)) { [string]$envValues.CERTIFICATE_TASK_POWERSHELL } else { 'powershell.exe' }
+        $taskUser = if (-not [string]::IsNullOrWhiteSpace([string]$envValues['CERTIFICATE_TASK_USER'])) { [string]$envValues['CERTIFICATE_TASK_USER'] } else { 'SYSTEM' }
+        $psExe = if (-not [string]::IsNullOrWhiteSpace([string]$envValues['CERTIFICATE_TASK_POWERSHELL'])) { [string]$envValues['CERTIFICATE_TASK_POWERSHELL'] } else { 'powershell.exe' }
         $scriptPath = Join-Path $RootDir 'certificate-orchestrator.ps1'
         $result = Ensure-OrchestratorScheduledTask -TaskName $taskName -ScriptPath $scriptPath -EveryMinutes $interval -TaskUser $taskUser -PowerShellExe $psExe
         Show-TuiStatus -Message "Scheduled task $($result.Action): $($result.TaskName) every $($result.EveryMinutes) minutes as $($result.TaskUser)." -Type Success -Row $statusRow
@@ -353,6 +533,10 @@ Write-SetupDebugLog -Message "Resolved env path: $envPath"
 [Console]::WriteLine($envPath)
 if ($env:CERTIFICATE_ENV_FILE) {
     [Console]::WriteLine('Source: CERTIFICATE_ENV_FILE override')
+}
+if (-not (Ensure-SetupEnvFileReadable -EnvFilePath $envPath)) {
+    Stop-SetupDebugLogging
+    return
 }
 
 . "$PSScriptRoot/config.ps1"
@@ -396,6 +580,10 @@ while ($menuStack.Count -gt 0) {
     switch ($selected) {
         'setup-new'      {
             Write-SetupDebugLog -Message "Executing action: setup-new"
+            if (-not (Ensure-SetupEnvFileReadable -EnvFilePath $envPath)) {
+                Write-SetupDebugLog -Message 'setup-new deferred because certificate.env is not readable.'
+                continue
+            }
             $result = Invoke-AcmeForm -EnvFilePath $envPath
             if ($null -eq $result) {
                 Write-SetupDebugLog -Message 'setup-new outcome: canceled-before-save (Invoke-AcmeForm returned null).'
@@ -409,6 +597,10 @@ while ($menuStack.Count -gt 0) {
         'manage-certs'   { Invoke-ManageCertificatesMenu -ConfigDir $configDir }
         'acme'           {
             Write-SetupDebugLog -Message "Executing action: acme"
+            if (-not (Ensure-SetupEnvFileReadable -EnvFilePath $envPath)) {
+                Write-SetupDebugLog -Message 'acme settings deferred because certificate.env is not readable.'
+                continue
+            }
             Invoke-AcmeSettingsMenu -EnvFilePath $envPath
         }
         'logs-diagnostics' { Write-SetupDebugLog -Message "Executing action: logs-diagnostics"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
@@ -416,6 +608,10 @@ while ($menuStack.Count -gt 0) {
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'sophos-deploy'         { Write-SetupDebugLog -Message "Executing action: sophos-deploy"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
+        'sophos-whatif'         { Write-SetupDebugLog -Message "Executing action: sophos-whatif"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
+        'sophos-diagnostics'    { Write-SetupDebugLog -Message "Executing action: sophos-diagnostics"; Invoke-SophosDiagnostics -ProjectRoot $PSScriptRoot }
+        'sophos-export-recovery' { Write-SetupDebugLog -Message "Executing action: sophos-export-recovery"; Invoke-SophosCertificateExportRecovery -ProjectRoot $PSScriptRoot }
         'task-register'  { Write-SetupDebugLog -Message "Executing action: task-register"; Invoke-OrchestratorTaskRegistration -RootDir $PSScriptRoot }
         'policies'       { Write-SetupDebugLog -Message "Executing action: policies"; Invoke-PolicyEditor -ConfigDir $configDir | Out-Null }
         'policies-view'  { Write-SetupDebugLog -Message "Executing action: policies-view"; Invoke-PolicyViewer -ConfigDir $configDir | Out-Null }

@@ -18,7 +18,7 @@ function ConvertFrom-JsonToHashtable {
         return $items
     }
 
-    $props = $InputObject | Get-Member -MemberType NoteProperty
+    $props = @($InputObject | Get-Member -MemberType NoteProperty)
     if ($props.Count -gt 0) {
         $hash = @{}
         foreach ($prop in $props) { $hash[$prop.Name] = ConvertFrom-JsonToHashtable -InputObject $InputObject.$($prop.Name) }

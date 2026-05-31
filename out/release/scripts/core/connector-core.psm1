@@ -93,6 +93,71 @@ function Ensure-CertificateInMyStore {
     return [pscustomobject]@{ Certificate = $copied; StorePath = $targetStorePath }
 }
 
+
+function Read-ConnectorDeploymentConfigFile {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return @{} }
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $resolvedPath)) {
+        throw "Deployment config file not found: $resolvedPath. Re-run setup or pass explicit connector parameters."
+    }
+
+    $extension = [System.IO.Path]::GetExtension($resolvedPath).ToLowerInvariant()
+    if ($extension -eq '.json') {
+        $json = Get-Content -LiteralPath $resolvedPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $result = @{}
+        foreach ($prop in $json.PSObject.Properties) { $result[$prop.Name.ToUpperInvariant()] = [string]$prop.Value }
+        return $result
+    }
+
+    $values = @{}
+    $lineNo = 0
+    foreach ($line in [System.IO.File]::ReadAllLines($resolvedPath)) {
+        $lineNo++
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $trimmed = $line.TrimStart()
+        if ($trimmed.StartsWith('#')) { continue }
+        $idx = $line.IndexOf('=')
+        if ($idx -lt 1) { throw "Invalid deployment config line $lineNo in '$resolvedPath'. Expected KEY=VALUE format." }
+        $key = $line.Substring(0, $idx).Trim().ToUpperInvariant()
+        $value = $line.Substring($idx + 1)
+        if ($value.Length -ge 2 -and $value.StartsWith('"') -and $value.EndsWith('"')) { $value = $value.Substring(1, $value.Length - 2) }
+        if ($values.ContainsKey($key)) { throw "Duplicate deployment config key '$key' found at line $lineNo in '$resolvedPath'." }
+        $values[$key] = $value
+    }
+    return $values
+}
+
+function Resolve-ConnectorConfigValue {
+    param(
+        [hashtable]$Config,
+        [string[]]$Keys,
+        [string]$Fallback = ''
+    )
+
+    foreach ($key in $Keys) {
+        $normalizedKey = $key.ToUpperInvariant()
+        if ($Config.ContainsKey($normalizedKey) -and -not [string]::IsNullOrWhiteSpace([string]$Config[$normalizedKey])) { return [string]$Config[$normalizedKey] }
+    }
+    return $Fallback
+}
+
+function Resolve-ConnectorConfigDir {
+    param(
+        [string]$ExplicitConfigDir = '',
+        [string]$ConfigFile = '',
+        [string]$FallbackConfigDir = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitConfigDir)) { return [string]$ExplicitConfigDir }
+    $config = Read-ConnectorDeploymentConfigFile -Path $ConfigFile
+    $fromConfig = Resolve-ConnectorConfigValue -Config $config -Keys @('CONFIG_DIR','CERTIFICATE_CONFIG_DIR')
+    if (-not [string]::IsNullOrWhiteSpace($fromConfig)) { return $fromConfig }
+    if (-not [string]::IsNullOrWhiteSpace($FallbackConfigDir)) { return [string]$FallbackConfigDir }
+    throw 'Connector config directory is required. Pass -ConfigDir, set CONFIG_DIR or CERTIFICATE_CONFIG_DIR in -ConfigFile, or set CERTIFICATE_CONFIG_DIR in the scheduled-task environment.'
+}
+
 function Resolve-RenewalMapping {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
@@ -176,6 +241,38 @@ function Invoke-ConnectorPipeline {
     }
 }
 
+function Write-ConnectorLog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Component,
+        [Parameter(Mandatory)][string]$Action,
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][ValidateSet('success','fail','info')][string]$Result,
+        [hashtable]$Details = @{},
+        [string]$LogDir = '',
+        [switch]$EmitConsole
+    )
+
+    $resolvedLogDir = if ([string]::IsNullOrWhiteSpace($LogDir)) {
+        if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot '..\logs' }
+    } else { $LogDir }
+    if (-not (Test-Path -LiteralPath $resolvedLogDir)) {
+        New-Item -Path $resolvedLogDir -ItemType Directory -Force | Out-Null
+    }
+    $file = Join-Path $resolvedLogDir ("connector-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
+    $entry = [ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString('o')
+        component = $Component
+        action    = $Action
+        target    = $Target
+        result    = $Result
+        details   = $Details
+    }
+    $json = $entry | ConvertTo-Json -Depth 8 -Compress
+    Add-Content -Path $file -Value $json -Encoding UTF8
+    if ($EmitConsole) { Write-Host $json }
+}
+
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('New-ConnectorError')
 $FunctionsToExport.Add('Assert-RequiredString')
@@ -184,8 +281,12 @@ $FunctionsToExport.Add('Get-CertificateByThumbprint')
 $FunctionsToExport.Add('Test-ThumbprintFormat')
 $FunctionsToExport.Add('Ensure-CertificateInMyStore')
 $FunctionsToExport.Add('Resolve-RenewalMapping')
+$FunctionsToExport.Add('Resolve-ConnectorConfigDir')
+$FunctionsToExport.Add('Resolve-ConnectorConfigValue')
+$FunctionsToExport.Add('Read-ConnectorDeploymentConfigFile')
 $FunctionsToExport.Add('Invoke-EndpointAction')
 $FunctionsToExport.Add('Invoke-ConnectorPipeline')
+$FunctionsToExport.Add('Write-ConnectorLog')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {

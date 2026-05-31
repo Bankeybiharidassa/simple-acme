@@ -80,6 +80,56 @@ Import-Module $modulePath -Force
 
 $plannedActions = @()
 
+function Initialize-DpapiSupport {
+    $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+    $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+    if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+
+    $assemblies = @('System.Security', 'System.Security.Cryptography.ProtectedData')
+    foreach ($assembly in $assemblies) {
+        try {
+            Add-Type -AssemblyName $assembly -ErrorAction Stop
+        } catch {
+        }
+
+        $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
+        $protectedDataType = 'System.Security.Cryptography.ProtectedData' -as [type]
+        if ($null -ne $scopeType -and $null -ne $protectedDataType) { return }
+    }
+
+    throw 'Windows DPAPI support is unavailable. Run this command in Windows PowerShell 5.1 or install the System.Security.Cryptography.ProtectedData assembly.'
+}
+
+function Unprotect-DpapiValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CiphertextBase64,
+        [ValidateSet('LocalMachine')][string]$Scope = 'LocalMachine'
+    )
+
+    Initialize-DpapiSupport
+    $entropy = [System.Text.Encoding]::UTF8.GetBytes('certificate-dpapi-entropy-v1')
+    $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
+    $bytes = [Convert]::FromBase64String($CiphertextBase64)
+    $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $entropy, $scopeEnum)
+    [System.Text.Encoding]::UTF8.GetString($plainBytes)
+}
+
+function Resolve-DpapiSecureFileValue {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Secure file not found: $Path" }
+    $raw = (Get-Content -LiteralPath $Path -Raw).Trim()
+    if ($raw.StartsWith('{')) {
+        $payload = $raw | ConvertFrom-Json
+        $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
+        if ($scope -ne 'LocalMachine') { throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine." }
+        return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope 'LocalMachine'
+    }
+
+    return Unprotect-DpapiValue -CiphertextBase64 $raw -Scope 'LocalMachine'
+}
+
 function New-SophosDeploymentLogRecord {
     param(
         [string]$Status,
@@ -113,7 +163,7 @@ function Resolve-OptionalSophosPassword {
 
     if ($null -ne $SecurePassword) { return Resolve-SophosPassword -Password $SecurePassword }
     if (-not [string]::IsNullOrWhiteSpace($SecretName)) { return Resolve-SophosPassword -PasswordSecretName $SecretName }
-    if (-not [string]::IsNullOrWhiteSpace($SecureFile)) { return Resolve-SophosPassword -PasswordSecureFile $SecureFile }
+    if (-not [string]::IsNullOrWhiteSpace($SecureFile)) { return Resolve-DpapiSecureFileValue -Path $SecureFile }
     return ''
 }
 
@@ -147,7 +197,7 @@ function Get-SophosDeploymentPlan {
 try {
     $apiPassword = switch ($PSCmdlet.ParameterSetName) {
         'SecretName' { Resolve-SophosPassword -PasswordSecretName $PasswordSecretName }
-        'SecureFile' { Resolve-SophosPassword -PasswordSecureFile $PasswordSecureFile }
+        'SecureFile' { Resolve-DpapiSecureFileValue -Path $PasswordSecureFile }
         default { Resolve-SophosPassword -Password $Password }
     }
 

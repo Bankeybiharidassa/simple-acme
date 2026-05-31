@@ -1,107 +1,84 @@
 #Requires -Version 5.1
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$Firewall,
 
+    [ValidateRange(1, 65535)]
+    [int]$Port = 4444,
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$Username,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Password,
+    [Parameter(ParameterSetName = 'Password', Mandatory = $true)]
+    [SecureString]$Password,
+
+    [Parameter(ParameterSetName = 'SecretName', Mandatory = $true)]
+    [string]$PasswordSecretName,
+
+    [Parameter(ParameterSetName = 'SecureFile', Mandatory = $true)]
+    [string]$PasswordSecureFile,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^[a-zA-Z0-9._-]+$')]
-    [string]$CertName,
+    [ValidatePattern('^[a-zA-Z0-9 ._-]+$')]
+    [string]$CertificateName,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
+    [string]$PfxPath,
+
+    [SecureString]$PfxPassword,
+
+    [string]$PfxPasswordSecretName,
+
+    [string]$PfxPasswordSecureFile,
+
     [string]$CertPath,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
     [string]$KeyPath,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateSet('waf', 'sslvpn', 'admin', 'userportal')]
-    [string]$BindingType,
+    [string]$ChainPath,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$BindingTarget,
+    [switch]$BindAdminPortal,
 
-    [Parameter(Mandatory = $false)]
-    [ValidateNotNullOrEmpty()]
-    [string]$TemporaryCertificateName = 'Default',
+    [switch]$BindVpnPortal,
 
-    [Parameter(Mandatory = $false)]
-    [ValidateRange(10, 600)]
-    [int]$TimeoutSeconds = 120,
+    [switch]$BindUserPortal,
 
-    [Parameter(Mandatory = $false)]
-    [switch]$DryRun
+    [string[]]$WafRuleNames = @(),
+
+    [switch]$SkipCertificateCheck,
+
+    [switch]$EnableSshExportRecovery,
+
+    [ValidateRange(1, 65535)]
+    [int]$SshPort = 22,
+
+    [string]$SshUsername = 'admin',
+
+    [SecureString]$SshPassword,
+
+    [string]$SshPasswordSecretName,
+
+    [string]$SshPasswordSecureFile,
+
+    [string]$SshPrivateKeyPath,
+
+    [string]$SshHostKeyFingerprint,
+
+    [string]$ExportRecoveryPath,
+
+    [ValidateRange(1, 600)]
+    [int]$TimeoutSeconds = 120
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:RetryCount = 3
-$script:LogDir = 'C:\ProgramData\acme-connector\logs'
-$script:LogFile = Join-Path $script:LogDir ('deploy-sophos-{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
+$modulePath = Join-Path $PSScriptRoot 'Modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1'
+Import-Module $modulePath -Force
 
-function Write-StructuredLog {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Action,
-        [Parameter(Mandatory = $true)][string]$Target,
-        [Parameter(Mandatory = $true)][ValidateSet('success', 'fail', 'info')][string]$Result,
-        [Parameter(Mandatory = $false)][string]$ErrorMessage,
-        [Parameter(Mandatory = $false)][hashtable]$Details = @{}
-    )
-
-    if (-not (Test-Path -LiteralPath $script:LogDir)) {
-        New-Item -Path $script:LogDir -ItemType Directory -Force | Out-Null
-    }
-
-    $entry = [ordered]@{
-        timestamp = (Get-Date).ToUniversalTime().ToString('o')
-        action    = $Action
-        target    = $Target
-        result    = $Result
-        error     = $ErrorMessage
-        details   = $Details
-    }
-
-    $entry | ConvertTo-Json -Depth 8 -Compress | Add-Content -Path $script:LogFile -Encoding UTF8
-}
-
-function Invoke-WithRetry {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Operation,
-        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock
-    )
-
-    for ($attempt = 1; $attempt -le $script:RetryCount; $attempt++) {
-        try {
-            return & $ScriptBlock
-        } catch {
-            $isFinal = $attempt -eq $script:RetryCount
-            Write-StructuredLog -Action 'retry' -Target $Operation -Result ($(if ($isFinal) { 'fail' } else { 'info' })) -ErrorMessage $_.Exception.Message -Details @{
-                attempt = $attempt
-                maxAttempts = $script:RetryCount
-                backoffSeconds = [int][Math]::Pow(2, $attempt)
-            }
-
-            if ($isFinal) { throw }
-            Start-Sleep -Seconds ([int][Math]::Pow(2, $attempt))
-        }
-    }
-}
-
+$plannedActions = @()
 
 function Initialize-DpapiSupport {
     $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
@@ -113,7 +90,6 @@ function Initialize-DpapiSupport {
         try {
             Add-Type -AssemblyName $assembly -ErrorAction Stop
         } catch {
-            # Continue trying known assembly names before reporting a single actionable error.
         }
 
         $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
@@ -132,377 +108,144 @@ function Unprotect-DpapiValue {
     )
 
     Initialize-DpapiSupport
-    $entropy = [System.Text.Encoding]::UTF8.GetBytes('simple-acme-sophos-connector-v1')
-    $cipherBytes = [Convert]::FromBase64String($CiphertextBase64)
+    $entropy = [System.Text.Encoding]::UTF8.GetBytes('certificate-dpapi-entropy-v1')
     $scopeEnum = [System.Security.Cryptography.DataProtectionScope]::$Scope
-    $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect($cipherBytes, $entropy, $scopeEnum)
-    return [System.Text.Encoding]::UTF8.GetString($plainBytes)
+    $bytes = [Convert]::FromBase64String($CiphertextBase64)
+    $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $entropy, $scopeEnum)
+    [System.Text.Encoding]::UTF8.GetString($plainBytes)
 }
 
-function Resolve-EncryptedPassword {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$PasswordInput)
+function Resolve-DpapiSecureFileValue {
+    param([Parameter(Mandatory)][string]$Path)
 
-    # Supported modes:
-    # 1) Path to JSON payload: {"ciphertext":"...","scope":"LocalMachine"}
-    # 2) Literal ciphertext base64 (assumes LocalMachine scope)
-    if (Test-Path -LiteralPath $PasswordInput) {
-        $raw = Get-Content -Path $PasswordInput -Raw -Encoding UTF8
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Secure file not found: $Path" }
+    $raw = (Get-Content -LiteralPath $Path -Raw).Trim()
+    if ($raw.StartsWith('{')) {
         $payload = $raw | ConvertFrom-Json
-        if (-not $payload.ciphertext) { throw 'Password JSON must contain ciphertext.' }
         $scope = if ($payload.scope) { [string]$payload.scope } else { 'LocalMachine' }
         if ($scope -ne 'LocalMachine') { throw "Unsupported DPAPI scope '$scope'. Expected LocalMachine." }
         return Unprotect-DpapiValue -CiphertextBase64 ([string]$payload.ciphertext) -Scope 'LocalMachine'
     }
 
-    return Unprotect-DpapiValue -CiphertextBase64 $PasswordInput -Scope 'LocalMachine'
+    return Unprotect-DpapiValue -CiphertextBase64 $raw -Scope 'LocalMachine'
 }
 
-function Get-XmlEscaped {
-    param([Parameter(Mandatory = $true)][string]$Text)
-    return [System.Security.SecurityElement]::Escape($Text)
-}
-
-function Invoke-SophosApi {
-    [CmdletBinding()]
+function New-SophosDeploymentLogRecord {
     param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][string]$InnerXml,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+        [string]$Status,
+        [string]$Message,
+        [object]$PlannedActions,
+        [object]$ExportDiagnostic,
+        [object]$Verification
     )
 
-    $escapedUser = Get-XmlEscaped -Text $Username
-    $escapedPass = Get-XmlEscaped -Text $PasswordPlain
-
-    # Sophos Firewall XML API endpoint for XG/XGS
-    $requestXml = @"
-<Request>
-  <Login>
-    <Username>$escapedUser</Username>
-    <Password>$escapedPass</Password>
-  </Login>
-  $InnerXml
-</Request>
-"@
-
-    if ($DryRun) {
-        Write-StructuredLog -Action 'api-dry-run' -Target $Firewall -Result 'info' -Details @{ body = $InnerXml }
-        return [xml]'<Response APIVersion="1805.1"><Status code="200">Configuration applied successfully.</Status></Response>'
-    }
-
-    $apiUri = "https://${Firewall}:4444/webconsole/APIController"
-
-    $result = Invoke-WithRetry -Operation "Sophos API call" -ScriptBlock {
-        Invoke-RestMethod -Uri $apiUri -Method Post -Body $requestXml -ContentType 'application/xml' -TimeoutSec $TimeoutSeconds
-    }
-
-    [xml]$xmlResult = $result
-    if (-not $xmlResult.Response.Status) {
-        throw 'Invalid XML response: missing Response/Status element.'
-    }
-
-    $statusText = [string]$xmlResult.Response.Status.'#text'
-    if ($statusText -match 'Authentication Failure|Access denied|failed') {
-        throw "Sophos API rejected request: $statusText"
-    }
-
-    return $xmlResult
-}
-
-function Get-CertificatePayload {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$CertPath,
-        [Parameter(Mandatory = $true)][string]$KeyPath
-    )
-
-    if (-not (Test-Path -LiteralPath $CertPath)) { throw "Certificate file not found: $CertPath" }
-    $certExt = [System.IO.Path]::GetExtension($CertPath).ToLowerInvariant()
-    if ($certExt -eq '.pfx') {
-        $pfxBytes = [System.IO.File]::ReadAllBytes($CertPath)
-        $certObj = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxBytes)
-        return [pscustomobject]@{
-            Format = 'pfx'
-            CertificateData = [Convert]::ToBase64String($pfxBytes)
-            PrivateKeyData = ''
-            Fingerprint = ($certObj.Thumbprint).ToUpperInvariant()
-            NotAfter = $certObj.NotAfter.ToUniversalTime().ToString('o')
-        }
-    }
-
-    if (-not (Test-Path -LiteralPath $KeyPath)) { throw "Private key file not found: $KeyPath" }
-
-    $certRaw = Get-Content -Path $CertPath -Raw -Encoding UTF8
-    $keyRaw = Get-Content -Path $KeyPath -Raw -Encoding UTF8
-    if ($certRaw -notmatch '-----BEGIN CERTIFICATE-----') { throw 'Certificate input must include PEM certificate block.' }
-
-    $certObj = [System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPem($certRaw, $keyRaw)
-    return [pscustomobject]@{
-        Format = 'pem'
-        CertificateData = $certRaw.Trim()
-        PrivateKeyData = $keyRaw.Trim()
-        Fingerprint = ($certObj.Thumbprint).ToUpperInvariant()
-        NotAfter = $certObj.NotAfter.ToUniversalTime().ToString('o')
+    [pscustomobject]@{
+        TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Firewall = $Firewall
+        Port = $Port
+        Username = $Username
+        CertificateName = $CertificateName
+        Status = $Status
+        Message = $Message
+        PlannedActions = @($PlannedActions)
+        ExportDiagnostic = $ExportDiagnostic
+        Verification = $Verification
+        SshExportRecoveryEnabled = [bool]$EnableSshExportRecovery
     }
 }
 
-function Get-ExistingCertificate {
-    [CmdletBinding()]
+function Resolve-OptionalSophosPassword {
     param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][string]$CertName,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+        [SecureString]$SecurePassword,
+        [string]$SecretName,
+        [string]$SecureFile
     )
 
-    $inner = @"
-<Get>
-  <Certificate>
-    <Name>$(Get-XmlEscaped -Text $CertName)</Name>
-  </Certificate>
-</Get>
-"@
-
-    $response = Invoke-SophosApi -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -InnerXml $inner -TimeoutSeconds $TimeoutSeconds
-
-    $certNode = $response.SelectSingleNode('//Certificate')
-    if ($null -eq $certNode) { return $null }
-
-    $fingerNode = $certNode.SelectSingleNode('Fingerprint')
-    $fingerprint = if ($null -ne $fingerNode) { ([string]$fingerNode.InnerText).ToUpperInvariant() } else { $null }
-
-    return [pscustomobject]@{
-        Exists = $true
-        Fingerprint = $fingerprint
-    }
+    if ($null -ne $SecurePassword) { return Resolve-SophosPassword -Password $SecurePassword }
+    if (-not [string]::IsNullOrWhiteSpace($SecretName)) { return Resolve-SophosPassword -PasswordSecretName $SecretName }
+    if (-not [string]::IsNullOrWhiteSpace($SecureFile)) { return Resolve-DpapiSecureFileValue -Path $SecureFile }
+    return ''
 }
 
-function Check-CertificateUsage {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][string]$CertName,
-        [Parameter(Mandatory = $true)][ValidateSet('waf', 'sslvpn', 'admin', 'userportal')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
-    )
+function Get-SophosDeploymentPlan {
+    $actions = New-Object System.Collections.Generic.List[object]
+    $source = if (-not [string]::IsNullOrWhiteSpace($PfxPath)) { 'PFX' } else { 'PEM' }
+    $actions.Add([pscustomobject]@{ Action = 'Connect'; Target = $Firewall; Detail = 'Sophos XML API' }) | Out-Null
+    $actions.Add([pscustomobject]@{ Action = 'UploadCertificate'; Target = $CertificateName; Detail = $source }) | Out-Null
 
-    $queryXml = switch ($BindingType) {
-        'waf' {
-@"
-<Get>
-  <WebServerProtectionPolicy>
-    <Name>$(Get-XmlEscaped -Text $BindingTarget)</Name>
-  </WebServerProtectionPolicy>
-</Get>
-"@
-        }
-        'sslvpn' {
-@"
-<Get>
-  <SSLVPN>
-    <Name>SSLVPN</Name>
-  </SSLVPN>
-</Get>
-"@
-        }
-        'admin' {
-@"
-<Get>
-  <AdminSettings></AdminSettings>
-</Get>
-"@
-        }
-        'userportal' {
-@"
-<Get>
-  <UserPortal></UserPortal>
-</Get>
-"@
+    if ($BindAdminPortal -or $BindVpnPortal -or $BindUserPortal) {
+        $selected = @()
+        if ($BindAdminPortal) { $selected += 'admin portal' }
+        if ($BindVpnPortal) { $selected += 'VPN portal' }
+        if ($BindUserPortal) { $selected += 'user portal' }
+        $actions.Add([pscustomobject]@{ Action = 'BindWebAdminSettings'; Target = ($selected -join ', '); Detail = 'Sophos exposes these through WebAdminSettings/Certificate on tested SFOS.' }) | Out-Null
+    }
+
+    foreach ($rule in @($WafRuleNames)) {
+        if (-not [string]::IsNullOrWhiteSpace($rule)) {
+            $actions.Add([pscustomobject]@{ Action = 'BindWafRule'; Target = $rule; Detail = 'FirewallRule/HTTPBasedPolicy/HTTPSCertificate' }) | Out-Null
         }
     }
 
-    $response = Invoke-SophosApi -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -InnerXml $queryXml -TimeoutSeconds $TimeoutSeconds
-
-    $currentCert = switch ($BindingType) {
-        'waf' { [string]$response.SelectSingleNode('//WebServerProtectionPolicy/Certificate').InnerText }
-        'sslvpn' { [string]$response.SelectSingleNode('//SSLVPN/Certificate').InnerText }
-        'admin' { [string]$response.SelectSingleNode('//AdminSettings/Certificate').InnerText }
-        'userportal' { [string]$response.SelectSingleNode('//UserPortal/Certificate').InnerText }
+    if ($EnableSshExportRecovery) {
+        $actions.Add([pscustomobject]@{ Action = 'OptionalSshExportRecovery'; Target = $Firewall; Detail = 'Only used if HTTPS certificate export returns an empty body.' }) | Out-Null
     }
 
-    return [pscustomobject]@{
-        IsInUse = ($currentCert -eq $CertName)
-        CurrentCertificate = $currentCert
-    }
-}
-
-function Set-TemporaryCertificate {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][ValidateSet('waf', 'sslvpn', 'admin', 'userportal')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
-        [Parameter(Mandatory = $true)][string]$TemporaryCertificateName,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
-    )
-
-    Write-StructuredLog -Action 'detach' -Target "$BindingType/$BindingTarget" -Result 'info' -Details @{ temporaryCertificate = $TemporaryCertificateName }
-    Bind-Certificate -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -BindingType $BindingType -BindingTarget $BindingTarget -CertName $TemporaryCertificateName -TimeoutSeconds $TimeoutSeconds
-}
-
-function Upload-Certificate {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][string]$CertName,
-        [Parameter(Mandatory = $true)][pscustomobject]$CertificatePayload,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
-    )
-
-    $certificateEscaped = Get-XmlEscaped -Text $CertificatePayload.CertificateData
-    $privateKeyEscaped = Get-XmlEscaped -Text $CertificatePayload.PrivateKeyData
-
-    # Update existing cert if present, otherwise add it.
-    $innerXml = @"
-<Set operation="update">
-  <Certificate>
-    <Name>$(Get-XmlEscaped -Text $CertName)</Name>
-    <Action>UploadCertificate</Action>
-    <CertificateFormat>$(Get-XmlEscaped -Text $CertificatePayload.Format)</CertificateFormat>
-    <CertificateFile>$certificateEscaped</CertificateFile>
-    <PrivateKeyFile>$privateKeyEscaped</PrivateKeyFile>
-  </Certificate>
-</Set>
-"@
-
-    $null = Invoke-SophosApi -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -InnerXml $innerXml -TimeoutSeconds $TimeoutSeconds
-    Write-StructuredLog -Action 'upload-certificate' -Target $CertName -Result 'success' -Details @{ fingerprint = $CertificatePayload.Fingerprint; notAfter = $CertificatePayload.NotAfter }
-}
-
-function Bind-Certificate {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][ValidateSet('waf', 'sslvpn', 'admin', 'userportal')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
-        [Parameter(Mandatory = $true)][string]$CertName,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
-    )
-
-    $innerXml = switch ($BindingType) {
-        'waf' {
-@"
-<Set operation="update">
-  <WebServerProtectionPolicy>
-    <Name>$(Get-XmlEscaped -Text $BindingTarget)</Name>
-    <Certificate>$(Get-XmlEscaped -Text $CertName)</Certificate>
-  </WebServerProtectionPolicy>
-</Set>
-"@
-        }
-        'sslvpn' {
-@"
-<Set operation="update">
-  <SSLVPN>
-    <Name>SSLVPN</Name>
-    <Certificate>$(Get-XmlEscaped -Text $CertName)</Certificate>
-  </SSLVPN>
-</Set>
-"@
-        }
-        'admin' {
-@"
-<Set operation="update">
-  <AdminSettings>
-    <Certificate>$(Get-XmlEscaped -Text $CertName)</Certificate>
-  </AdminSettings>
-</Set>
-"@
-        }
-        'userportal' {
-@"
-<Set operation="update">
-  <UserPortal>
-    <Certificate>$(Get-XmlEscaped -Text $CertName)</Certificate>
-  </UserPortal>
-</Set>
-"@
-        }
-    }
-
-    $null = Invoke-SophosApi -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -InnerXml $innerXml -TimeoutSeconds $TimeoutSeconds
-    Write-StructuredLog -Action 'bind-certificate' -Target "$BindingType/$BindingTarget" -Result 'success' -Details @{ certificate = $CertName }
-}
-
-function Validate-Deployment {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Firewall,
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$PasswordPlain,
-        [Parameter(Mandatory = $true)][string]$CertName,
-        [Parameter(Mandatory = $true)][ValidateSet('waf', 'sslvpn', 'admin', 'userportal')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
-        [Parameter(Mandatory = $true)][string]$ExpectedFingerprint,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
-    )
-
-    $existing = Get-ExistingCertificate -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -CertName $CertName -TimeoutSeconds $TimeoutSeconds
-    if ($null -eq $existing) {
-        throw "Validation failed: certificate '$CertName' is not present on firewall."
-    }
-
-    if ($existing.Fingerprint -and $existing.Fingerprint -ne $ExpectedFingerprint) {
-        throw "Validation failed: certificate fingerprint mismatch. Expected $ExpectedFingerprint got $($existing.Fingerprint)."
-    }
-
-    $usage = Check-CertificateUsage -Firewall $Firewall -Username $Username -PasswordPlain $PasswordPlain -CertName $CertName -BindingType $BindingType -BindingTarget $BindingTarget -TimeoutSeconds $TimeoutSeconds
-    if (-not $usage.IsInUse) {
-        throw "Validation failed: binding $BindingType/$BindingTarget not assigned to certificate '$CertName'. Current='$($usage.CurrentCertificate)'"
-    }
-
-    Write-StructuredLog -Action 'validate-deployment' -Target "$BindingType/$BindingTarget" -Result 'success' -Details @{ certificate = $CertName; fingerprint = $ExpectedFingerprint }
+    $actions.ToArray()
 }
 
 try {
-    Write-StructuredLog -Action 'start' -Target $Firewall -Result 'info' -Details @{ certName = $CertName; bindingType = $BindingType; bindingTarget = $BindingTarget; dryRun = [bool]$DryRun }
-
-    $plainPassword = Resolve-EncryptedPassword -PasswordInput $Password
-    $payload = Get-CertificatePayload -CertPath $CertPath -KeyPath $KeyPath
-
-    $existing = Get-ExistingCertificate -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -CertName $CertName -TimeoutSeconds $TimeoutSeconds
-    if ($null -ne $existing -and $existing.Fingerprint -eq $payload.Fingerprint) {
-        Write-StructuredLog -Action 'skip-upload' -Target $CertName -Result 'success' -Details @{ reason = 'fingerprint-match'; fingerprint = $payload.Fingerprint }
-        exit 0
+    $apiPassword = switch ($PSCmdlet.ParameterSetName) {
+        'SecretName' { Resolve-SophosPassword -PasswordSecretName $PasswordSecretName }
+        'SecureFile' { Resolve-DpapiSecureFileValue -Path $PasswordSecureFile }
+        default { Resolve-SophosPassword -Password $Password }
     }
 
-    $usage = Check-CertificateUsage -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -CertName $CertName -BindingType $BindingType -BindingTarget $BindingTarget -TimeoutSeconds $TimeoutSeconds
-
-    if ($usage.IsInUse) {
-        Set-TemporaryCertificate -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -BindingType $BindingType -BindingTarget $BindingTarget -TemporaryCertificateName $TemporaryCertificateName -TimeoutSeconds $TimeoutSeconds
+    $sshPasswordText = Resolve-OptionalSophosPassword -SecurePassword $SshPassword -SecretName $SshPasswordSecretName -SecureFile $SshPasswordSecureFile
+    $resolvedPfxPassword = $PfxPassword
+    if ($null -eq $resolvedPfxPassword) {
+        $pfxPasswordText = Resolve-OptionalSophosPassword -SecurePassword $null -SecretName $PfxPasswordSecretName -SecureFile $PfxPasswordSecureFile
+        if (-not [string]::IsNullOrEmpty($pfxPasswordText)) {
+            $resolvedPfxPassword = ConvertTo-SecureString $pfxPasswordText -AsPlainText -Force
+        }
     }
+    $normalizedWafRuleNames = @()
+    foreach ($ruleValue in @($WafRuleNames)) {
+        if (-not [string]::IsNullOrWhiteSpace($ruleValue)) {
+            $normalizedWafRuleNames += @([string]$ruleValue -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+    }
+    $WafRuleNames = @($normalizedWafRuleNames)
+    $plannedActions = @(Get-SophosDeploymentPlan)
 
-    Upload-Certificate -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -CertName $CertName -CertificatePayload $payload -TimeoutSeconds $TimeoutSeconds
+    if ($PSCmdlet.ShouldProcess($Firewall, "Deploy Sophos certificate '$CertificateName'")) {
+        $null = Connect-SophosFirewallApi -Firewall $Firewall -Port $Port -Username $Username -Password $apiPassword -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
 
-    Bind-Certificate -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -BindingType $BindingType -BindingTarget $BindingTarget -CertName $CertName -TimeoutSeconds $TimeoutSeconds
+        $exportDiagnostic = Export-SophosCertificateArchive -OutputPath $ExportRecoveryPath -EnableSshExportRecovery:$EnableSshExportRecovery -SshUsername $SshUsername -SshPort $SshPort -SshHostKeyFingerprint $SshHostKeyFingerprint -SshPassword $sshPasswordText -SshPrivateKeyPath $SshPrivateKeyPath
 
-    Validate-Deployment -Firewall $Firewall -Username $Username -PasswordPlain $plainPassword -CertName $CertName -BindingType $BindingType -BindingTarget $BindingTarget -ExpectedFingerprint $payload.Fingerprint -TimeoutSeconds $TimeoutSeconds
+        $null = Import-SophosCertificate -Name $CertificateName -PfxPath $PfxPath -PfxPassword $resolvedPfxPassword -CertPath $CertPath -KeyPath $KeyPath -ChainPath $ChainPath
 
-    Write-StructuredLog -Action 'finish' -Target $Firewall -Result 'success' -Details @{ certName = $CertName }
-    exit 0
+        if ($BindAdminPortal -or $BindVpnPortal -or $BindUserPortal) {
+            $null = Set-SophosAdminWebSettingsCertificate -CertificateName $CertificateName
+        }
+
+        foreach ($rule in @($WafRuleNames)) {
+            if (-not [string]::IsNullOrWhiteSpace($rule)) {
+                $null = Set-SophosWafRuleCertificate -RuleName $rule -CertificateName $CertificateName
+            }
+        }
+
+        $verification = Test-SophosDeploymentVerification -CertificateName $CertificateName -BindAdminPortal:($BindAdminPortal -or $BindVpnPortal -or $BindUserPortal) -WafRuleNames $WafRuleNames
+        if (-not $verification.Passed) { throw 'Sophos deployment verification failed.' }
+
+        New-SophosDeploymentLogRecord -Status 'Completed' -Message 'Sophos deployment completed.' -PlannedActions $plannedActions -ExportDiagnostic $exportDiagnostic -Verification $verification
+    } else {
+        New-SophosDeploymentLogRecord -Status 'WhatIf' -Message 'WhatIf only. No Sophos API mutations were executed.' -PlannedActions $plannedActions -ExportDiagnostic $null -Verification $null
+    }
 } catch {
-    Write-StructuredLog -Action 'finish' -Target $Firewall -Result 'fail' -ErrorMessage $_.Exception.Message
-    throw
+    $safeMessage = Protect-SophosLogText -Text $_.Exception.Message
+    $failureActions = @()
+    if ($plannedActions) { $failureActions = @($plannedActions) }
+    New-SophosDeploymentLogRecord -Status 'Failed' -Message $safeMessage -PlannedActions $failureActions -ExportDiagnostic $null -Verification $null
+    throw $safeMessage
 }

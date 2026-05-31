@@ -24,10 +24,11 @@ function Invoke-TestDpapiScope {
     & $Assert 'runtime code uses LocalMachine DPAPI scope' {
         $cryptoPath = Join-Path $PSScriptRoot '..\core\Crypto.psm1'
         $raw = Get-Content -LiteralPath $cryptoPath -Raw
-        if ($raw -notmatch "DataProtectionScope]::\$Scope") {
+        if ($raw -notmatch 'DataProtectionScope]::\$Scope') {
             throw 'Crypto module does not resolve DPAPI scope enum.'
         }
-        if ($raw -notmatch "ValidateSet\('LocalMachine'\)\[string\]\$Scope = 'LocalMachine'") {
+        $localMachineScopeParameter = [regex]::Escape("[ValidateSet('LocalMachine')][string]`$Scope = 'LocalMachine'")
+        if ($raw -notmatch $localMachineScopeParameter) {
             throw 'Crypto module does not enforce LocalMachine-only scope.'
         }
     }
@@ -78,6 +79,9 @@ function Invoke-TestDpapiScope {
         }
         if ($raw -notmatch "NTAccount\('Administrators'\)") {
             throw 'Set-EnvFileAcl does not grant Administrators.'
+        }
+        if ($raw -notmatch 'WindowsIdentity\]::GetCurrent\(\)' -or $raw -notmatch 'currentUser') {
+            throw 'Set-EnvFileAcl does not preserve access for the current operator user.'
         }
     }
 }

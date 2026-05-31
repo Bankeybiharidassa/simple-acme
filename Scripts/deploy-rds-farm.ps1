@@ -7,6 +7,7 @@ param(
     [string]$PfxStorePath = '',
     [string]$PfxPassword = '',
     [string]$SessionHosts = '',
+    [pscredential]$SessionCredential = $null,
     [string]$RemoteTempDirectory = '',
     [string]$ConfigFile = '',
     [switch]$SkipLocalRdsBinding,
@@ -53,7 +54,21 @@ function Resolve-HostsFromTargets {
   $targets = Get-Content -LiteralPath $targetsPath -Raw | ConvertFrom-Json
   return @($targets.sessionHosts | Where-Object { $_.enabled -eq $true } | ForEach-Object { [string]$_.computerName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
+function Invoke-LocalRdsBinding {
+  param([Parameter(Mandatory)][string]$Thumbprint)
+
+  $scriptPath = Join-Path $PSScriptRoot 'cert2rds.ps1'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Local RDS binding script not found: $scriptPath" }
+
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-CertThumbprint',$Thumbprint) -Wait -PassThru -WindowStyle Hidden
+  if ($process.ExitCode -ne 0) { throw "Local RDS binding failed with exit code $($process.ExitCode)." }
+  Write-DeployLog -Action 'local-rds-binding' -Target 'localhost' -Result 'success' -Details @{ thumbprint = $Thumbprint }
+}
 $normalized = Normalize-Thumbprint $CertThumbprint
+if (-not $SkipLocalRdsBinding) {
+  try { Invoke-LocalRdsBinding -Thumbprint $normalized }
+  catch { Write-DeployLog -Action 'local-rds-binding' -Target 'localhost' -Result 'fail' -Details @{ error = $_.Exception.Message }; throw }
+}
 if ($SkipSessionHosts) { exit 0 }
 $config = Read-ConnectorDeploymentConfigFile -Path $ConfigFile
 if (-not $PSBoundParameters.ContainsKey('SessionHosts')) { $SessionHosts = Resolve-ConnectorConfigValue -Config $config -Keys @('HOSTS','SESSION_HOSTS') -Fallback $SessionHosts }
@@ -78,7 +93,11 @@ if ([string]::IsNullOrWhiteSpace($plainPassword)) { throw 'No PFX password avail
 $failed=$false
 foreach($hostName in $hosts){
   $session=$null
-  try { $session=New-PSSession -ComputerName $hostName -Authentication Negotiate -ErrorAction Stop } catch { Write-DeployLog -Action 'session-connect' -Target $hostName -Result 'fail' -Details @{ reason = $_.Exception.Message }; $failed=$true; continue }
+  try {
+    $sessionArgs = @{ ComputerName = $hostName; Authentication = 'Negotiate'; ErrorAction = 'Stop' }
+    if ($null -ne $SessionCredential) { $sessionArgs.Credential = $SessionCredential }
+    $session=New-PSSession @sessionArgs
+  } catch { Write-DeployLog -Action 'session-connect' -Target $hostName -Result 'fail' -Details @{ reason = $_.Exception.Message }; $failed=$true; continue }
   try {
     Invoke-Command -Session $session -ScriptBlock { param($p) New-Item -ItemType Directory -Path $p -Force | Out-Null } -ArgumentList $RemoteTempDirectory
     $remotePfxPath = Join-Path $RemoteTempDirectory ([System.IO.Path]::GetFileName($pfxPath))

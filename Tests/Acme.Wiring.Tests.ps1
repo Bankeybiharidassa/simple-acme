@@ -29,7 +29,6 @@ function Assert-ArgValue {
     $idx | Should -BeGreaterThan -1
     $ArgList[$idx + 1] | Should -Be $Value
 }
-
 function New-TestRenewalSummary {
     param([hashtable]$Overrides = @{})
     $summary = [ordered]@{
@@ -151,7 +150,6 @@ Describe 'WACS issue argument arrays' {
             $actualArgs | Should -Contain $required
         }
     }
-
     It 'rejects rds-farm preview generation without required PFX settings' {
         $farmTemplate = Get-GuidedPipelineTemplate -TargetSystem 'rds-farm' -ValidationMode 'none'
         $env = New-TestEnv @{
@@ -213,7 +211,6 @@ Describe 'Preflight and renewal script parameter validation' {
         $missing.Matches | Should -BeFalse
         $missing.Mismatches | Should -Contain 'Script parameters'
     }
-
     It 'validates IIS renewal without script path or parameters' {
         $summary = New-TestRenewalSummary @{ SourcePlugin='iis'; InstallationPlugins=@('iis'); ScriptPaths=@(); ScriptParameters=@() }
         $env = New-TestEnv @{ ACME_SOURCE_PLUGIN='iis'; ACME_INSTALLATION_PLUGINS='iis'; ACME_SCRIPT_PATH=''; ACME_SCRIPT_PARAMETERS='' }
@@ -246,7 +243,6 @@ Describe 'Static guard for WACS preview source of truth' {
         $formText | Should -Not -Match 'wacs\.exe --accepttos'
         $formText | Should -Not -Match ' --source manual --order single '
     }
-
     It 'diagnostics resolve lower-case release manifest script paths against upper-case Scripts directory' {
         $result = Test-AcmeTuiWiring -ProjectRoot $script:repoRoot
         $result.Passed | Should -BeTrue

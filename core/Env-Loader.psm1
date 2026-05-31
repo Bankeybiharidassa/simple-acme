@@ -106,7 +106,15 @@ function Read-EnvFile {
 
     $result = @{}
     $lineNo = 0
-    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+    try {
+        $lines = [System.IO.File]::ReadAllLines($Path)
+    } catch [System.UnauthorizedAccessException] {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $name = if ($null -ne $identity -and -not [string]::IsNullOrWhiteSpace($identity.Name)) { $identity.Name } else { '<unknown>' }
+        throw "Access denied reading env file '$Path' as '$name'. Re-run certificate-setup.ps1 and accept the elevation/repair prompt, or repair the file ACL for the current operator."
+    }
+
+    foreach ($line in $lines) {
         $lineNo++
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $trimStart = $line.TrimStart()
@@ -248,6 +256,8 @@ function Set-EnvFileAcl {
 
     $systemAccount = New-Object System.Security.Principal.NTAccount('SYSTEM')
     $administratorsAccount = New-Object System.Security.Principal.NTAccount('Administrators')
+    $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $currentUser = $currentIdentity.User
 
     $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
     $inheritFlags = [System.Security.AccessControl.InheritanceFlags]::None
@@ -256,6 +266,9 @@ function Set-EnvFileAcl {
 
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($administratorsAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    if ($null -ne $currentUser) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    }
 
     [System.IO.File]::SetAccessControl($Path, $acl)
 }

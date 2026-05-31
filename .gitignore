@@ -210,3 +210,6 @@ launchSettings.json
 *.pfx
 *.p12
 *.key
+
+# Local operator/integration sandbox
+/test/

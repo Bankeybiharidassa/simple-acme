@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module "$PSScriptRoot/Crypto.psm1" -Force
 
 $script:RequiredEnvKeys = @(
     'ACME_DIRECTORY',
@@ -10,12 +11,17 @@ $script:OptionalEnvDefaults = @{
     ACME_SOURCE_PLUGIN            = 'manual'
     ACME_ORDER_PLUGIN             = 'single'
     ACME_STORE_PLUGIN             = 'certificatestore'
+    ACME_PFX_FILE_PATH            = ''
+    ACME_PFX_PASSWORD             = ''
+    ACME_CERT_STORE_LOCATION      = 'My'
     ACME_ACCOUNT_NAME             = ''
     ACME_VALIDATION_MODE          = 'none'
     ACME_WACS_RETRY_ATTEMPTS      = '3'
     ACME_WACS_RETRY_DELAY_SECONDS = '2'
     ACME_INSTALLATION_PLUGINS     = 'script'
     ACME_CSR_ALGORITHM            = 'ec'
+    ACME_ALLOW_CSR_FALLBACK        = '1'
+    ACME_PRIVATEKEY_EXPORTABLE     = 'false'
     ACME_WACS_PATH                = ''
     ACME_WACS_SOURCE              = 'official-release'
     ACME_WACS_AUTO_UPDATE         = '0'
@@ -44,28 +50,19 @@ function ConvertFrom-SecureStringToPlainText {
 
 function Import-SecureOverlay {
     param([Parameter(Mandatory)][hashtable]$Values)
-
     $configDir = if ($Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { [string]$Values.CERTIFICATE_CONFIG_DIR } else { [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if ([string]::IsNullOrWhiteSpace($configDir)) { return $Values }
-
-    $secureEnvPath = Join-Path $configDir 'env.secure'
-    if (Test-Path -LiteralPath $secureEnvPath) {
-        $secureEnv = Import-Clixml -Path $secureEnvPath
-        if ($secureEnv -is [System.Collections.IDictionary]) {
-            foreach ($k in $secureEnv.Keys) { $Values[$k] = [string]$secureEnv[$k] }
+    foreach ($name in @('env.secure','credentials.sec')) {
+        $path = Join-Path $configDir $name
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        try { $raw = [System.IO.File]::ReadAllText($path); $obj = $raw | ConvertFrom-Json }
+        catch {
+            try { $legacy = Import-Clixml -LiteralPath $path; if ($legacy) { foreach($k in $legacy.Keys){ $Values[$k] = [string]$legacy[$k] } } ; continue } catch { Write-Warning "Could not read ${name}: $($_.Exception.Message)"; continue }
+        }
+        foreach ($prop in $obj.PSObject.Properties) {
+            try { $Values[$prop.Name] = Unprotect-DpapiValue -CiphertextBase64 ([string]$prop.Value) -Scope LocalMachine } catch { Write-Warning "Could not decrypt '$($prop.Name)' from ${name}: $($_.Exception.Message)" }
         }
     }
-
-    $credPath = Join-Path $configDir 'credentials.sec'
-    if (Test-Path -LiteralPath $credPath) {
-        $creds = Import-Clixml -Path $credPath
-        foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','CERTIFICATE_API_KEY')) {
-            if ($creds.PSObject.Properties.Name -contains $k -and $creds.$k -is [Security.SecureString]) {
-                $Values[$k] = ConvertFrom-SecureStringToPlainText -SecureString $creds.$k
-            }
-        }
-    }
-
     return $Values
 }
 
@@ -109,7 +106,15 @@ function Read-EnvFile {
 
     $result = @{}
     $lineNo = 0
-    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+    try {
+        $lines = [System.IO.File]::ReadAllLines($Path)
+    } catch [System.UnauthorizedAccessException] {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $name = if ($null -ne $identity -and -not [string]::IsNullOrWhiteSpace($identity.Name)) { $identity.Name } else { '<unknown>' }
+        throw "Access denied reading env file '$Path' as '$name'. Re-run certificate-setup.ps1 and accept the elevation/repair prompt, or repair the file ACL for the current operator."
+    }
+
+    foreach ($line in $lines) {
         $lineNo++
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $trimStart = $line.TrimStart()
@@ -129,6 +134,36 @@ function Read-EnvFile {
     }
 
     return $result
+}
+
+function Read-EffectiveEnvFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$ConfigDir = '',
+        [switch]$ValidateRequired
+    )
+
+    $values = Read-EnvFile -Path $Path
+    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $values.CERTIFICATE_CONFIG_DIR = [string]$ConfigDir
+    }
+    $values = Import-SecureOverlay -Values $values
+    if ($ValidateRequired) {
+        $missing = @($script:RequiredEnvKeys | Where-Object { -not $values.ContainsKey($_) -or [string]::IsNullOrWhiteSpace([string]$values[$_]) })
+        $requiresEab = $values.ContainsKey('ACME_REQUIRES_EAB') -and [string]$values.ACME_REQUIRES_EAB -eq '1'
+        if ($requiresEab) {
+            foreach ($key in @('ACME_KID','ACME_HMAC_SECRET')) {
+                if (-not $values.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$values[$key])) {
+                    $missing += $key
+                }
+            }
+        }
+        $missing = @($missing | Select-Object -Unique)
+        if ($missing.Count -gt 0) {
+            throw "Missing required environment keys in '$Path': $($missing -join ', ')"
+        }
+    }
+    return $values
 }
 
 function Import-EnvFile {
@@ -156,15 +191,22 @@ function Import-EnvFile {
 
         $installationPlugins = @()
         if ($values.ContainsKey('ACME_INSTALLATION_PLUGINS')) {
-            $installationPlugins = @([string]$values.ACME_INSTALLATION_PLUGINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+            $installationPlugins = @([string]$values.ACME_INSTALLATION_PLUGINS -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
         } elseif ($script:OptionalEnvDefaults.ContainsKey('ACME_INSTALLATION_PLUGINS')) {
-            $installationPlugins = @([string]$script:OptionalEnvDefaults.ACME_INSTALLATION_PLUGINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+            $installationPlugins = @([string]$script:OptionalEnvDefaults.ACME_INSTALLATION_PLUGINS -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
         }
         if ($installationPlugins -contains 'script') {
             foreach ($key in @('ACME_SCRIPT_PATH')) {
                 if (-not $values.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$values[$key])) {
                     $missing += $key
                 }
+            }
+        }
+        $storePluginsRaw = if ($values.ContainsKey('ACME_STORE_PLUGIN')) { [string]$values.ACME_STORE_PLUGIN } else { [string]$script:OptionalEnvDefaults.ACME_STORE_PLUGIN }
+        $storePluginList = @($storePluginsRaw -split '[,;\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+        if ($storePluginList -contains 'pfxfile') {
+            if (-not $values.ContainsKey('ACME_PFX_FILE_PATH') -or [string]::IsNullOrWhiteSpace([string]$values['ACME_PFX_FILE_PATH'])) {
+                $missing += 'ACME_PFX_FILE_PATH'
             }
         }
         $missing = @($missing | Select-Object -Unique)
@@ -177,14 +219,29 @@ function Import-EnvFile {
         if (-not $values.ContainsKey($key)) { $values[$key] = $script:OptionalEnvDefaults[$key] }
     }
 
+    $appliedKeys = New-Object System.Collections.Generic.List[string]
+    $skippedKeys = New-Object System.Collections.Generic.List[string]
+
     foreach ($key in $values.Keys) {
         $existing = [Environment]::GetEnvironmentVariable($key)
         if (-not $Force -and -not [string]::IsNullOrWhiteSpace($existing)) {
+            $skippedKeys.Add([string]$key)
             Write-Verbose "Skipping existing env var '$key' because -Force was not specified."
             continue
         }
         [Environment]::SetEnvironmentVariable($key, [string]$values[$key])
+        $appliedKeys.Add([string]$key)
     }
+
+    $summary = [ordered]@{
+        AppliedCount = $appliedKeys.Count
+        SkippedCount = $skippedKeys.Count
+        AppliedKeys = @($appliedKeys)
+        SkippedKeys = @($skippedKeys)
+    }
+    $values['__ENV_IMPORT_SUMMARY'] = $summary
+
+    Write-Verbose ("Env import summary: applied {0}, skipped {1}." -f $summary.AppliedCount, $summary.SkippedCount)
 
     return $values
 }
@@ -198,7 +255,9 @@ function Set-EnvFileAcl {
     $acl.SetAccessRuleProtection($true, $false)
 
     $systemAccount = New-Object System.Security.Principal.NTAccount('SYSTEM')
-    $currentAccount = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $administratorsAccount = New-Object System.Security.Principal.NTAccount('Administrators')
+    $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $currentUser = $currentIdentity.User
 
     $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
     $inheritFlags = [System.Security.AccessControl.InheritanceFlags]::None
@@ -206,9 +265,33 @@ function Set-EnvFileAcl {
     $allow = [System.Security.AccessControl.AccessControlType]::Allow
 
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($administratorsAccount, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    if ($null -ne $currentUser) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, $fullControl, $inheritFlags, $propagationFlags, $allow)))
+    }
 
     [System.IO.File]::SetAccessControl($Path, $acl)
+}
+
+
+function Write-SecureOverlay {
+    param([Parameter(Mandatory)][string]$ConfigDir,[Parameter(Mandatory)][hashtable]$Values)
+    if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+    $out = [ordered]@{}
+    foreach ($k in $Values.Keys) { $out[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine }
+    ($out | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $ConfigDir 'env.secure') -Encoding UTF8
+}
+
+function Write-CredentialStore {
+    param([Parameter(Mandatory)][string]$ConfigDir,[Parameter(Mandatory)][hashtable]$Values)
+    if (-not (Test-Path -LiteralPath $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+    $out = [ordered]@{}
+    foreach ($k in @('ACME_KID','ACME_HMAC_SECRET','ACME_API_KEY','ACME_PFX_PASSWORD')) {
+        if ($Values.ContainsKey($k) -and -not [string]::IsNullOrWhiteSpace([string]$Values[$k])) {
+            $out[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
+        }
+    }
+    ($out | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $ConfigDir 'credentials.sec') -Encoding UTF8
 }
 
 function Write-EnvFile {
@@ -246,8 +329,12 @@ function Write-EnvFile {
 $FunctionsToExport = New-Object System.Collections.Generic.List[string]
 $FunctionsToExport.Add('Resolve-BootstrapEnvPath')
 $FunctionsToExport.Add('Read-EnvFile')
+$FunctionsToExport.Add('Read-EffectiveEnvFile')
 $FunctionsToExport.Add('Import-EnvFile')
 $FunctionsToExport.Add('Write-EnvFile')
+$FunctionsToExport.Add('Write-SecureOverlay')
+$FunctionsToExport.Add('Write-CredentialStore')
+$FunctionsToExport.Add('Import-SecureOverlay')
 
 $MissingExports = @()
 foreach ($fn in $FunctionsToExport) {

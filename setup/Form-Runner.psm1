@@ -750,7 +750,7 @@ function Invoke-AcmeSettingsMenu {
                     continue
                 }
                 $envValues = Read-EnvFile -Path $resolvedEnvFilePath
-                foreach ($name in @($envValues.Keys | Sort-Object)) {
+                foreach ($name in @(([System.Collections.IDictionary]$envValues).Keys | Sort-Object)) {
                     $displayValue = ConvertTo-MaskedEnvDisplayValue -Name [string]$name -Value ([string]$envValues[$name])
                     [Console]::WriteLine("$name=$displayValue")
                 }
@@ -863,8 +863,8 @@ function Invoke-AcmeSettingsMenu {
             'eab' {
                 $envValues = @{}
                 if (Test-Path -LiteralPath $resolvedEnvFilePath -PathType Leaf) { $envValues = Read-EnvFile -Path $resolvedEnvFilePath }
-                $currentKid = if ($envValues.ContainsKey('ACME_KID')) { [string]$envValues.ACME_KID } else { '' }
-                $currentSecret = if ($envValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$envValues.ACME_HMAC_SECRET } else { '' }
+                $currentKid = if ($envValues.ContainsKey('ACME_KID')) { [string]$envValues['ACME_KID'] } else { '' }
+                $currentSecret = if ($envValues.ContainsKey('ACME_HMAC_SECRET')) { [string]$envValues['ACME_HMAC_SECRET'] } else { '' }
                 if (-not [string]::IsNullOrWhiteSpace($currentKid) -and -not [string]::IsNullOrWhiteSpace($currentSecret)) {
                     [Console]::WriteLine('[1] Keep existing credentials')
                     [Console]::WriteLine('[2] Replace credentials')
@@ -882,12 +882,12 @@ function Invoke-AcmeSettingsMenu {
                     Wait-ForOperatorReturn
                     continue
                 }
-                $envValues.ACME_KID = $newKid
-                $envValues.ACME_HMAC_SECRET = $newSecret
+                $envValues['ACME_KID'] = $newKid
+                $envValues['ACME_HMAC_SECRET'] = $newSecret
                 $toWrite = @{}
-                foreach ($k in $envValues.Keys) { if ($k -notin @('ACME_KID','ACME_HMAC_SECRET')) { $toWrite[$k] = $envValues[$k] } }
+                foreach ($k in ([System.Collections.IDictionary]$envValues).Keys) { if ($k -notin @('ACME_KID','ACME_HMAC_SECRET')) { $toWrite[$k] = $envValues[$k] } }
                 Write-EnvFile -Values $toWrite -Path $resolvedEnvFilePath
-                if ($envValues.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$envValues.CERTIFICATE_CONFIG_DIR) -Values $envValues }
+                if ($envValues.ContainsKey('CERTIFICATE_CONFIG_DIR')) { Save-SecurePlatformConfig -ConfigDir ([string]$envValues['CERTIFICATE_CONFIG_DIR']) -Values $envValues }
                 [Console]::WriteLine('Updated EAB credentials.')
                 Wait-ForOperatorReturn
             }
@@ -898,7 +898,7 @@ function Invoke-AcmeSettingsMenu {
                 [Console]::WriteLine('[2] http-01 (advanced/unsupported in this guided flow)')
                 $mode = Read-SetupChoice -Prompt 'Validation mode' -Options @{ '1'='none'; '2'='http-01' } -DefaultKey '1' -AllowBack
                 if ($mode -in @('__CANCEL__','__BACK__')) { continue }
-                $envValues.ACME_VALIDATION_MODE = $mode
+                $envValues['ACME_VALIDATION_MODE'] = $mode
                 Write-EnvFile -Values $envValues -Path $resolvedEnvFilePath
                 if ($mode -eq 'http-01') {
                     [Console]::WriteLine('Warning: http-01 flow is not fully implemented in this noob-guided setup.')
@@ -915,7 +915,7 @@ function Invoke-AcmeSettingsMenu {
                     Wait-ForOperatorReturn
                     continue
                 }
-                $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues.ACME_CSR_ALGORITHM } else { 'ec' }
+                $csrAlgo = if ($envValues.ContainsKey('ACME_CSR_ALGORITHM')) { [string]$envValues['ACME_CSR_ALGORITHM'] } else { 'ec' }
                 $line = Get-MaskedWacsIssueCommandPreview -EnvValues $envValues -CsrAlgorithm $csrAlgo
                 [Console]::WriteLine($line)
                 Wait-ForOperatorReturn
@@ -1106,13 +1106,16 @@ function Save-SecurePlatformConfig {
     $credMap = @{}
     foreach ($k in $secretKeys) {
         $v = if ($Values.ContainsKey($k)) { [string]$Values[$k] } else { '' }
-        $credMap[$k] = Protect-DpapiValue -Plaintext $v -Scope LocalMachine
+        if (-not [string]::IsNullOrWhiteSpace($v)) {
+            $credMap[$k] = Protect-DpapiValue -Plaintext $v -Scope LocalMachine
+        }
     }
     [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'credentials.sec'), ($credMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
     $envMap = @{}
     foreach ($k in $Values.Keys) {
-        if ($k -notin $secretKeys -and $k -notin $allowedPlainKeys) {
-            $envMap[$k] = Protect-DpapiValue -Plaintext ([string]$Values[$k]) -Scope LocalMachine
+        $v = [string]$Values[$k]
+        if ($k -notin $secretKeys -and $k -notin $allowedPlainKeys -and -not [string]::IsNullOrWhiteSpace($v)) {
+            $envMap[$k] = Protect-DpapiValue -Plaintext $v -Scope LocalMachine
         }
     }
     [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'env.secure'), ($envMap | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
@@ -1128,7 +1131,7 @@ function Resolve-SetupConfigDir {
     param([hashtable]$Values = @{})
 
     $configDir = ''
-    if ($null -ne $Values -and $Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { $configDir = [string]$Values.CERTIFICATE_CONFIG_DIR }
+    if ($null -ne $Values -and $Values.ContainsKey('CERTIFICATE_CONFIG_DIR')) { $configDir = [string]$Values['CERTIFICATE_CONFIG_DIR'] }
     if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR') }
     if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'config' }
     return [System.IO.Path]::GetFullPath($configDir)
@@ -1453,6 +1456,145 @@ function Assert-ProviderDirectoryConsistency {
     }
 }
 
+function Select-FirstRunDeviceFamily {
+    param([Parameter(Mandatory)][string]$TargetSystem)
+
+    $postIssuanceFirstRunMap = @{
+        sophos = @{
+            TargetSystem = 'firewall'
+            DeviceType = 'sophos'
+            DeviceLabel = 'Sophos firewall'
+            Title = 'Sophos firewall certificate issuance'
+            Message = 'Sophos firewall deployment is configured from Deployment targets after the certificate exists.'
+            Hook = 'generic firewall hook'
+        }
+        paloalto = @{
+            TargetSystem = 'firewall'
+            DeviceType = 'paloalto'
+            DeviceLabel = 'Palo Alto firewall'
+            Title = 'Palo Alto firewall certificate issuance'
+            Message = 'Palo Alto deployment is configured after certificate issuance.'
+            Hook = 'generic firewall hook'
+        }
+        netscaler = @{
+            TargetSystem = 'waf'
+            DeviceType = 'netscaler'
+            DeviceLabel = 'NetScaler / Citrix ADC'
+            Title = 'NetScaler / Citrix ADC certificate issuance'
+            Message = 'NetScaler deployment is configured from Deployment targets after the certificate exists.'
+            Hook = 'generic load balancer/WAF hook'
+        }
+        kemp = @{
+            TargetSystem = 'waf'
+            DeviceType = 'kemp'
+            DeviceLabel = 'Kemp LoadMaster'
+            Title = 'Kemp LoadMaster certificate issuance'
+            Message = 'Kemp deployment is configured after certificate issuance.'
+            Hook = 'generic load balancer/WAF hook'
+        }
+    }
+
+    if ($postIssuanceFirstRunMap.ContainsKey($TargetSystem)) {
+        $selected = $postIssuanceFirstRunMap[$TargetSystem]
+        Start-ConsoleSection -Title ([string]$selected['Title'])
+        [Console]::WriteLine([string]$selected['Message'])
+        [Console]::WriteLine("This step can issue or verify the certificate now using the $($selected['Hook']).")
+        [Console]::WriteLine('After issuance, return to Deployment targets to configure and run the appliance-specific deployment.')
+        [Console]::WriteLine('')
+        [Console]::WriteLine('[1] Continue certificate issuance / verification now')
+        [Console]::WriteLine('[0] Back')
+        $confirm = Read-SetupChoice -Prompt 'Continue' -Options @{ '1'='yes'; '0'='back' } -DefaultKey '1' -AllowBack
+        if ($confirm -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
+        return @{
+            TargetSystem = [string]$selected['TargetSystem']
+            DeviceType = [string]$selected['DeviceType']
+            DeviceLabel = [string]$selected['DeviceLabel']
+        }
+    }
+
+    if ($TargetSystem -eq 'firewall') {
+        Start-ConsoleSection -Title 'Firewall / VPN device selection'
+        [Console]::WriteLine('Which firewall/VPN device family is this certificate for?')
+        [Console]::WriteLine('[1] Generic firewall/VPN hook during issuance')
+        [Console]::WriteLine('[2] Sophos firewall - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[3] Palo Alto firewall - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[0] Back')
+        $choice = Read-SetupChoice -Prompt 'Firewall/VPN device' -Options @{
+            '1'='generic-firewall'
+            '2'='sophos'
+            '3'='paloalto'
+            '0'='back'
+        } -DefaultKey '1' -AllowBack
+        if ($choice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
+
+        $labelMap = @{
+            'generic-firewall' = 'Generic firewall/VPN'
+            sophos = 'Sophos firewall'
+            paloalto = 'Palo Alto firewall'
+        }
+        if ($choice -ne 'generic-firewall') {
+            [Console]::WriteLine('')
+            [Console]::WriteLine("$($labelMap[$choice]) selected.")
+            [Console]::WriteLine('This step issues the certificate with the generic firewall hook.')
+            [Console]::WriteLine('After issuance, use Deployment targets to configure and run the appliance-specific deployment.')
+            $confirm = Read-SetupChoice -Prompt 'Continue with certificate issuance now? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
+            if ($confirm -in @('__CANCEL__','__BACK__','no')) { return '__BACK__' }
+        }
+
+        return @{
+            TargetSystem = 'firewall'
+            DeviceType = [string]$choice
+            DeviceLabel = [string]$labelMap[$choice]
+        }
+    }
+
+    if ($TargetSystem -eq 'waf') {
+        Start-ConsoleSection -Title 'Load balancer / WAF selection'
+        [Console]::WriteLine('Which load balancer/WAF family is this certificate for?')
+        [Console]::WriteLine('[1] Generic load balancer/WAF hook during issuance')
+        [Console]::WriteLine('[2] NetScaler / Citrix ADC - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[3] Kemp LoadMaster - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[4] F5 BIG-IP - issue now, configure as a deployment device after issuance')
+        [Console]::WriteLine('[0] Back')
+        $choice = Read-SetupChoice -Prompt 'Load balancer/WAF family' -Options @{
+            '1'='generic-waf'
+            '2'='netscaler'
+            '3'='kemp'
+            '4'='f5_bigip'
+            '0'='back'
+        } -DefaultKey '1' -AllowBack
+        if ($choice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
+
+        $labelMap = @{
+            'generic-waf' = 'Generic load balancer/WAF'
+            netscaler = 'NetScaler / Citrix ADC'
+            kemp = 'Kemp LoadMaster'
+            f5_bigip = 'F5 BIG-IP'
+        }
+        if ($choice -ne 'generic-waf') {
+            [Console]::WriteLine('')
+            [Console]::WriteLine("$($labelMap[$choice]) selected.")
+            [Console]::WriteLine('This step issues the certificate with the generic load balancer/WAF hook.')
+            [Console]::WriteLine('After issuance, use Deployment targets or deployment policies for appliance-specific deployment.')
+            $confirm = Read-SetupChoice -Prompt 'Continue with certificate issuance now? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
+            if ($confirm -in @('__CANCEL__','__BACK__','no')) { return '__BACK__' }
+        }
+
+        return @{
+            TargetSystem = 'waf'
+            DeviceType = [string]$choice
+            DeviceLabel = [string]$labelMap[$choice]
+        }
+    }
+
+    $connector = Get-AcmeConnectorRegistryEntry -ConnectorId $TargetSystem
+    return @{
+        TargetSystem = [string]$TargetSystem
+        DeviceType = [string]$TargetSystem
+        DeviceLabel = [string]$connector.Label
+    }
+}
+
 function Invoke-AcmeForm {
     param([string]$EnvFilePath)
 
@@ -1484,6 +1626,13 @@ function Invoke-AcmeForm {
         [Console]::WriteLine('Setup cancelled.')
         return $null
     }
+    $targetSelection = Select-FirstRunDeviceFamily -TargetSystem $target
+    if ($targetSelection -in @('__CANCEL__','__BACK__') -or $null -eq $targetSelection) {
+        [Console]::WriteLine('')
+        [Console]::WriteLine('Setup cancelled.')
+        return $null
+    }
+    $target = [string]$targetSelection['TargetSystem']
     $selectedConnector = Get-AcmeConnectorRegistryEntry -ConnectorId $target
     if (-not $selectedConnector.FirstRunAcmeSupported) {
         [Console]::WriteLine('')
@@ -1525,6 +1674,8 @@ function Invoke-AcmeForm {
     $values = @{}
     foreach ($k in $curr.Keys) { $values[$k] = [string]$curr[$k] }
     $values.CERTIFICATE_CONFIG_DIR = Resolve-SetupConfigDir -Values $values
+    $values.ACME_TARGET_DEVICE_TYPE = [string]$targetSelection['DeviceType']
+    $values.ACME_TARGET_DEVICE_LABEL = [string]$targetSelection['DeviceLabel']
     $domains = Read-DomainsInput
     if ($domains -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
@@ -2365,6 +2516,7 @@ $FunctionsToExport.Add('Get-Policies')
 $FunctionsToExport.Add('Save-Policies')
 $FunctionsToExport.Add('Read-Policies')
 $FunctionsToExport.Add('Show-PoliciesView')
+$FunctionsToExport.Add('Format-PolicySummaryLines')
 $FunctionsToExport.Add('Test-FanoutPolicyValue')
 $FunctionsToExport.Add('Test-QuorumThreshold')
 $FunctionsToExport.Add('Resolve-DeploymentScriptPath')

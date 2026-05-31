@@ -9,8 +9,7 @@ function Invoke-TestRdsFarmPfxFlow {
  }
  & $Assert 'deploy-rds-sessionhost exits non-zero when PFX path missing' {
   $script = Join-Path $PSScriptRoot '..\Scripts\deploy-rds-sessionhost.ps1'
-  $pwd = ConvertTo-SecureString 'x' -AsPlainText -Force
-  $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'ABCDEF','C:\notfound.pfx') -Wait -PassThru
+  $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'ABCDEF','C:\notfound.pfx','dummy-password') -Wait -PassThru
   if ($p.ExitCode -eq 0) { throw 'Expected non-zero exit code.' }
  }
 }

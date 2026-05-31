@@ -11,8 +11,8 @@ function Invoke-TestSetupDebugLogging {
     }
 
     & $Assert 'debug resolution prefers CERTIFICATE_LOG_DIR with script-root fallback' {
-        if ($content -notmatch "\$env:CERTIFICATE_LOG_DIR") { throw 'Expected CERTIFICATE_LOG_DIR usage.' }
-        if ($content -notmatch "Join-Path \$PSScriptRoot 'logs'") { throw 'Expected script-root logs fallback.' }
+        if ($content -notmatch '\$env:CERTIFICATE_LOG_DIR') { throw 'Expected CERTIFICATE_LOG_DIR usage.' }
+        if ($content -notmatch 'Join-Path \$PSScriptRoot ''logs''') { throw 'Expected script-root logs fallback.' }
     }
 
     & $Assert 'creates certificate-setup-debug timestamp file naming pattern' {

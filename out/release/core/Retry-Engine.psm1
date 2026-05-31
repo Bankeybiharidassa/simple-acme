@@ -31,7 +31,11 @@ function Invoke-WithRetry {
             return & $ScriptBlock
         } catch {
             $lastError = $_
-            Write-CertificateLog -Level 'WARN' -Message "Retryable failure for '$Label' on attempt $attempt/${MaxAttempts}: $($_.Exception.Message)"
+            try {
+                Write-CertificateLog -Level 'WARN' -Message "Retryable failure for '$Label' on attempt $attempt/${MaxAttempts}: $($_.Exception.Message)"
+            } catch {
+                Write-Warning "Retryable failure for '$Label' on attempt $attempt/${MaxAttempts}: $($lastError.Exception.Message)"
+            }
             if ($attempt -lt $MaxAttempts) {
                 $base = $BackoffMs * [math]::Pow(2, $attempt - 1)
                 $min = [int]($base * 0.8)

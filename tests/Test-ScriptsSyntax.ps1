@@ -10,7 +10,10 @@ function Invoke-TestScriptsSyntax {
     }
 
     & $Assert 'cert2rds checks My and WebHosting stores' {
-        $txt = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Scripts\cert2rds.ps1') -Raw
+        $txt = @(
+            Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Scripts\cert2rds.ps1') -Raw
+            Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Scripts\core\connector-core.psm1') -Raw
+        ) -join "`n"
         if ($txt -notmatch 'Cert:\\LocalMachine\\My') { throw 'Missing My store check.' }
         if ($txt -notmatch 'Cert:\\LocalMachine\\WebHosting') { throw 'Missing WebHosting store check.' }
     }

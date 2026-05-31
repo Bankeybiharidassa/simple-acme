@@ -3,7 +3,15 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $root = Split-Path $PSScriptRoot -Parent
-$files = @(Get-ChildItem -Path $root -Include *.ps1,*.psm1 -Recurse)
+$excludedRootDirs = @('.git','.claude','logs','outputs','runtime','test','working')
+$files = @(
+    Get-ChildItem -Path $root -Include *.ps1,*.psm1 -Recurse |
+        Where-Object {
+            $relative = $_.FullName.Substring($root.Length).TrimStart([char[]]@('/','\')) -replace '\\','/'
+            $firstSegment = ($relative -split '/')[0]
+            $excludedRootDirs -notcontains $firstSegment
+        }
+)
 
 foreach ($file in $files) {
     $text = [System.IO.File]::ReadAllText($file.FullName)

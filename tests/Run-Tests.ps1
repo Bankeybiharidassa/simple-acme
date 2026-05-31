@@ -55,6 +55,14 @@ $testFiles = @(
         Get-ChildItem -Path $testRoot -File | Where-Object { $_.Name -like '*.Tests.ps1' -or $_.Name -like 'Test-*.ps1' }
     }
 ) | Sort-Object FullName -Unique
+$pesterModule = Get-Module -ListAvailable -Name Pester | Sort-Object Version -Descending | Select-Object -First 1
+$supportsPesterSyntax = $false
+if ($pesterModule -and $pesterModule.Version.Major -ge 5) {
+    Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+    $supportsPesterSyntax = $true
+} elseif ($pesterModule) {
+    Write-Host "[SKIP] Pester syntax tests :: Pester $($pesterModule.Version) is installed, but these tests require Pester 5 or newer."
+}
 $pass = 0
 $fail = 0
 $skip = 0
@@ -75,10 +83,9 @@ foreach ($file in $testFiles) {
     try {
         $raw = Get-Content -LiteralPath $file.FullName -Raw
         $looksLikePester = $raw -match '(?m)^\s*(Describe|Context|It)\b'
-        $hasDescribe = $null -ne (Get-Command -Name 'Describe' -CommandType Function -ErrorAction SilentlyContinue)
-        if ($looksLikePester -and -not $hasDescribe) {
+        if ($looksLikePester -and -not $supportsPesterSyntax) {
             $skip++
-            Write-Host "[SKIP] $($file.Name) :: Pester syntax detected but Pester is unavailable in this environment."
+            Write-Host "[SKIP] $($file.Name) :: Pester syntax detected but compatible Pester 5+ is unavailable in this environment."
             continue
         }
 
