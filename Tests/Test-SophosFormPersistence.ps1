@@ -10,6 +10,7 @@ function Invoke-TestSophosFormPersistence {
             'function Resolve-SophosTuiConfigDir',
             'function Get-SophosDeploymentCurrentValues',
             'function Save-SophosDeploymentCurrentValues',
+            'function Add-SophosFieldDefaults',
             'Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues',
             'Save-SophosDeploymentCurrentValues -ConfigDir $configDir -Values $values'
         )) {
@@ -39,8 +40,8 @@ function Invoke-TestSophosFormPersistence {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         $schema = Get-Content -LiteralPath $schemaPath -Raw
         foreach ($text in @(
-            "Name='password'; Label='API password'; Type='secret'",
-            "Name='password_secure_file'; Label='API password secure file'",
+            "Name='password'; Label='Admin password'; Type='secret'",
+            "Name='password_secure_file'; Label='Admin password file'",
             "Name='pfx_password'; Label='PFX password'; Type='secret'"
         )) {
             if ($schema -notmatch [regex]::Escape($text)) {
@@ -93,6 +94,27 @@ function Invoke-TestSophosFormPersistence {
         }
         if ($raw -notmatch 'Remove-SophosPlaceholderValues -Values \$values') {
             throw 'Submitted Sophos values are not cleaned before validation/persistence.'
+        }
+        if ($raw -notmatch 'if \(\$field\.ContainsKey\(''Default''\)\) \{ continue \}') {
+            throw 'Sophos placeholder cleanup still strips explicit defaults.'
+        }
+        if ($raw -notmatch 'if \(\$field\.ContainsKey\(''Required''\) -and \[bool\]\$field\[''Required''\]\) \{ continue \}') {
+            throw 'Sophos placeholder cleanup still strips required field values.'
+        }
+    }
+
+    & $Assert 'Sophos schema separates accepted defaults from examples' {
+        $schemaPath = Join-Path $PSScriptRoot '..\setup\Device-Schemas.ps1'
+        $schema = Get-Content -LiteralPath $schemaPath -Raw
+        foreach ($text in @(
+            "Name='port'; Label='Admin/API port'; Type='string'; Required=`$true; Default='4444'",
+            "Name='username'; Label='Admin username'; Type='string'; Required=`$true; Default='admin'",
+            "Name='bind_admin_portal'; Label='Use for admin portal'; Type='choice'; Required=`$true; Choices=@('true','false'); Default='true'",
+            "Name='skip_certificate_check'; Label='Ignore Sophos TLS warning'; Type='choice'; Required=`$true; Choices=@('false','true'); Default='false'"
+        )) {
+            if ($schema -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos default/schema wording: $text"
+            }
         }
     }
 }

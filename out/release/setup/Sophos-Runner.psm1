@@ -139,6 +139,26 @@ function Get-SophosDeploymentCurrentValues {
     return $current
 }
 
+function Add-SophosFieldDefaults {
+    param(
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][object[]]$Fields
+    )
+
+    $withDefaults = @{}
+    foreach ($key in $Values.Keys) { $withDefaults[[string]$key] = [string]$Values[$key] }
+    foreach ($field in @($Fields)) {
+        if (-not ($field -is [System.Collections.IDictionary])) { continue }
+        if (-not $field.ContainsKey('Name') -or -not $field.ContainsKey('Default')) { continue }
+        $name = [string]$field['Name']
+        $defaultValue = [string]$field['Default']
+        if (-not $withDefaults.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$withDefaults[$name])) {
+            $withDefaults[$name] = $defaultValue
+        }
+    }
+    return $withDefaults
+}
+
 function Save-SophosDeploymentCurrentValues {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
@@ -184,6 +204,8 @@ function Remove-SophosPlaceholderValues {
     foreach ($field in @($Fields)) {
         if (-not ($field -is [System.Collections.IDictionary])) { continue }
         if (-not $field.ContainsKey('Name') -or -not $field.ContainsKey('Placeholder')) { continue }
+        if ($field.ContainsKey('Default')) { continue }
+        if ($field.ContainsKey('Required') -and [bool]$field['Required']) { continue }
         $name = [string]$field['Name']
         if (-not $clean.ContainsKey($name)) { continue }
         $placeholder = [string]$field['Placeholder']
@@ -346,9 +368,11 @@ function Invoke-SophosDeploymentForm {
     $schema = $DeviceSchemas['sophos']
     $configDir = Resolve-SophosTuiConfigDir -ProjectRoot $ProjectRoot
     $currentValues = Remove-SophosPlaceholderValues -Values (Get-SophosDeploymentCurrentValues -ConfigDir $configDir) -Fields @($schema.Fields)
+    $currentValues = Add-SophosFieldDefaults -Values $currentValues -Fields @($schema.Fields)
     $values = Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues -Title 'Sophos Firewall deployment'
     if ($null -eq $values) { return [pscustomobject]@{ Status = 'Canceled'; LogPath = $null } }
     $values = Remove-SophosPlaceholderValues -Values $values -Fields @($schema.Fields)
+    $values = Add-SophosFieldDefaults -Values $values -Fields @($schema.Fields)
     Save-SophosDeploymentCurrentValues -ConfigDir $configDir -Values $values
 
     $scriptPath = Join-Path $ProjectRoot 'Scripts/deploy-sophos.ps1'
