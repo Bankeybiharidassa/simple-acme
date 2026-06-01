@@ -165,6 +165,8 @@ if ($null -eq $deviceProfileRunnerModule) {
     throw "Unable to import required device profile setup module from path: $deviceProfileRunnerModulePath"
 }
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-GuidedDeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Get-DeviceProfileCurrentValues' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Save-DeviceProfile' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 
@@ -620,6 +622,7 @@ while ($menuStack.Count -gt 0) {
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'device-profile'        { Write-SetupDebugLog -Message "Executing action: device-profile"; Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot | Out-Null }
         'sophos-profile'        { Write-SetupDebugLog -Message "Executing action: sophos-profile"; Invoke-SophosProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
         'sophos-deploy'         { Write-SetupDebugLog -Message "Executing action: sophos-deploy"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'sophos-whatif'         { Write-SetupDebugLog -Message "Executing action: sophos-whatif"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }

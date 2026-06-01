@@ -2,6 +2,59 @@
 param()
 Set-StrictMode -Version Latest
 
+$ServerConnectionMethods = @(
+    @{ Key='ssh_key'; Label='SSH with private key'; DefaultPort='22' },
+    @{ Key='ssh_password'; Label='SSH with username and password'; DefaultPort='22' },
+    @{ Key='local'; Label='Local files/commands on this machine' }
+)
+
+$ApiOrSshConnectionMethods = @(
+    @{ Key='api_token'; Label='HTTPS/API with token or key'; DefaultPort='443' },
+    @{ Key='api_basic'; Label='HTTPS/API with username and password'; DefaultPort='443' },
+    @{ Key='ssh_key'; Label='SSH with private key'; DefaultPort='22' },
+    @{ Key='ssh_password'; Label='SSH with username and password'; DefaultPort='22' }
+)
+
+$SshConnectionMethods = @(
+    @{ Key='ssh_key'; Label='SSH with private key'; DefaultPort='22' },
+    @{ Key='ssh_password'; Label='SSH with username and password'; DefaultPort='22' }
+)
+
+$ServerProfileFields = @(
+    @{ Name='host'; Label='Server address'; Type='string'; Required=$true; Placeholder='server.example.com'; HelpText='DNS name or IP address for remote SSH management.'; Methods=@('ssh_key','ssh_password') },
+    @{ Name='port'; Label='SSH port'; Type='string'; Required=$true; Default='22'; Placeholder='22'; HelpText='SSH management port.'; Methods=@('ssh_key','ssh_password') },
+    @{ Name='username'; Label='SSH username'; Type='string'; Required=$true; Placeholder='root'; HelpText='User allowed to update certificate files and reload the service.'; Methods=@('ssh_key','ssh_password') },
+    @{ Name='password'; Label='SSH password'; Type='secret'; Required=$false; Placeholder=''; HelpText='SSH password. Leave empty when using a key.'; Methods=@('ssh_password') },
+    @{ Name='private_key_path'; Label='SSH private key file'; Type='string'; Required=$false; Placeholder='C:\keys\server.ppk'; HelpText='Private key file used by the SSH deployment hook.'; Methods=@('ssh_key') },
+    @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Recommended host key pinning value.'; Methods=@('ssh_key','ssh_password') },
+    @{ Name='cert_directory'; Label='Certificate directory'; Type='string'; Required=$false; Placeholder='/etc/ssl/simple-acme'; HelpText='Remote or local directory where certificate files should be placed.' },
+    @{ Name='reload_command'; Label='Reload/test command'; Type='string'; Required=$false; Placeholder='systemctl reload nginx'; HelpText='Command the future deployment hook should run after writing files.' },
+    @{ Name='webroot_path'; Label='Webroot path'; Type='string'; Required=$false; Placeholder='/var/www/html'; HelpText='Optional webroot for HTTP validation or local web-server workflows.' }
+)
+
+$ApiProfileFields = @(
+    @{ Name='host'; Label='Device address'; Type='string'; Required=$true; Placeholder='device.example.com'; HelpText='Management DNS name or IP address.' },
+    @{ Name='port'; Label='Management port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS API or SSH management port.' },
+    @{ Name='username'; Label='Username'; Type='string'; Required=$false; Placeholder='admin'; HelpText='API or SSH username.'; Methods=@('api_basic','ssh_key','ssh_password') },
+    @{ Name='password'; Label='Password'; Type='secret'; Required=$false; Placeholder=''; HelpText='API or SSH password.'; Methods=@('api_basic','ssh_password') },
+    @{ Name='api_token'; Label='API token/key'; Type='secret'; Required=$false; Placeholder=''; HelpText='Token, API key, or bearer credential for API-based devices.'; Methods=@('api_token') },
+    @{ Name='private_key_path'; Label='SSH private key file'; Type='string'; Required=$false; Placeholder='C:\keys\device.ppk'; HelpText='Private key file used by SSH-based deployment.'; Methods=@('ssh_key') },
+    @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Recommended host key pinning value.'; Methods=@('ssh_key','ssh_password') },
+    @{ Name='skip_certificate_check'; Label='Ignore management TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true only for trusted management networks with self-signed/untrusted admin certificates.'; Methods=@('api_token','api_basic') },
+    @{ Name='target_hint'; Label='Certificate target hint'; Type='string'; Required=$false; Placeholder='portal,virtual-server,rule,listener'; HelpText='Human-readable target note until the connector can pull exact bindings.' }
+)
+
+$CiscoProfileFields = @(
+    @{ Name='host'; Label='Device address'; Type='string'; Required=$true; Placeholder='router.example.com'; HelpText='Cisco management DNS name or IP address.' },
+    @{ Name='port'; Label='SSH/API port'; Type='string'; Required=$true; Default='22'; Placeholder='22'; HelpText='SSH or HTTPS API management port.' },
+    @{ Name='username'; Label='Username'; Type='string'; Required=$true; Placeholder='admin'; HelpText='Cisco administrator username.' },
+    @{ Name='password'; Label='Password'; Type='secret'; Required=$false; Placeholder=''; HelpText='SSH/API password.'; Methods=@('ssh_password','api_basic') },
+    @{ Name='private_key_path'; Label='SSH private key file'; Type='string'; Required=$false; Placeholder='C:\keys\cisco.ppk'; HelpText='Private key file used by SSH-based deployment.'; Methods=@('ssh_key') },
+    @{ Name='enable_secret'; Label='Enable secret'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional enable/privileged mode secret.' },
+    @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Recommended host key pinning value.' },
+    @{ Name='target_hint'; Label='Certificate target hint'; Type='string'; Required=$false; Placeholder='trustpoint/webvpn/ssl profile'; HelpText='Where this certificate should be installed on the Cisco device.' }
+)
+
 $DeviceSchemas = @{
     iis = @{ ConnectorType='iis'; Label='IIS'; Category='local_windows'; Fields=@(
         @{ Name='site_name'; Label='Site name'; Type='string'; Required=$true; Placeholder='Default Web Site'; HelpText='IIS website name' },
@@ -16,6 +69,34 @@ $DeviceSchemas = @{
     mail = @{ ConnectorType='mail'; Label='Mail server'; Category='server'; Fields=@() }
     firewall = @{ ConnectorType='firewall'; Label='Firewall / VPN'; Category='network_appliance'; Fields=@() }
     waf = @{ ConnectorType='waf'; Label='Load balancer / WAF'; Category='network_appliance'; Fields=@() }
+
+    nginx = @{ ConnectorType='nginx'; Label='Nginx / OpenResty'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+    apache = @{ ConnectorType='apache'; Label='Apache HTTPD'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+    haproxy = @{ ConnectorType='haproxy'; Label='HAProxy'; Category='load_balancer'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+    traefik = @{ ConnectorType='traefik'; Label='Traefik'; Category='load_balancer'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+    caddy = @{ ConnectorType='caddy'; Label='Caddy'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+    lighttpd = @{ ConnectorType='lighttpd'; Label='Lighttpd'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
+
+    opnsense = @{ ConnectorType='opnsense'; Label='OPNsense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    pfsense = @{ ConnectorType='pfsense'; Label='pfSense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    fortigate = @{ ConnectorType='fortigate'; Label='Fortinet FortiGate'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    sonicwall = @{ ConnectorType='sonicwall'; Label='SonicWall firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    watchguard = @{ ConnectorType='watchguard'; Label='WatchGuard Firebox'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    checkpoint = @{ ConnectorType='checkpoint'; Label='Check Point gateway'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    juniper_srx = @{ ConnectorType='juniper_srx'; Label='Juniper SRX'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$ApiProfileFields }
+    mikrotik = @{ ConnectorType='mikrotik'; Label='MikroTik RouterOS'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    ubiquiti = @{ ConnectorType='ubiquiti'; Label='Ubiquiti EdgeMAX / UniFi Gateway'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+
+    cisco_asa = @{ ConnectorType='cisco_asa'; Label='Cisco ASA / Firepower'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$CiscoProfileFields }
+    cisco_iosxe = @{ ConnectorType='cisco_iosxe'; Label='Cisco IOS XE'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$CiscoProfileFields }
+    cisco_wlc = @{ ConnectorType='cisco_wlc'; Label='Cisco Wireless Controller'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$CiscoProfileFields }
+    aruba = @{ ConnectorType='aruba'; Label='Aruba / HPE Aruba'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+
+    proxmox = @{ ConnectorType='proxmox'; Label='Proxmox VE'; Category='server'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    synology_dsm = @{ ConnectorType='synology_dsm'; Label='Synology DSM'; Category='server_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    qnap = @{ ConnectorType='qnap'; Label='QNAP NAS'; Category='server_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    generic_ssh = @{ ConnectorType='generic_ssh'; Label='Generic SSH device'; Category='generic'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$ServerProfileFields }
+    generic_api = @{ ConnectorType='generic_api'; Label='Generic HTTPS/API device'; Category='generic'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_token'; Label='HTTPS/API with token or key'; DefaultPort='443' },@{ Key='api_basic'; Label='HTTPS/API with username and password'; DefaultPort='443' }); Fields=$ApiProfileFields }
 
     adfs = @{ ConnectorType='adfs'; Label='ADFS'; Category='local_windows'; Fields=@() }
     rdp_listener = @{ ConnectorType='rdp_listener'; Label='RDP Listener'; Category='local_windows'; Fields=@() }
@@ -80,7 +161,7 @@ $DeviceSchemas = @{
     paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
         @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
     )}
-    sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; Fields=@(
+    sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_basic'; Label='Sophos WebAdmin API username and password'; DefaultPort='4444' }); Fields=@(
         @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.138'; HelpText='IP address or DNS name of the Sophos firewall admin/API page.' },
         @{ Name='port'; Label='Admin/API port'; Type='string'; Required=$true; Default='4444'; Placeholder='4444'; HelpText='Sophos admin/API HTTPS port. Default is 4444.' },
         @{ Name='username'; Label='Admin username'; Type='string'; Required=$true; Default='admin'; Placeholder='admin'; HelpText='Sophos administrator username. Default is admin.' },
