@@ -28,17 +28,19 @@ function Invoke-TestSophosFormPersistence {
         }
     }
 
-    & $Assert 'Sophos profile form uses the generic device profile runner' {
+    & $Assert 'Sophos profile creation is guided connection setup, not raw deployment form' {
         $path = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
         $raw = Get-Content -LiteralPath $path -Raw
         foreach ($text in @(
             'Import-Module "$PSScriptRoot/Device-Profile-Runner.psm1"',
             'function Invoke-SophosProfileForm',
-            'Invoke-DeviceProfileForm `',
-            "-ConnectorType 'sophos'",
-            "-DefaultDeviceId 'sophos-firewall'",
+            'Sophos XGS connection profile',
+            'Certificate portals and WAF rules are selected later after the API is tested.',
+            'Read-SophosGuidedText',
+            'Read-SophosGuidedPassword',
+            'Test Sophos API communication now?',
+            'Save-DeviceProfile -ConfigDir $configDir -ConnectorType ''sophos''',
             "-SecretFields @('password')",
-            '-CommunicationTest ${function:Invoke-SophosProfileCommunicationTest}',
             'function Invoke-SophosProfileCommunicationTest',
             'Connect-SophosFirewallApi',
             '-TimeoutSeconds 120',
@@ -57,8 +59,7 @@ function Invoke-TestSophosFormPersistence {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         $schema = Get-Content -LiteralPath $schemaPath -Raw
         foreach ($text in @(
-            "Name='password'; Label='Admin password'; Type='secret'",
-            "Name='password_secure_file'; Label='Admin password file'"
+            "Name='password'; Label='Admin password'; Type='secret'"
         )) {
             if ($schema -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos password schema wiring: $text"
@@ -125,7 +126,6 @@ function Invoke-TestSophosFormPersistence {
         foreach ($text in @(
             "Name='port'; Label='Admin/API port'; Type='string'; Required=`$true; Default='4444'",
             "Name='username'; Label='Admin username'; Type='string'; Required=`$true; Default='admin'",
-            "Name='bind_admin_portal'; Label='Use for admin portal'; Type='choice'; Required=`$true; Choices=@('true','false'); Default='true'",
             "Name='skip_certificate_check'; Label='Ignore Sophos TLS warning'; Type='choice'; Required=`$true; Choices=@('false','true'); Default='false'"
         )) {
             if ($schema -notmatch [regex]::Escape($text)) {
@@ -146,7 +146,14 @@ function Invoke-TestSophosFormPersistence {
             "Name='pfx_password'",
             "Name='cert_path'",
             "Name='key_path'",
-            "Name='enable_ssh_export_recovery'"
+            "Name='enable_ssh_export_recovery'",
+            "Name='bind_admin_portal'",
+            "Name='bind_vpn_portal'",
+            "Name='bind_user_portal'",
+            "Name='bind_waf'",
+            "Name='waf_rule_names'",
+            "Name='password_secret_name'",
+            "Name='password_secure_file'"
         )) {
             if ($sophosSchema -match [regex]::Escape($text)) {
                 throw "Sophos device profile still asks for certificate/deploy-time field: $text"

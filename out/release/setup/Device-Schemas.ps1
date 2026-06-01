@@ -85,13 +85,6 @@ $DeviceSchemas = @{
         @{ Name='port'; Label='Admin/API port'; Type='string'; Required=$true; Default='4444'; Placeholder='4444'; HelpText='Sophos admin/API HTTPS port. Default is 4444.' },
         @{ Name='username'; Label='Admin username'; Type='string'; Required=$true; Default='admin'; Placeholder='admin'; HelpText='Sophos administrator username. Default is admin.' },
         @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Sophos administrator password. Use this field for the normal firewall password.' },
-        @{ Name='password_secret_name'; Label='Admin password secret'; Type='string'; Required=$false; Placeholder='SOPHOS_PASSWORD'; HelpText='Advanced: name of a saved secret/env var. Leave empty when using Admin password above.' },
-        @{ Name='password_secure_file'; Label='Admin password file'; Type='string'; Required=$false; Placeholder='C:\secrets\sophos-api-password.txt'; HelpText='Advanced: path to a DPAPI-encrypted password file. Leave empty when using Admin password above.' },
-        @{ Name='bind_admin_portal'; Label='Use for admin portal'; Type='choice'; Required=$true; Choices=@('true','false'); Default='true'; Placeholder='true'; HelpText='Set true to use the certificate for the Sophos admin portal.' },
-        @{ Name='bind_vpn_portal'; Label='Use for VPN portal'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true to use the certificate for the Sophos VPN portal.' },
-        @{ Name='bind_user_portal'; Label='Use for user portal'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true to use the certificate for the Sophos user portal.' },
-        @{ Name='bind_waf'; Label='Use for WAF rules'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true only when Sophos WAF rules must be updated.' },
-        @{ Name='waf_rule_names'; Label='WAF rule names'; Type='string'; Required=$false; Placeholder='rdgw,public-web'; HelpText='Only used when WAF is true. Comma-separated Sophos WAF rule names.' },
         @{ Name='skip_certificate_check'; Label='Ignore Sophos TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true only if the Sophos admin page uses an untrusted/self-signed certificate.' }
     )}
     custom = @{ ConnectorType='custom'; Label='Custom script'; Category='custom'; Fields=@(

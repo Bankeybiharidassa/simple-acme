@@ -701,19 +701,150 @@ function Invoke-SophosConnectorScript {
     & $ScriptPath @invokeArgs
 }
 
+function Read-SophosGuidedText {
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Default = '',
+        [switch]$Required
+    )
+
+    while ($true) {
+        $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { '' } else { " [$Default]" }
+        $value = [string](Read-Host "$Prompt$suffix")
+        if ($value -match '^[Qq]$') { return '__CANCEL__' }
+        if ([string]::IsNullOrWhiteSpace($value)) { $value = $Default }
+        $value = $value.Trim()
+        if (-not $Required -or -not [string]::IsNullOrWhiteSpace($value)) { return $value }
+        Write-Host 'This value is required.' -ForegroundColor Yellow
+    }
+}
+
+function Read-SophosGuidedYesNo {
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [bool]$Default = $false
+    )
+
+    $suffix = if ($Default) { 'Y/n' } else { 'y/N' }
+    while ($true) {
+        $answer = [string](Read-Host ("{0} ({1})" -f $Prompt, $suffix))
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+        switch ($answer.Trim().ToLowerInvariant()) {
+            { $_ -in @('y','yes','j','ja') } { return $true }
+            { $_ -in @('n','no','nee') } { return $false }
+            { $_ -eq 'q' } { return $false }
+            default { Write-Host 'Please answer y or n.' -ForegroundColor Yellow }
+        }
+    }
+}
+
+function Read-SophosGuidedPassword {
+    param(
+        [bool]$HasExistingPassword = $false
+    )
+
+    while ($true) {
+        $prompt = if ($HasExistingPassword) { 'Admin password (press Enter to keep saved password)' } else { 'Admin password' }
+        $secure = Read-Host $prompt -AsSecureString
+        $plain = (New-Object pscredential 'sophos', $secure).GetNetworkCredential().Password
+        if ($HasExistingPassword -and [string]::IsNullOrEmpty($plain)) { return $null }
+        if (-not [string]::IsNullOrEmpty($plain)) { return $plain }
+        Write-Host 'Admin password is required for the Sophos API.' -ForegroundColor Yellow
+    }
+}
+
+function Get-SophosGuidedProfileFields {
+    @(
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true },
+        @{ Name='port'; Label='Admin/API port'; Type='string'; Required=$true },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$true },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false },
+        @{ Name='skip_certificate_check'; Label='Ignore Sophos TLS warning'; Type='choice'; Required=$true }
+    )
+}
+
 function Invoke-SophosProfileForm {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
-    Invoke-DeviceProfileForm `
-        -ProjectRoot $ProjectRoot `
-        -ConnectorType 'sophos' `
-        -Title 'Sophos device profile' `
-        -DefaultDeviceId 'sophos-firewall' `
-        -CertificateRuntimeKeys @('certificate_name','pfx_path','pfx_password','pfx_password_secret_name','pfx_password_secure_file','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') `
-        -PlaintextSecretNameFields @{ password_secret_name = 'password' } `
-        -SecretFields @('password') `
-        -CommunicationTest ${function:Invoke-SophosProfileCommunicationTest}
+    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    $currentValues = Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'sophos' -PlaintextSecretNameFields @{ password_secret_name = 'password' }
+    $values = @{}
+    foreach ($key in $currentValues.Keys) { $values[[string]$key] = [string]$currentValues[$key] }
+
+    Write-Host ''
+    Write-Host 'Sophos XGS connection profile'
+    Write-Host '-----------------------------'
+    Write-Host 'This stores how simple-acme talks to the firewall. Certificate portals and WAF rules are selected later after the API is tested.'
+    Write-Host 'Type Q at a text prompt to cancel.'
+    Write-Host ''
+
+    $hostDefault = if ($values.ContainsKey('host')) { [string]$values['host'] } else { '' }
+    $hostValue = Read-SophosGuidedText -Prompt 'Firewall address or DNS name' -Default $hostDefault -Required
+    if ($hostValue -eq '__CANCEL__') { return [pscustomobject]@{ Status = 'Canceled' } }
+    $values['host'] = $hostValue
+
+    $portDefault = if ($values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$values['port'])) { [string]$values['port'] } else { '4444' }
+    while ($true) {
+        $portValue = Read-SophosGuidedText -Prompt 'Admin/API HTTPS port' -Default $portDefault -Required
+        if ($portValue -eq '__CANCEL__') { return [pscustomobject]@{ Status = 'Canceled' } }
+        $parsedPort = 0
+        if ([int]::TryParse($portValue, [ref]$parsedPort) -and $parsedPort -ge 1 -and $parsedPort -le 65535) {
+            $values['port'] = [string]$parsedPort
+            break
+        }
+        Write-Host 'Enter a TCP port between 1 and 65535. Sophos default is 4444.' -ForegroundColor Yellow
+    }
+
+    $userDefault = if ($values.ContainsKey('username') -and -not [string]::IsNullOrWhiteSpace([string]$values['username'])) { [string]$values['username'] } else { 'admin' }
+    $usernameValue = Read-SophosGuidedText -Prompt 'Admin username' -Default $userDefault -Required
+    if ($usernameValue -eq '__CANCEL__') { return [pscustomobject]@{ Status = 'Canceled' } }
+    $values['username'] = $usernameValue
+
+    $hasExistingPassword = $values.ContainsKey('password') -and -not [string]::IsNullOrWhiteSpace([string]$values['password'])
+    $passwordValue = Read-SophosGuidedPassword -HasExistingPassword:$hasExistingPassword
+    if ($null -ne $passwordValue) {
+        $values['password'] = $passwordValue
+        $values['password_secret_name'] = ''
+        $values['password_secure_file'] = ''
+    }
+
+    $skipDefault = ConvertTo-SophosTuiBoolean -Value $(if ($values.ContainsKey('skip_certificate_check')) { $values['skip_certificate_check'] } else { $false })
+    $skipValue = Read-SophosGuidedYesNo -Prompt 'Ignore Sophos TLS warning for API calls? Use yes only for self-signed/untrusted admin certificates.' -Default $skipDefault
+    $values['skip_certificate_check'] = if ($skipValue) { 'true' } else { 'false' }
+
+    Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'sophos' -Label 'Sophos firewall' -Values $values -SecretFields @('password') -DefaultDeviceId 'sophos-firewall'
+
+    Show-DeviceProfileSummary -Title 'Saved Sophos connection profile' -Values $values -Fields (Get-SophosGuidedProfileFields)
+
+    $testResult = $null
+    $testLogPath = $null
+    if (Read-SophosGuidedYesNo -Prompt 'Test Sophos API communication now?' -Default $true) {
+        Write-Host ''
+        Write-Host 'Testing Sophos API communication...'
+        try {
+            $testResult = Invoke-SophosProfileCommunicationTest -ProjectRoot $ProjectRoot -ConfigDir $configDir -ConnectorType 'sophos' -Label 'Sophos firewall' -Values $values -Schema @{ Label='Sophos firewall' }
+        } catch {
+            $testResult = [pscustomobject]@{
+                Status = 'Failed'
+                Message = $_.Exception.Message
+                ErrorType = $_.Exception.GetType().FullName
+            }
+        }
+        $testLogPath = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType 'sophos' -Data $testResult
+        Write-Host ''
+        Write-Host 'Communication test summary'
+        Write-Host '--------------------------'
+        Write-Host ("Status: {0}" -f $testResult.Status)
+        if ($testResult.PSObject.Properties.Name -contains 'Message') { Write-Host ("Message: {0}" -f $testResult.Message) }
+        if ($testResult.PSObject.Properties.Name -contains 'Endpoint') { Write-Host ("Endpoint: {0}" -f $testResult.Endpoint) }
+        Write-Host ("Log: {0}" -f $testLogPath)
+    } else {
+        Write-Host ''
+        Write-Host 'Communication test skipped by operator.'
+    }
+
+    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
 }
 
 function Invoke-SophosDeploymentForm {
@@ -833,7 +964,7 @@ function Test-SophosTuiWiring {
     $menuText = if (Test-Path -LiteralPath $menuPath) { Get-Content -LiteralPath $menuPath -Raw } else { '' }
     $setupText = if (Test-Path -LiteralPath $setupPath) { Get-Content -LiteralPath $setupPath -Raw } else { '' }
     $releaseText = if (Test-Path -LiteralPath $releasePath) { Get-Content -LiteralPath $releasePath -Raw } else { '' }
-    $requiredFields = @('host','port','username','password','password_secret_name','password_secure_file','bind_admin_portal','bind_vpn_portal','bind_user_portal','bind_waf','waf_rule_names','skip_certificate_check')
+    $requiredFields = @('host','port','username','password','skip_certificate_check')
 
     [pscustomobject]@{
         ScriptExists = Test-Path -LiteralPath $scriptPath -PathType Leaf
