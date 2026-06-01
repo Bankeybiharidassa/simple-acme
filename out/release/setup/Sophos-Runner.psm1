@@ -753,6 +753,14 @@ function Read-SophosGuidedPassword {
     }
 }
 
+function Wait-SophosGuidedOperator {
+    param([string]$Message = 'Press any key to continue.')
+
+    Write-Host ''
+    Write-Host $Message
+    [Console]::ReadKey($true) | Out-Null
+}
+
 function Get-SophosGuidedProfileFields {
     @(
         @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true },
@@ -835,13 +843,21 @@ function Invoke-SophosProfileForm {
         Write-Host ''
         Write-Host 'Communication test summary'
         Write-Host '--------------------------'
-        Write-Host ("Status: {0}" -f $testResult.Status)
+        $statusText = [string]$testResult.Status
+        if ($statusText -eq 'Succeeded') {
+            Write-Host ("Status: {0}" -f $statusText) -ForegroundColor Green
+        } else {
+            Write-Host ("Status: {0}" -f $statusText) -ForegroundColor Red
+        }
         if ($testResult.PSObject.Properties.Name -contains 'Message') { Write-Host ("Message: {0}" -f $testResult.Message) }
+        if ($testResult.PSObject.Properties.Name -contains 'Warning' -and -not [string]::IsNullOrWhiteSpace([string]$testResult.Warning)) { Write-Host ("Warning: {0}" -f $testResult.Warning) -ForegroundColor Yellow }
         if ($testResult.PSObject.Properties.Name -contains 'Endpoint') { Write-Host ("Endpoint: {0}" -f $testResult.Endpoint) }
         Write-Host ("Log: {0}" -f $testLogPath)
+        Wait-SophosGuidedOperator -Message 'Press any key to continue.'
     } else {
         Write-Host ''
         Write-Host 'Communication test skipped by operator.'
+        Wait-SophosGuidedOperator -Message 'Press any key to continue.'
     }
 
     return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
