@@ -195,10 +195,29 @@ function Invoke-TestSophosFormPersistence {
             'Save-SophosDeploymentSelection',
             'ACME_SCRIPT_PARAMETERS',
             "-PfxPath '{CacheFile}' -ConfigDir",
+            'Enter comma-separated numbers only. Example: 1,2,3 or 1,4',
+            'Invalid target selection: {0}. Use numbers only, separated by commas.',
+            'ConvertTo-SophosTargetDefaultToken -Values $Values -Discovery $discovery',
             'The WACS scheduled renewal hook will reuse'
         )) {
             if ($runner -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos renewal-hook target selection wiring: $text"
+            }
+        }
+    }
+
+    & $Assert 'Sophos target selection no longer accepts names or shortcuts' {
+        $runnerPath = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'waf:',
+            'Shortcuts: A',
+            'numbers or names',
+            'all-portals',
+            'Unknown Sophos target selection'
+        )) {
+            if ($runner -match [regex]::Escape($text)) {
+                throw "Sophos target selector still exposes non-numeric input: $text"
             }
         }
     }

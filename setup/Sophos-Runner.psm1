@@ -235,16 +235,25 @@ function Format-SophosTargetValue {
 }
 
 function ConvertTo-SophosTargetDefaultToken {
-    param([Parameter(Mandatory)][hashtable]$Values)
+    param(
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][object]$Discovery
+    )
 
     $tokens = New-Object System.Collections.Generic.List[string]
     if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_admin_portal')) { $Values['bind_admin_portal'] } else { $false })) { $tokens.Add('1') | Out-Null }
     if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_vpn_portal')) { $Values['bind_vpn_portal'] } else { $false })) { $tokens.Add('2') | Out-Null }
     if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_user_portal')) { $Values['bind_user_portal'] } else { $false })) { $tokens.Add('3') | Out-Null }
     if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_waf')) { $Values['bind_waf'] } else { $false })) {
+        $rules = @($Discovery.WafRules)
         $wafNames = if ($Values.ContainsKey('waf_rule_names')) { [string]$Values['waf_rule_names'] } else { '' }
         foreach ($name in @($wafNames -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            $tokens.Add("waf:$name") | Out-Null
+            for ($i = 0; $i -lt $rules.Count; $i++) {
+                if ([string]$rules[$i].Name -eq $name) {
+                    $tokens.Add([string]($i + 4)) | Out-Null
+                    break
+                }
+            }
         }
     }
     ($tokens.ToArray() -join ',')
@@ -278,32 +287,17 @@ function Read-SophosTargetSelectionInput {
         $invalid = New-Object System.Collections.Generic.List[string]
 
         foreach ($part in @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            $lower = $part.ToLowerInvariant()
-            switch -Regex ($lower) {
-                '^(a|all-portals|portals)$' { $bindAdmin = $true; $bindVpn = $true; $bindUser = $true; continue }
-                '^(admin|admin-portal|1)$' { $bindAdmin = $true; continue }
-                '^(vpn|vpn-portal|2)$' { $bindVpn = $true; continue }
-                '^(user|user-portal|3)$' { $bindUser = $true; continue }
-                '^(w|waf)$' {
-                    foreach ($rule in @($rules | Where-Object { [string]$_.Status -match '(?i)^(enable|enabled)$' })) {
-                        if (-not [string]::IsNullOrWhiteSpace([string]$rule.Name) -and -not $selectedRules.Contains([string]$rule.Name)) {
-                            $selectedRules.Add([string]$rule.Name) | Out-Null
-                        }
-                    }
-                    continue
-                }
-                '^waf:(.+)$' {
-                    $ruleName = $Matches[1]
-                    $match = @($rules | Where-Object { [string]$_.Name -eq $ruleName } | Select-Object -First 1)
-                    if ($match.Count -gt 0 -and $null -ne $match[0]) {
-                        if (-not $selectedRules.Contains([string]$match[0].Name)) { $selectedRules.Add([string]$match[0].Name) | Out-Null }
-                    } else {
-                        $invalid.Add($part) | Out-Null
-                    }
-                    continue
-                }
-                '^\d+$' {
-                    $index = [int]$part
+            if ($part -notmatch '^\d+$') {
+                $invalid.Add($part) | Out-Null
+                continue
+            }
+
+            $index = [int]$part
+            switch ($index) {
+                1 { $bindAdmin = $true; continue }
+                2 { $bindVpn = $true; continue }
+                3 { $bindUser = $true; continue }
+                default {
                     if ($index -ge 4 -and $index -lt (4 + $rules.Count)) {
                         $rule = $rules[$index - 4]
                         if (-not [string]::IsNullOrWhiteSpace([string]$rule.Name) -and -not $selectedRules.Contains([string]$rule.Name)) {
@@ -312,21 +306,12 @@ function Read-SophosTargetSelectionInput {
                     } else {
                         $invalid.Add($part) | Out-Null
                     }
-                    continue
-                }
-                default {
-                    $match = @($rules | Where-Object { [string]$_.Name -eq $part } | Select-Object -First 1)
-                    if ($match.Count -gt 0 -and $null -ne $match[0]) {
-                        if (-not $selectedRules.Contains([string]$match[0].Name)) { $selectedRules.Add([string]$match[0].Name) | Out-Null }
-                    } else {
-                        $invalid.Add($part) | Out-Null
-                    }
                 }
             }
         }
 
         if ($invalid.Count -gt 0) {
-            Write-Host ("Unknown Sophos target selection: {0}" -f ($invalid.ToArray() -join ', ')) -ForegroundColor Yellow
+            Write-Host ("Invalid target selection: {0}. Use numbers only, separated by commas." -f ($invalid.ToArray() -join ', ')) -ForegroundColor Yellow
             continue
         }
         if (-not ($bindAdmin -or $bindVpn -or $bindUser -or $selectedRules.Count -gt 0)) {
@@ -385,9 +370,8 @@ function Invoke-SophosCertificateTargetSelection {
     }
 
     Write-Host ''
-    Write-Host 'Enter comma-separated numbers or names. Examples: 1,2,3 or 1,rdgw'
-    Write-Host 'Shortcuts: A = all portals, W = all enabled WAF rules.'
-    $defaultSelection = ConvertTo-SophosTargetDefaultToken -Values $Values
+    Write-Host 'Enter comma-separated numbers only. Example: 1,2,3 or 1,4'
+    $defaultSelection = ConvertTo-SophosTargetDefaultToken -Values $Values -Discovery $discovery
     $selection = Read-SophosTargetSelectionInput -Discovery $discovery -DefaultSelection $defaultSelection
 
     $Values['bind_admin_portal'] = if ($selection.BindAdminPortal) { 'true' } else { 'false' }
