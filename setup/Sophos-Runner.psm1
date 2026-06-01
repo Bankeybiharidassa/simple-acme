@@ -136,16 +136,40 @@ function Invoke-SophosProfileCommunicationTest {
     $password = Resolve-SophosProfilePassword -Values $Values
 
     $started = Get-Date
-    $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 30
+    $usedSkipCertificateCheck = $skipCertificateCheck
+    $warning = ''
+    try {
+        $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 120
+    } catch {
+        $message = [string]$_.Exception.Message
+        if (-not $skipCertificateCheck -and $message -match '(?i)trust relationship|certificate|ssl/tls') {
+            $warning = 'TLS certificate validation failed; retried with Ignore Sophos TLS warning enabled for this test.'
+            $usedSkipCertificateCheck = $true
+            try {
+                $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck -TimeoutSeconds 120
+            } catch {
+                $retryMessage = [string]$_.Exception.Message
+                if ($retryMessage -match '(?i)timed out|timeout|unexpected error occurred on a receive') {
+                    throw "Sophos XML API did not answer the authenticated request at $endpoint. The admin page is reachable, but Sophos API access is commonly disabled by default or restricted to allowed source IP addresses. In Sophos, enable Backup and firmware > API > API configuration and add this operator machine's source IP address."
+                }
+                throw
+            }
+        } elseif ($message -match '(?i)timed out|timeout|unexpected error occurred on a receive') {
+            throw "Sophos XML API did not answer the authenticated request at $endpoint. The admin page is reachable, but Sophos API access is commonly disabled by default or restricted to allowed source IP addresses. In Sophos, enable Backup and firmware > API > API configuration and add this operator machine's source IP address."
+        } else {
+            throw
+        }
+    }
     $elapsed = [int]((Get-Date) - $started).TotalMilliseconds
     [pscustomobject]@{
         Status = 'Succeeded'
         Message = 'Sophos XML API login and AdminSettings read succeeded.'
+        Warning = $warning
         Endpoint = $endpoint
         Firewall = $firewall
         Port = $port
         Username = $username
-        SkipCertificateCheck = $skipCertificateCheck
+        SkipCertificateCheck = $usedSkipCertificateCheck
         ElapsedMilliseconds = $elapsed
         SessionEndpoint = $session.Endpoint
     }

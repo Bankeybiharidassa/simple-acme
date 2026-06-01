@@ -41,6 +41,8 @@ function Invoke-TestSophosFormPersistence {
             '-CommunicationTest ${function:Invoke-SophosProfileCommunicationTest}',
             'function Invoke-SophosProfileCommunicationTest',
             'Connect-SophosFirewallApi',
+            '-TimeoutSeconds 120',
+            'Backup and firmware > API > API configuration',
             'function Get-SophosCertificateDeploymentContext'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {
@@ -149,6 +151,24 @@ function Invoke-TestSophosFormPersistence {
             if ($sophosSchema -match [regex]::Escape($text)) {
                 throw "Sophos device profile still asks for certificate/deploy-time field: $text"
             }
+        }
+    }
+
+    & $Assert 'Sophos PowerShell 5.1 TLS skip uses a .NET certificate callback' {
+        $modulePath = Join-Path $PSScriptRoot '..\Scripts\Modules\SimpleAcme.Sophos\SophosFirewallXml.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            'SimpleAcmeSophosCertificatePolicy',
+            'RemoteCertificateValidationCallback',
+            'CreateDelegate',
+            'TrustAnyCertificate'
+        )) {
+            if ($raw -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos PowerShell 5.1 certificate callback wiring: $text"
+            }
+        }
+        if ($raw -match [regex]::Escape('ServerCertificateValidationCallback = { $true }')) {
+            throw 'Sophos TLS skip still uses a PowerShell scriptblock callback, which fails on Windows PowerShell 5.1 worker threads.'
         }
     }
 }
