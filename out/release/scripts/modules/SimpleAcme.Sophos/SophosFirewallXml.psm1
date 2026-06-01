@@ -2,6 +2,7 @@
 Set-StrictMode -Version Latest
 
 $script:SophosSession = $null
+$script:SophosCertificatePolicyTypeLoaded = $false
 
 function ConvertFrom-SophosSecureString {
     [CmdletBinding()]
@@ -118,7 +119,27 @@ function Invoke-SophosWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        if (-not $script:SophosCertificatePolicyTypeLoaded) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmeSophosCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+            $script:SophosCertificatePolicyTypeLoaded = $true
+        }
+        $method = [SimpleAcmeSophosCertificatePolicy].GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
     try {
         & $ScriptBlock
@@ -209,7 +230,7 @@ function Connect-SophosFirewallApi {
         TimeoutSeconds = $TimeoutSeconds
     }
 
-    $response = Invoke-SophosXmlRequest -InnerXml '<Get><AdminSettings></AdminSettings></Get>' -Operation 'Connect-SophosFirewallApi'
+    $response = Invoke-SophosXmlRequest -InnerXml '<Get><AdminSettings></AdminSettings></Get>' -Operation 'Connect-SophosFirewallApi' -Method POST
     Assert-SophosXmlResponse -Response $response -Operation 'Connect-SophosFirewallApi'
     $script:SophosSession
 }
@@ -224,7 +245,7 @@ function Invoke-SophosXmlRequest {
     param(
         [Parameter(Mandatory)][string]$InnerXml,
         [string]$Operation = 'Sophos API request',
-        [ValidateSet('GET','POST')][string]$Method = 'GET'
+        [ValidateSet('GET','POST')][string]$Method = 'POST'
     )
 
     $session = Get-SophosSession

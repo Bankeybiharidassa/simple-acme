@@ -1,27 +1,19 @@
 #Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
     [string]$Firewall,
 
     [ValidateRange(1, 65535)]
     [int]$Port = 4444,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
     [string]$Username,
 
-    [Parameter(ParameterSetName = 'Password', Mandatory = $true)]
     [SecureString]$Password,
 
-    [Parameter(ParameterSetName = 'SecretName', Mandatory = $true)]
     [string]$PasswordSecretName,
 
-    [Parameter(ParameterSetName = 'SecureFile', Mandatory = $true)]
     [string]$PasswordSecureFile,
 
-    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[a-zA-Z0-9 ._-]+$')]
     [string]$CertificateName,
 
@@ -69,7 +61,11 @@ param(
     [string]$ExportRecoveryPath,
 
     [ValidateRange(1, 600)]
-    [int]$TimeoutSeconds = 120
+    [int]$TimeoutSeconds = 120,
+
+    [string]$ConfigDir = '',
+
+    [string]$DeviceId = 'sophos-firewall'
 )
 
 Set-StrictMode -Version Latest
@@ -77,8 +73,93 @@ $ErrorActionPreference = 'Stop'
 
 $modulePath = Join-Path $PSScriptRoot 'Modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1'
 Import-Module $modulePath -Force
+$configStorePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'core/Config-Store.psm1'
+if (Test-Path -LiteralPath $configStorePath -PathType Leaf) {
+    Import-Module $configStorePath -Force
+}
 
 $plannedActions = @()
+
+function ConvertTo-SophosHookBoolean {
+    param([object]$Value, [bool]$Default = $false)
+    if ($null -eq $Value) { return $Default }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $Default }
+    switch ($text.ToLowerInvariant()) {
+        { $_ -in @('1','true','yes','y','on') } { return $true }
+        { $_ -in @('0','false','no','n','off') } { return $false }
+        default { return $Default }
+    }
+}
+
+function Resolve-SophosHookConfigDir {
+    if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) { return [IO.Path]::GetFullPath($ConfigDir) }
+    $envConfigDir = [Environment]::GetEnvironmentVariable('CERTIFICATE_CONFIG_DIR')
+    if (-not [string]::IsNullOrWhiteSpace($envConfigDir)) { return [IO.Path]::GetFullPath($envConfigDir) }
+    return [IO.Path]::GetFullPath((Join-Path (Split-Path $PSScriptRoot -Parent) 'config'))
+}
+
+function Get-SophosHookProfileSettings {
+    if (-not (Get-Command Get-DeviceConfig -CommandType Function -ErrorAction SilentlyContinue)) { return @{} }
+    $resolvedConfigDir = Resolve-SophosHookConfigDir
+    $profile = Get-DeviceConfig -DeviceId $DeviceId -ConfigDir $resolvedConfigDir
+    if ($null -eq $profile) {
+        $profile = @(Get-AllDeviceConfigs -ConfigDir $resolvedConfigDir -SkipIntegrityFailures | Where-Object {
+            $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]$_['connector_type'] -eq 'sophos'
+        } | Select-Object -First 1)
+        if ($profile.Count -gt 0) { $profile = $profile[0] }
+    }
+    if ($null -eq $profile -or -not ($profile -is [System.Collections.IDictionary]) -or -not $profile.ContainsKey('settings')) { return @{} }
+    if (-not ($profile['settings'] -is [System.Collections.IDictionary])) { return @{} }
+    return $profile['settings']
+}
+
+function Get-SophosProfileValue {
+    param(
+        [Parameter(Mandatory)][hashtable]$Settings,
+        [Parameter(Mandatory)][string]$Key,
+        [string]$Default = ''
+    )
+    if ($Settings.ContainsKey($Key) -and -not [string]::IsNullOrWhiteSpace([string]$Settings[$Key])) { return [string]$Settings[$Key] }
+    return $Default
+}
+
+function Apply-SophosHookProfileSettings {
+    $settings = Get-SophosHookProfileSettings
+    if ($settings.Count -eq 0) { return }
+
+    if ([string]::IsNullOrWhiteSpace($Firewall)) { $script:Firewall = Get-SophosProfileValue -Settings $settings -Key 'host' }
+    if (-not $PSBoundParameters.ContainsKey('Port')) {
+        $profilePort = Get-SophosProfileValue -Settings $settings -Key 'port' -Default '4444'
+        if (-not [string]::IsNullOrWhiteSpace($profilePort)) { $script:Port = [int]$profilePort }
+    }
+    if ([string]::IsNullOrWhiteSpace($Username)) { $script:Username = Get-SophosProfileValue -Settings $settings -Key 'username' -Default 'admin' }
+    if ([string]::IsNullOrWhiteSpace($CertificateName)) { $script:CertificateName = Get-SophosProfileValue -Settings $settings -Key 'certificate_name' }
+
+    if (-not $PSBoundParameters.ContainsKey('Password') -and -not $PSBoundParameters.ContainsKey('PasswordSecretName') -and -not $PSBoundParameters.ContainsKey('PasswordSecureFile')) {
+        $script:PasswordSecureFile = Get-SophosProfileValue -Settings $settings -Key 'password_secure_file'
+        $script:PasswordSecretName = Get-SophosProfileValue -Settings $settings -Key 'password_secret_name'
+        $plainPassword = Get-SophosProfileValue -Settings $settings -Key 'password'
+        if (-not [string]::IsNullOrWhiteSpace($plainPassword)) { $script:Password = ConvertTo-SecureString $plainPassword -AsPlainText -Force }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PfxPasswordSecureFile)) { $script:PfxPasswordSecureFile = Get-SophosProfileValue -Settings $settings -Key 'pfx_password_secure_file' }
+    if ([string]::IsNullOrWhiteSpace($PfxPasswordSecretName)) { $script:PfxPasswordSecretName = Get-SophosProfileValue -Settings $settings -Key 'pfx_password_secret_name' }
+    if ($null -eq $PfxPassword) {
+        $plainPfxPassword = Get-SophosProfileValue -Settings $settings -Key 'pfx_password'
+        if (-not [string]::IsNullOrWhiteSpace($plainPfxPassword)) { $script:PfxPassword = ConvertTo-SecureString $plainPfxPassword -AsPlainText -Force }
+    }
+
+    if (-not $PSBoundParameters.ContainsKey('BindAdminPortal')) { $script:BindAdminPortal = ConvertTo-SophosHookBoolean -Value (Get-SophosProfileValue -Settings $settings -Key 'bind_admin_portal') }
+    if (-not $PSBoundParameters.ContainsKey('BindVpnPortal')) { $script:BindVpnPortal = ConvertTo-SophosHookBoolean -Value (Get-SophosProfileValue -Settings $settings -Key 'bind_vpn_portal') }
+    if (-not $PSBoundParameters.ContainsKey('BindUserPortal')) { $script:BindUserPortal = ConvertTo-SophosHookBoolean -Value (Get-SophosProfileValue -Settings $settings -Key 'bind_user_portal') }
+    if (-not $PSBoundParameters.ContainsKey('SkipCertificateCheck')) { $script:SkipCertificateCheck = ConvertTo-SophosHookBoolean -Value (Get-SophosProfileValue -Settings $settings -Key 'skip_certificate_check') }
+
+    if ($WafRuleNames.Count -eq 0 -and (ConvertTo-SophosHookBoolean -Value (Get-SophosProfileValue -Settings $settings -Key 'bind_waf'))) {
+        $script:WafRuleNames = @(Get-SophosProfileValue -Settings $settings -Key 'waf_rule_names' -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+}
 
 function Initialize-DpapiSupport {
     $scopeType = 'System.Security.Cryptography.DataProtectionScope' -as [type]
@@ -195,11 +276,15 @@ function Get-SophosDeploymentPlan {
 }
 
 try {
-    $apiPassword = switch ($PSCmdlet.ParameterSetName) {
-        'SecretName' { Resolve-SophosPassword -PasswordSecretName $PasswordSecretName }
-        'SecureFile' { Resolve-DpapiSecureFileValue -Path $PasswordSecureFile }
-        default { Resolve-SophosPassword -Password $Password }
-    }
+    Apply-SophosHookProfileSettings
+    if ([string]::IsNullOrWhiteSpace($Firewall)) { throw 'Sophos firewall address is missing. Configure the Sophos device profile before running the hook.' }
+    if ([string]::IsNullOrWhiteSpace($Username)) { throw 'Sophos admin username is missing. Configure the Sophos device profile before running the hook.' }
+    if ([string]::IsNullOrWhiteSpace($CertificateName)) { throw 'Sophos certificate object name is missing. Configure the Sophos certificate target selection before running the hook.' }
+
+    if ($null -ne $Password) { $apiPassword = Resolve-SophosPassword -Password $Password }
+    elseif (-not [string]::IsNullOrWhiteSpace($PasswordSecureFile)) { $apiPassword = Resolve-DpapiSecureFileValue -Path $PasswordSecureFile }
+    elseif (-not [string]::IsNullOrWhiteSpace($PasswordSecretName)) { $apiPassword = Resolve-SophosPassword -PasswordSecretName $PasswordSecretName }
+    else { throw 'Sophos admin password is missing. Configure the Sophos device profile before running the hook.' }
 
     $sshPasswordText = Resolve-OptionalSophosPassword -SecurePassword $SshPassword -SecretName $SshPasswordSecretName -SecureFile $SshPasswordSecureFile
     $resolvedPfxPassword = $PfxPassword

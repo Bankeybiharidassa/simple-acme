@@ -81,33 +81,11 @@ $DeviceSchemas = @{
         @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
     )}
     sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; Fields=@(
-        @{ Name='host'; Label='Management hostname or IP'; Type='string'; Required=$true; Placeholder='sophos.example.com'; HelpText='Sophos Firewall management endpoint' },
-        @{ Name='port'; Label='API/admin port'; Type='string'; Required=$true; Placeholder='4444'; HelpText='Sophos XML API/admin port' },
-        @{ Name='username'; Label='API username'; Type='string'; Required=$true; Placeholder='admin'; HelpText='Sophos API username' },
-        @{ Name='password'; Label='API password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Sophos API password. Stored encrypted in the local device config and passed to the deploy script as a DPAPI secure file.' },
-        @{ Name='password_secret_name'; Label='API password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_PASSWORD'; HelpText='Optional SecretManagement name or SIMPLE_ACME_SECRET_* environment variable name used to resolve the Sophos API password' },
-        @{ Name='password_secure_file'; Label='API password secure file'; Type='string'; Required=$false; Placeholder='C:\secrets\sophos-api-password.txt'; HelpText='Optional DPAPI secure string file used to resolve the Sophos API password' },
-        @{ Name='certificate_name'; Label='Certificate object name'; Type='string'; Required=$true; Placeholder='wildcard-example-com'; HelpText='Sophos certificate object name to upload or update' },
-        @{ Name='pfx_path'; Label='PFX path'; Type='string'; Required=$false; Placeholder='C:\certs\wildcard.pfx'; HelpText='Optional PFX certificate path' },
-        @{ Name='pfx_password'; Label='PFX password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional PFX password. Stored encrypted in the local device config and passed to the deploy script as a DPAPI secure file.' },
-        @{ Name='pfx_password_secret_name'; Label='PFX password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_PFX_PASSWORD'; HelpText='Optional secret/environment name used to resolve the PFX password' },
-        @{ Name='pfx_password_secure_file'; Label='PFX password secure file'; Type='string'; Required=$false; Placeholder='C:\secrets\sophos-pfx-password.txt'; HelpText='Optional DPAPI secure string file used to resolve the PFX password' },
-        @{ Name='cert_path'; Label='PEM certificate path'; Type='string'; Required=$false; Placeholder='C:\certs\fullchain.pem'; HelpText='PEM certificate path when not using PFX' },
-        @{ Name='key_path'; Label='PEM private key path'; Type='string'; Required=$false; Placeholder='C:\certs\privkey.pem'; HelpText='PEM private key path when not using PFX' },
-        @{ Name='chain_path'; Label='PEM chain path'; Type='string'; Required=$false; Placeholder=''; HelpText='Optional chain path' },
-        @{ Name='bind_admin_portal'; Label='Bind admin portal'; Type='choice'; Required=$true; Choices=@('true','false'); Placeholder='true'; HelpText='Bind WebAdminSettings/Certificate' },
-        @{ Name='bind_vpn_portal'; Label='Bind VPN portal'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='On tested SFOS this shares WebAdminSettings/Certificate' },
-        @{ Name='bind_user_portal'; Label='Bind user portal'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='On tested SFOS this shares WebAdminSettings/Certificate' },
-        @{ Name='bind_waf'; Label='Bind WAF rules'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Set true and provide WAF rule names' },
-        @{ Name='waf_rule_names'; Label='WAF rule names'; Type='string'; Required=$false; Placeholder='rdgw,public-web'; HelpText='Comma-separated WAF/HTTPBased rule names' },
-        @{ Name='skip_certificate_check'; Label='Skip TLS certificate check'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Skip validation for the Sophos management endpoint certificate' },
-        @{ Name='enable_ssh_export_recovery'; Label='Enable SSH export recovery'; Type='choice'; Required=$true; Choices=@('false','true'); Placeholder='false'; HelpText='Diagnostics-only fallback when API certificate export returns an empty body' },
-        @{ Name='ssh_username'; Label='SSH username'; Type='string'; Required=$false; Placeholder='admin'; HelpText='SSH user for diagnostics-only export recovery' },
-        @{ Name='ssh_port'; Label='SSH port'; Type='string'; Required=$false; Placeholder='22'; HelpText='SSH port for diagnostics-only export recovery' },
-        @{ Name='ssh_password_secret_name'; Label='SSH password secret name'; Type='string'; Required=$false; Placeholder='SOPHOS_SSH_PASSWORD'; HelpText='Optional SSH password secret name. Leave empty when using an SSH key.' },
-        @{ Name='ssh_private_key_path'; Label='SSH private key path'; Type='string'; Required=$false; Placeholder='C:\keys\sophos.ppk'; HelpText='Optional PuTTY private key for SSH/SCP recovery' },
-        @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Required when SSH export recovery is enabled' },
-        @{ Name='export_recovery_path'; Label='Export recovery output path'; Type='string'; Required=$false; Placeholder='C:\temp\sophos-export.tar'; HelpText='Temporary diagnostics output path for recovered export archive' }
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.138'; HelpText='IP address or DNS name of the Sophos firewall admin/API page.' },
+        @{ Name='port'; Label='Admin/API port'; Type='string'; Required=$true; Default='4444'; Placeholder='4444'; HelpText='Sophos admin/API HTTPS port. Default is 4444.' },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$true; Default='admin'; Placeholder='admin'; HelpText='Sophos administrator username. Default is admin.' },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Sophos administrator password. Use this field for the normal firewall password.' },
+        @{ Name='skip_certificate_check'; Label='Ignore Sophos TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='false'; Placeholder='false'; HelpText='Set true only if the Sophos admin page uses an untrusted/self-signed certificate.' }
     )}
     custom = @{ ConnectorType='custom'; Label='Custom script'; Category='custom'; Fields=@(
         @{ Name='script_path'; Label='Script path'; Type='string'; Required=$true; Placeholder='Scripts\my-deploy.ps1'; HelpText='Operator-provided deployment script path' },

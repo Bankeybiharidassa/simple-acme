@@ -91,6 +91,7 @@ Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScri
 
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
+$deviceProfileRunnerModulePath = Join-Path $PSScriptRoot 'setup/Device-Profile-Runner.psm1'
 $netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
 $sophosRunnerModulePath = Join-Path $PSScriptRoot 'setup/Sophos-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
@@ -158,6 +159,15 @@ Assert-SetupCommandAvailable -CommandName 'Show-SimpleAcmeDiagnosticSummary' -Ex
 Assert-SetupCommandAvailable -CommandName 'Wait-ForOperatorReturn' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Assert-ProviderDirectoryConsistency' -ExpectedModulePath $formRunnerModulePath -ModuleInfo $formRunnerModule
 
+$deviceProfileRunnerModule = Import-Module $deviceProfileRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $deviceProfileRunnerModulePath"
+if ($null -eq $deviceProfileRunnerModule) {
+    throw "Unable to import required device profile setup module from path: $deviceProfileRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Get-DeviceProfileCurrentValues' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Save-DeviceProfile' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+
 $netScalerRunnerModule = Import-Module $netScalerRunnerModulePath -Force -Global -PassThru
 Write-SetupDebugLog -Message "Imported module: $netScalerRunnerModulePath"
 if ($null -eq $netScalerRunnerModule) {
@@ -173,6 +183,8 @@ if ($null -eq $sophosRunnerModule) {
     throw "Unable to import required Sophos setup module from path: $sophosRunnerModulePath"
 }
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDeploymentForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosProfileForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateRequestSetup' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDiagnostics' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateExportRecovery' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Convert-SophosFormValuesToArguments' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
@@ -608,6 +620,7 @@ while ($menuStack.Count -gt 0) {
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'sophos-profile'        { Write-SetupDebugLog -Message "Executing action: sophos-profile"; Invoke-SophosProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
         'sophos-deploy'         { Write-SetupDebugLog -Message "Executing action: sophos-deploy"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'sophos-whatif'         { Write-SetupDebugLog -Message "Executing action: sophos-whatif"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'sophos-diagnostics'    { Write-SetupDebugLog -Message "Executing action: sophos-diagnostics"; Invoke-SophosDiagnostics -ProjectRoot $PSScriptRoot }
