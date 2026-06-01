@@ -273,7 +273,9 @@ function Read-SophosTargetSelectionInput {
         } else {
             "Select targets [$DefaultSelection]"
         }
-        $raw = [string](Read-Host $prompt)
+        $inputResult = Read-SophosConsoleLine -Prompt $prompt
+        if ($inputResult.Canceled) { return '__CANCEL__' }
+        $raw = [string]$inputResult.Value
         if ([string]::IsNullOrWhiteSpace($raw)) { $raw = $DefaultSelection }
         if ([string]::IsNullOrWhiteSpace($raw)) {
             Write-Host 'Select at least one portal or WAF rule.' -ForegroundColor Yellow
@@ -373,6 +375,7 @@ function Invoke-SophosCertificateTargetSelection {
     Write-Host 'Enter comma-separated numbers only. Example: 1,2,3 or 1,4'
     $defaultSelection = ConvertTo-SophosTargetDefaultToken -Values $Values -Discovery $discovery
     $selection = Read-SophosTargetSelectionInput -Discovery $discovery -DefaultSelection $defaultSelection
+    if ($selection -eq '__CANCEL__') { return $null }
 
     $Values['bind_admin_portal'] = if ($selection.BindAdminPortal) { 'true' } else { 'false' }
     $Values['bind_vpn_portal'] = if ($selection.BindVpnPortal) { 'true' } else { 'false' }
@@ -694,7 +697,9 @@ function Read-SophosGuidedText {
 
     while ($true) {
         $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { '' } else { " [$Default]" }
-        $value = [string](Read-Host "$Prompt$suffix")
+        $inputResult = Read-SophosConsoleLine -Prompt "$Prompt$suffix"
+        if ($inputResult.Canceled) { return '__CANCEL__' }
+        $value = [string]$inputResult.Value
         if ($value -match '^[Qq]$') { return '__CANCEL__' }
         if ([string]::IsNullOrWhiteSpace($value)) { $value = $Default }
         $value = $value.Trim()
@@ -711,7 +716,9 @@ function Read-SophosGuidedYesNo {
 
     $suffix = if ($Default) { 'Y/n' } else { 'y/N' }
     while ($true) {
-        $answer = [string](Read-Host ("{0} ({1})" -f $Prompt, $suffix))
+        $inputResult = Read-SophosConsoleLine -Prompt ("{0} ({1})" -f $Prompt, $suffix)
+        if ($inputResult.Canceled) { return $null }
+        $answer = [string]$inputResult.Value
         if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
         switch ($answer.Trim().ToLowerInvariant()) {
             { $_ -in @('y','yes','j','ja') } { return $true }
@@ -729,11 +736,47 @@ function Read-SophosGuidedPassword {
 
     while ($true) {
         $prompt = if ($HasExistingPassword) { 'Admin password (press Enter to keep saved password)' } else { 'Admin password' }
-        $secure = Read-Host $prompt -AsSecureString
-        $plain = (New-Object pscredential 'sophos', $secure).GetNetworkCredential().Password
+        $inputResult = Read-SophosConsoleLine -Prompt $prompt -MaskInput
+        if ($inputResult.Canceled) { return '__CANCEL__' }
+        $plain = [string]$inputResult.Value
         if ($HasExistingPassword -and [string]::IsNullOrEmpty($plain)) { return $null }
         if (-not [string]::IsNullOrEmpty($plain)) { return $plain }
         Write-Host 'Admin password is required for the Sophos API.' -ForegroundColor Yellow
+    }
+}
+
+function Read-SophosConsoleLine {
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [switch]$MaskInput
+    )
+
+    [Console]::Write("${Prompt}: ")
+    $buffer = New-Object System.Text.StringBuilder
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            ([ConsoleKey]::Enter) {
+                [Console]::WriteLine()
+                return [pscustomobject]@{ Canceled = $false; Value = $buffer.ToString() }
+            }
+            ([ConsoleKey]::Escape) {
+                [Console]::WriteLine()
+                return [pscustomobject]@{ Canceled = $true; Value = '' }
+            }
+            ([ConsoleKey]::Backspace) {
+                if ($buffer.Length -gt 0) {
+                    $buffer.Length = $buffer.Length - 1
+                    [Console]::Write("`b `b")
+                }
+            }
+            default {
+                if (-not [char]::IsControl($key.KeyChar)) {
+                    [void]$buffer.Append($key.KeyChar)
+                    if ($MaskInput) { [Console]::Write('*') } else { [Console]::Write($key.KeyChar) }
+                }
+            }
+        }
     }
 }
 
@@ -795,6 +838,7 @@ function Invoke-SophosProfileForm {
 
     $hasExistingPassword = $values.ContainsKey('password') -and -not [string]::IsNullOrWhiteSpace([string]$values['password'])
     $passwordValue = Read-SophosGuidedPassword -HasExistingPassword:$hasExistingPassword
+    if ($passwordValue -eq '__CANCEL__') { return [pscustomobject]@{ Status = 'Canceled' } }
     if ($null -ne $passwordValue) {
         $values['password'] = $passwordValue
         $values['password_secret_name'] = ''
@@ -803,6 +847,7 @@ function Invoke-SophosProfileForm {
 
     $skipDefault = ConvertTo-SophosTuiBoolean -Value $(if ($values.ContainsKey('skip_certificate_check')) { $values['skip_certificate_check'] } else { $false })
     $skipValue = Read-SophosGuidedYesNo -Prompt 'Ignore Sophos TLS warning for API calls? Use yes only for self-signed/untrusted admin certificates.' -Default $skipDefault
+    if ($null -eq $skipValue) { return [pscustomobject]@{ Status = 'Canceled' } }
     $values['skip_certificate_check'] = if ($skipValue) { 'true' } else { 'false' }
 
     Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'sophos' -Label 'Sophos firewall' -Values $values -SecretFields @('password') -DefaultDeviceId 'sophos-firewall'
@@ -811,7 +856,9 @@ function Invoke-SophosProfileForm {
 
     $testResult = $null
     $testLogPath = $null
-    if (Read-SophosGuidedYesNo -Prompt 'Test Sophos API communication now?' -Default $true) {
+    $shouldTestCommunication = Read-SophosGuidedYesNo -Prompt 'Test Sophos API communication now?' -Default $true
+    if ($null -eq $shouldTestCommunication) { return [pscustomobject]@{ Status = 'Canceled' } }
+    if ($shouldTestCommunication) {
         Write-Host ''
         Write-Host 'Testing Sophos API communication...'
         try {
@@ -897,9 +944,9 @@ function Invoke-SophosDeploymentForm {
             $message = 'WhatIf preview completed. Real deployment was not requested.'
         } else {
             Write-Host ''
-            Write-Host 'WhatIf preview completed. Type DEPLOY to execute the real Sophos deployment.'
-            $confirmation = [string](Read-Host 'Confirmation')
-            if ($confirmation -cne 'DEPLOY') {
+            Write-Host 'WhatIf preview completed. Type DEPLOY to execute the real Sophos deployment, or press Esc to cancel.'
+            $confirmationResult = Read-SophosConsoleLine -Prompt 'Confirmation'
+            if ($confirmationResult.Canceled -or [string]$confirmationResult.Value -cne 'DEPLOY') {
                 $status = 'CanceledAfterPreview'
                 $message = 'Operator did not type DEPLOY after preview. Real deployment was not executed.'
             } else {

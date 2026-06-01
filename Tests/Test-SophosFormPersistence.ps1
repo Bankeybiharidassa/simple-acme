@@ -38,6 +38,8 @@ function Invoke-TestSophosFormPersistence {
             'Certificate portals and WAF rules are selected later after the API is tested.',
             'Read-SophosGuidedText',
             'Read-SophosGuidedPassword',
+            'Read-SophosConsoleLine',
+            '[ConsoleKey]::Escape',
             'Wait-SophosGuidedOperator',
             'Test Sophos API communication now?',
             'Press any key to continue.',
@@ -198,6 +200,8 @@ function Invoke-TestSophosFormPersistence {
             'Enter comma-separated numbers only. Example: 1,2,3 or 1,4',
             'Invalid target selection: {0}. Use numbers only, separated by commas.',
             'ConvertTo-SophosTargetDefaultToken -Values $Values -Discovery $discovery',
+            'if ($inputResult.Canceled) { return ''__CANCEL__'' }',
+            'if ($selection -eq ''__CANCEL__'') { return $null }',
             'The WACS scheduled renewal hook will reuse'
         )) {
             if ($runner -notmatch [regex]::Escape($text)) {
