@@ -175,6 +175,328 @@ function Invoke-SophosProfileCommunicationTest {
     }
 }
 
+function Connect-SophosProfileForTui {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Values,
+        [int]$TimeoutSeconds = 120
+    )
+
+    Import-Module $script:SophosModulePath -Force
+    $firewall = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [int]$Values['port'] } else { 4444 }
+    $username = if ($Values.ContainsKey('username') -and -not [string]::IsNullOrWhiteSpace([string]$Values['username'])) { [string]$Values['username'] } else { 'admin' }
+    $skipCertificateCheck = ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $false })
+    $password = Resolve-SophosProfilePassword -Values $Values
+    $endpoint = New-SophosApiEndpoint -Firewall $firewall -Port $port
+
+    try {
+        $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        return [pscustomobject]@{ Session = $session; Endpoint = $endpoint; UsedSkipCertificateCheck = $skipCertificateCheck; Warning = '' }
+    } catch {
+        $message = [string]$_.Exception.Message
+        if (-not $skipCertificateCheck -and $message -match '(?i)trust relationship|certificate|ssl/tls') {
+            $session = Connect-SophosFirewallApi -Firewall $firewall -Port $port -Username $username -Password $password -SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+            return [pscustomobject]@{
+                Session = $session
+                Endpoint = $endpoint
+                UsedSkipCertificateCheck = $true
+                Warning = 'TLS certificate validation failed; retried with Ignore Sophos TLS warning enabled for this discovery.'
+            }
+        }
+        if ($message -match '(?i)timed out|timeout|unexpected error occurred on a receive') {
+            throw "Sophos XML API did not answer the authenticated request at $endpoint. The admin page is reachable, but Sophos API access may be disabled or restricted to allowed source IP addresses. In Sophos, enable Backup and firmware > API > API configuration and add this operator machine's source IP address."
+        }
+        throw
+    }
+}
+
+function Get-SophosLiveCertificateTargets {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$Values)
+
+    $connection = Connect-SophosProfileForTui -Values $Values -TimeoutSeconds 120
+    $adminSettings = Get-SophosAdminWebSettings
+    $wafRules = @(Get-SophosWafRules)
+
+    [pscustomobject]@{
+        Endpoint = $connection.Endpoint
+        Warning = $connection.Warning
+        UsedSkipCertificateCheck = $connection.UsedSkipCertificateCheck
+        AdminSettings = $adminSettings
+        WafRules = @($wafRules)
+    }
+}
+
+function Format-SophosTargetValue {
+    param([object]$Value)
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return '<empty>' }
+    [string]$Value
+}
+
+function ConvertTo-SophosTargetDefaultToken {
+    param([Parameter(Mandatory)][hashtable]$Values)
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_admin_portal')) { $Values['bind_admin_portal'] } else { $false })) { $tokens.Add('1') | Out-Null }
+    if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_vpn_portal')) { $Values['bind_vpn_portal'] } else { $false })) { $tokens.Add('2') | Out-Null }
+    if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_user_portal')) { $Values['bind_user_portal'] } else { $false })) { $tokens.Add('3') | Out-Null }
+    if (ConvertTo-SophosTuiBoolean -Value $(if ($Values.ContainsKey('bind_waf')) { $Values['bind_waf'] } else { $false })) {
+        $wafNames = if ($Values.ContainsKey('waf_rule_names')) { [string]$Values['waf_rule_names'] } else { '' }
+        foreach ($name in @($wafNames -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            $tokens.Add("waf:$name") | Out-Null
+        }
+    }
+    ($tokens.ToArray() -join ',')
+}
+
+function Read-SophosTargetSelectionInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Discovery,
+        [string]$DefaultSelection = ''
+    )
+
+    $rules = @($Discovery.WafRules)
+    while ($true) {
+        $prompt = if ([string]::IsNullOrWhiteSpace($DefaultSelection)) {
+            'Select targets'
+        } else {
+            "Select targets [$DefaultSelection]"
+        }
+        $raw = [string](Read-Host $prompt)
+        if ([string]::IsNullOrWhiteSpace($raw)) { $raw = $DefaultSelection }
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-Host 'Select at least one portal or WAF rule.' -ForegroundColor Yellow
+            continue
+        }
+
+        $bindAdmin = $false
+        $bindVpn = $false
+        $bindUser = $false
+        $selectedRules = New-Object System.Collections.Generic.List[string]
+        $invalid = New-Object System.Collections.Generic.List[string]
+
+        foreach ($part in @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            $lower = $part.ToLowerInvariant()
+            switch -Regex ($lower) {
+                '^(a|all-portals|portals)$' { $bindAdmin = $true; $bindVpn = $true; $bindUser = $true; continue }
+                '^(admin|admin-portal|1)$' { $bindAdmin = $true; continue }
+                '^(vpn|vpn-portal|2)$' { $bindVpn = $true; continue }
+                '^(user|user-portal|3)$' { $bindUser = $true; continue }
+                '^(w|waf)$' {
+                    foreach ($rule in @($rules | Where-Object { [string]$_.Status -match '(?i)^(enable|enabled)$' })) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$rule.Name) -and -not $selectedRules.Contains([string]$rule.Name)) {
+                            $selectedRules.Add([string]$rule.Name) | Out-Null
+                        }
+                    }
+                    continue
+                }
+                '^waf:(.+)$' {
+                    $ruleName = $Matches[1]
+                    $match = @($rules | Where-Object { [string]$_.Name -eq $ruleName } | Select-Object -First 1)
+                    if ($match.Count -gt 0 -and $null -ne $match[0]) {
+                        if (-not $selectedRules.Contains([string]$match[0].Name)) { $selectedRules.Add([string]$match[0].Name) | Out-Null }
+                    } else {
+                        $invalid.Add($part) | Out-Null
+                    }
+                    continue
+                }
+                '^\d+$' {
+                    $index = [int]$part
+                    if ($index -ge 4 -and $index -lt (4 + $rules.Count)) {
+                        $rule = $rules[$index - 4]
+                        if (-not [string]::IsNullOrWhiteSpace([string]$rule.Name) -and -not $selectedRules.Contains([string]$rule.Name)) {
+                            $selectedRules.Add([string]$rule.Name) | Out-Null
+                        }
+                    } else {
+                        $invalid.Add($part) | Out-Null
+                    }
+                    continue
+                }
+                default {
+                    $match = @($rules | Where-Object { [string]$_.Name -eq $part } | Select-Object -First 1)
+                    if ($match.Count -gt 0 -and $null -ne $match[0]) {
+                        if (-not $selectedRules.Contains([string]$match[0].Name)) { $selectedRules.Add([string]$match[0].Name) | Out-Null }
+                    } else {
+                        $invalid.Add($part) | Out-Null
+                    }
+                }
+            }
+        }
+
+        if ($invalid.Count -gt 0) {
+            Write-Host ("Unknown Sophos target selection: {0}" -f ($invalid.ToArray() -join ', ')) -ForegroundColor Yellow
+            continue
+        }
+        if (-not ($bindAdmin -or $bindVpn -or $bindUser -or $selectedRules.Count -gt 0)) {
+            Write-Host 'Select at least one portal or WAF rule.' -ForegroundColor Yellow
+            continue
+        }
+
+        return [pscustomobject]@{
+            BindAdminPortal = $bindAdmin
+            BindVpnPortal = $bindVpn
+            BindUserPortal = $bindUser
+            WafRuleNames = @($selectedRules.ToArray())
+        }
+    }
+}
+
+function Invoke-SophosCertificateTargetSelection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+
+    Write-Host ''
+    Write-Host 'Reading Sophos portals and WAF rules from the firewall...'
+    $discovery = Get-SophosLiveCertificateTargets -Values $Values
+
+    Write-Host ''
+    Write-Host 'Sophos certificate target selection'
+    Write-Host '-----------------------------------'
+    Write-Host ("Endpoint: {0}" -f $discovery.Endpoint)
+    if (-not [string]::IsNullOrWhiteSpace([string]$discovery.Warning)) {
+        Write-Host ("Warning: {0}" -f $discovery.Warning) -ForegroundColor Yellow
+    }
+    Write-Host 'Sophos exposes admin, VPN, and user portal certificate binding through one shared WebAdminSettings certificate field.'
+    Write-Host ''
+
+    $settings = $discovery.AdminSettings
+    Write-Host ("[1] Admin portal  port={0}  current-cert={1}" -f (Format-SophosTargetValue $settings.HTTPSport), (Format-SophosTargetValue $settings.Certificate))
+    Write-Host ("[2] VPN portal    port={0}  current-cert={1}" -f (Format-SophosTargetValue $settings.VPNPortalHTTPSPort), (Format-SophosTargetValue $settings.Certificate))
+    Write-Host ("[3] User portal   port={0}  current-cert={1}" -f (Format-SophosTargetValue $settings.UserPortalHTTPSPort), (Format-SophosTargetValue $settings.Certificate))
+
+    $rules = @($discovery.WafRules)
+    if ($rules.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'WAF / web server rules'
+        for ($i = 0; $i -lt $rules.Count; $i++) {
+            $rule = $rules[$i]
+            $number = $i + 4
+            $domains = @($rule.Domains) -join ','
+            Write-Host ("[{0}] WAF {1}  status={2}  port={3}  domains={4}  current-cert={5}" -f $number, (Format-SophosTargetValue $rule.Name), (Format-SophosTargetValue $rule.Status), (Format-SophosTargetValue $rule.ListenPort), (Format-SophosTargetValue $domains), (Format-SophosTargetValue $rule.HttpsCertificate))
+        }
+    } else {
+        Write-Host ''
+        Write-Host 'No Sophos WAF / web server rules were returned by the API.'
+    }
+
+    Write-Host ''
+    Write-Host 'Enter comma-separated numbers or names. Examples: 1,2,3 or 1,rdgw'
+    Write-Host 'Shortcuts: A = all portals, W = all enabled WAF rules.'
+    $defaultSelection = ConvertTo-SophosTargetDefaultToken -Values $Values
+    $selection = Read-SophosTargetSelectionInput -Discovery $discovery -DefaultSelection $defaultSelection
+
+    $Values['bind_admin_portal'] = if ($selection.BindAdminPortal) { 'true' } else { 'false' }
+    $Values['bind_vpn_portal'] = if ($selection.BindVpnPortal) { 'true' } else { 'false' }
+    $Values['bind_user_portal'] = if ($selection.BindUserPortal) { 'true' } else { 'false' }
+    $Values['bind_waf'] = if (@($selection.WafRuleNames).Count -gt 0) { 'true' } else { 'false' }
+    $Values['waf_rule_names'] = (@($selection.WafRuleNames) -join ',')
+
+    Write-Host ''
+    Write-Host 'Selected Sophos targets'
+    Write-Host '-----------------------'
+    Write-Host ("Admin portal: {0}" -f $Values['bind_admin_portal'])
+    Write-Host ("VPN portal: {0}" -f $Values['bind_vpn_portal'])
+    Write-Host ("User portal: {0}" -f $Values['bind_user_portal'])
+    Write-Host ("WAF rules: {0}" -f $(if ([string]::IsNullOrWhiteSpace([string]$Values['waf_rule_names'])) { '<none>' } else { [string]$Values['waf_rule_names'] }))
+
+    Write-SophosTuiJsonLog -ProjectRoot $ProjectRoot -Prefix 'sophos-target-selection' -Data ([pscustomobject]@{
+        TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Endpoint = $discovery.Endpoint
+        Selected = $selection
+        AdminSettings = $discovery.AdminSettings
+        WafRules = @($discovery.WafRules | ForEach-Object {
+            [pscustomobject]@{
+                Name = $_.Name
+                Status = $_.Status
+                PolicyType = $_.PolicyType
+                HttpsCertificate = $_.HttpsCertificate
+                ListenPort = $_.ListenPort
+                HostedAddress = $_.HostedAddress
+                Domains = @($_.Domains)
+            }
+        })
+    }) | Out-Null
+
+    $Values
+}
+
+function ConvertTo-SophosSingleQuotedArgument {
+    param([string]$Value)
+    "'{0}'" -f ([string]$Value).Replace("'", "''")
+}
+
+function Save-SophosDeploymentSelection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+
+    $settings = @{}
+    foreach ($key in $Values.Keys) { $settings[[string]$key] = [string]$Values[$key] }
+    $device = @{
+        device_id = 'sophos-firewall'
+        connector_type = 'sophos'
+        label = 'Sophos firewall'
+        created_at = (Get-Date).ToUniversalTime().ToString('o')
+        updated_at = (Get-Date).ToUniversalTime().ToString('o')
+        settings = $settings
+    }
+    Save-DeviceConfig -Device $device -ConfigDir $ConfigDir -SecretFields @('password') | Out-Null
+}
+
+function Invoke-SophosCertificateRequestSetup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+
+    $schemaPath = Join-Path $ProjectRoot 'setup/Device-Schemas.ps1'
+    . $schemaPath
+    if (-not $DeviceSchemas.ContainsKey('sophos')) { throw "Device schema 'sophos' was not found in $schemaPath" }
+
+    $configDir = if ($Values.ContainsKey('CERTIFICATE_CONFIG_DIR') -and -not [string]::IsNullOrWhiteSpace([string]$Values['CERTIFICATE_CONFIG_DIR'])) {
+        [IO.Path]::GetFullPath([string]$Values['CERTIFICATE_CONFIG_DIR'])
+    } else {
+        Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    }
+    $Values['CERTIFICATE_CONFIG_DIR'] = $configDir
+
+    $schema = $DeviceSchemas['sophos']
+    $profileValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'sophos' -CertificateRuntimeKeys @('pfx_path','pfx_password','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') -PlaintextSecretNameFields @{ password_secret_name = 'password' }) -Fields @($schema.Fields)
+    if ($profileValues.Count -eq 0 -or -not $profileValues.ContainsKey('host') -or [string]::IsNullOrWhiteSpace([string]$profileValues['host'])) {
+        Write-Host ''
+        Write-Host 'No Sophos device profile exists yet. Create the firewall connection profile first.' -ForegroundColor Yellow
+        $profileResult = Invoke-SophosProfileForm -ProjectRoot $ProjectRoot
+        if ($null -eq $profileResult -or [string]$profileResult.Status -ne 'Saved') { return $null }
+        $profileValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'sophos' -CertificateRuntimeKeys @('pfx_path','pfx_password','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') -PlaintextSecretNameFields @{ password_secret_name = 'password' }) -Fields @($schema.Fields)
+    }
+
+    $domains = if ($Values.ContainsKey('DOMAINS')) { [string]$Values['DOMAINS'] } else { '' }
+    $profileValues['certificate_name'] = ConvertTo-SophosCertificateObjectName -Domains $domains -PfxPath ''
+    if ($Values.ContainsKey('ACME_PFX_PASSWORD') -and -not [string]::IsNullOrWhiteSpace([string]$Values['ACME_PFX_PASSWORD'])) {
+        $profileValues['pfx_password_secure_file'] = Write-SophosTuiSecureValueFile -ConfigDir $configDir -Name 'sophos-pfx-password' -Plaintext ([string]$Values['ACME_PFX_PASSWORD'])
+    }
+
+    $profileValues = Invoke-SophosCertificateTargetSelection -ProjectRoot $ProjectRoot -Values $profileValues
+    if ($null -eq $profileValues) { return $null }
+    Save-SophosDeploymentSelection -ConfigDir $configDir -Values $profileValues
+    Write-Host 'The WACS scheduled renewal hook will reuse this saved Sophos target selection automatically.'
+
+    $scriptPath = Join-Path $ProjectRoot 'Scripts/deploy-sophos.ps1'
+    $Values['ACME_TARGET_SYSTEM'] = 'sophos'
+    $Values['TARGET_SYSTEM'] = 'sophos'
+    $Values['ACME_SCRIPT_PATH'] = $scriptPath
+    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -ConfigDir $(ConvertTo-SophosSingleQuotedArgument -Value $configDir)"
+    $Values
+}
+
 function Resolve-SophosDefaultPfxPath {
     $defaultDir = 'C:\certs'
     if (-not (Test-Path -LiteralPath $defaultDir -PathType Container)) { return '' }
@@ -418,6 +740,9 @@ function Invoke-SophosDeploymentForm {
     foreach ($key in $certificateContext.Keys) {
         if (-not [string]::IsNullOrWhiteSpace([string]$certificateContext[$key])) { $values[[string]$key] = [string]$certificateContext[$key] }
     }
+    $values = Invoke-SophosCertificateTargetSelection -ProjectRoot $ProjectRoot -Values $values
+    if ($null -eq $values) { return [pscustomobject]@{ Status = 'Canceled'; LogPath = $null } }
+    Save-SophosDeploymentSelection -ConfigDir $configDir -Values $values
 
     $scriptPath = Join-Path $ProjectRoot 'Scripts/deploy-sophos.ps1'
     if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Sophos deployment script not found: $scriptPath" }
@@ -575,4 +900,4 @@ function Invoke-SophosCertificateExportRecovery {
     Invoke-SophosDeploymentForm -ProjectRoot $ProjectRoot -WhatIfMode
 }
 
-Export-ModuleMember -Function Invoke-SophosProfileForm,Invoke-SophosDeploymentForm,Invoke-SophosDiagnostics,Invoke-SophosCertificateExportRecovery,Convert-SophosFormValuesToArguments,Test-SophosTuiWiring
+Export-ModuleMember -Function Invoke-SophosProfileForm,Invoke-SophosDeploymentForm,Invoke-SophosDiagnostics,Invoke-SophosCertificateExportRecovery,Invoke-SophosCertificateRequestSetup,Convert-SophosFormValuesToArguments,Test-SophosTuiWiring

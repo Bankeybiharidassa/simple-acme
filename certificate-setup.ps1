@@ -184,6 +184,7 @@ if ($null -eq $sophosRunnerModule) {
 }
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDeploymentForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosProfileForm' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateRequestSetup' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosDiagnostics' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-SophosCertificateExportRecovery' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Convert-SophosFormValuesToArguments' -ExpectedModulePath $sophosRunnerModulePath -ModuleInfo $sophosRunnerModule

@@ -10,6 +10,7 @@ Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Native-Process.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Simple-Acme-Reconciler.psm1" -Force -Global
 Import-Module (Join-Path $PSScriptRoot '..\core\Crypto.psm1') -Force
+Import-Module "$PSScriptRoot/Sophos-Runner.psm1" -Force -Global
 . "$PSScriptRoot/Device-Schemas.ps1"
 . "$PSScriptRoot/Connector-Registry.ps1"
 . "$PSScriptRoot/Menu-Tree.ps1"
@@ -1461,12 +1462,12 @@ function Select-FirstRunDeviceFamily {
 
     $postIssuanceFirstRunMap = @{
         sophos = @{
-            TargetSystem = 'firewall'
+            TargetSystem = 'sophos'
             DeviceType = 'sophos'
             DeviceLabel = 'Sophos firewall'
             Title = 'Sophos firewall certificate issuance'
-            Message = 'Sophos firewall deployment is configured from Deployment targets after the certificate exists.'
-            Hook = 'generic firewall hook'
+            Message = 'Sophos firewall deployment will use the saved Sophos device profile and selected portal/WAF targets.'
+            Hook = 'Sophos XGS deployment hook'
         }
         paloalto = @{
             TargetSystem = 'firewall'
@@ -1499,7 +1500,12 @@ function Select-FirstRunDeviceFamily {
         Start-ConsoleSection -Title ([string]$selected['Title'])
         [Console]::WriteLine([string]$selected['Message'])
         [Console]::WriteLine("This step can issue or verify the certificate now using the $($selected['Hook']).")
-        [Console]::WriteLine('After issuance, return to Deployment targets to configure and run the appliance-specific deployment.')
+        if ([string]$selected['DeviceType'] -eq 'sophos') {
+            [Console]::WriteLine('During setup, the Sophos XGS portals and WAF rules will be pulled from the firewall so the operator can choose where this certificate is bound.')
+            [Console]::WriteLine('The WACS scheduled renewal hook will reuse that saved selection automatically.')
+        } else {
+            [Console]::WriteLine('After issuance, return to Deployment targets to configure and run the appliance-specific deployment.')
+        }
         [Console]::WriteLine('')
         [Console]::WriteLine('[1] Continue certificate issuance / verification now')
         [Console]::WriteLine('[0] Back')
@@ -1516,7 +1522,7 @@ function Select-FirstRunDeviceFamily {
         Start-ConsoleSection -Title 'Firewall / VPN device selection'
         [Console]::WriteLine('Which firewall/VPN device family is this certificate for?')
         [Console]::WriteLine('[1] Generic firewall/VPN hook during issuance')
-        [Console]::WriteLine('[2] Sophos firewall - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[2] Sophos firewall - issue now and save Sophos renewal hook targets')
         [Console]::WriteLine('[3] Palo Alto firewall - issue now, deploy from Deployment targets after issuance')
         [Console]::WriteLine('[0] Back')
         $choice = Read-SetupChoice -Prompt 'Firewall/VPN device' -Options @{
@@ -1535,8 +1541,13 @@ function Select-FirstRunDeviceFamily {
         if ($choice -ne 'generic-firewall') {
             [Console]::WriteLine('')
             [Console]::WriteLine("$($labelMap[$choice]) selected.")
-            [Console]::WriteLine('This step issues the certificate with the generic firewall hook.')
-            [Console]::WriteLine('After issuance, use Deployment targets to configure and run the appliance-specific deployment.')
+            if ($choice -eq 'sophos') {
+                [Console]::WriteLine('This step issues the certificate with the Sophos XGS deployment hook.')
+                [Console]::WriteLine('The setup will pull portals/WAF rules from Sophos and save the selected bindings for scheduled renewals.')
+            } else {
+                [Console]::WriteLine('This step issues the certificate with the generic firewall hook.')
+                [Console]::WriteLine('After issuance, use Deployment targets to configure and run the appliance-specific deployment.')
+            }
             $confirm = Read-SetupChoice -Prompt 'Continue with certificate issuance now? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
             if ($confirm -in @('__CANCEL__','__BACK__','no')) { return '__BACK__' }
         }
@@ -1619,7 +1630,7 @@ function Invoke-AcmeForm {
     [Console]::WriteLine('[8] Kemp LoadMaster (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[9] NetScaler / Citrix ADC (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[10] Palo Alto firewall (Available after certificate issuance / post-deployment only)')
-    [Console]::WriteLine('[11] Sophos firewall (Available after certificate issuance / post-deployment only)')
+    [Console]::WriteLine('[11] Sophos firewall / XGS (issue now and save renewal hook targets)')
     $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='rds-farm'; '3'='iis'; '4'='mail'; '5'='firewall'; '6'='waf'; '7'='custom'; '8'='kemp'; '9'='netscaler'; '10'='paloalto'; '11'='sophos' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
@@ -1655,7 +1666,11 @@ function Invoke-AcmeForm {
     }
 
     Start-ConsoleSection -Title 'Certificate distribution selection'
-    if ($target -eq 'rds-farm') {
+    if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
+        [Console]::WriteLine('Sophos XGS deployment needs a PFX file so the firewall receives the certificate private key.')
+        [Console]::WriteLine('PFX distribution will be configured for the Sophos renewal hook.')
+        $distributionMode = 'multi'
+    } elseif ($target -eq 'rds-farm') {
         [Console]::WriteLine('RDS Gateway + Session Hosts farm always uses multi-system PFX distribution.')
         [Console]::WriteLine('The setup will collect a PFX output directory and password before generating the WACS preview.')
         $distributionMode = 'multi'
@@ -1735,7 +1750,7 @@ function Invoke-AcmeForm {
         if ([string]::IsNullOrWhiteSpace($customScriptParams)) { $customScriptParams = '{CertThumbprint}' }
         $values.ACME_SCRIPT_PARAMETERS = $customScriptParams
     }
-    if ($curr.ContainsKey('ACME_SCRIPT_PATH')) {
+    if ($curr.ContainsKey('ACME_SCRIPT_PATH') -and [string]$targetSelection['DeviceType'] -ne 'sophos') {
         $existingScriptPath = Resolve-AbsoluteSetupPath -PathValue ([string]$curr.ACME_SCRIPT_PATH)
         $sameTarget = $curr.ContainsKey('ACME_TARGET_SYSTEM') -and ([string]$curr.ACME_TARGET_SYSTEM).ToLowerInvariant() -eq $target
         if ($sameTarget -and -not [string]::IsNullOrWhiteSpace($existingScriptPath) -and (Test-Path -LiteralPath $existingScriptPath -PathType Leaf)) {
@@ -1750,14 +1765,18 @@ function Invoke-AcmeForm {
             [Console]::WriteLine('RDS farm mode requires PFX distribution so the private key can be imported on Session Hosts.')
             $multiChoice = 'pfx'
         } else {
-            [Console]::WriteLine('Choose distribution method:')
-            [Console]::WriteLine('[1] Windows systems (enable exportable key)')
-            [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
-            $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
-            if ($multiChoice -in @('__CANCEL__','__BACK__')) {
-                [Console]::WriteLine('')
-                [Console]::WriteLine('Setup cancelled.')
-                return $null
+            if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
+                $multiChoice = 'pfx'
+            } else {
+                [Console]::WriteLine('Choose distribution method:')
+                [Console]::WriteLine('[1] Windows systems (enable exportable key)')
+                [Console]::WriteLine('[2] Appliances / mixed systems (use PFX distribution) [recommended]')
+                $multiChoice = Read-SetupChoice -Prompt 'Multi-system key mode' -Options @{ '1'='exportable'; '2'='pfx' } -DefaultKey '2' -AllowBack
+                if ($multiChoice -in @('__CANCEL__','__BACK__')) {
+                    [Console]::WriteLine('')
+                    [Console]::WriteLine('Setup cancelled.')
+                    return $null
+                }
             }
         }
         if ($multiChoice -eq 'exportable') {
@@ -1819,6 +1838,16 @@ function Invoke-AcmeForm {
         $values.ACME_STORE_PLUGIN = 'certificatestore'
         $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
         $values.ACME_REISSUE_STRATEGY = 'next-renewal'
+    }
+
+    if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
+        $sophosResult = Invoke-SophosCertificateRequestSetup -ProjectRoot (Split-Path $PSScriptRoot -Parent) -Values $values
+        if ($null -eq $sophosResult) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
+        $values = $sophosResult
     }
 
     while ($true) {

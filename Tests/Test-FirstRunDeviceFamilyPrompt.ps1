@@ -11,7 +11,7 @@ function Invoke-TestFirstRunDeviceFamilyPrompt {
         }
         foreach ($text in @(
             'Which firewall/VPN device family is this certificate for?',
-            'Sophos firewall - issue now, deploy from Deployment targets after issuance',
+            'Sophos firewall - issue now and save Sophos renewal hook targets',
             'Palo Alto firewall - issue now, deploy from Deployment targets after issuance',
             'Which load balancer/WAF family is this certificate for?',
             'NetScaler / Citrix ADC - issue now, deploy from Deployment targets after issuance',
@@ -52,8 +52,17 @@ function Invoke-TestFirstRunDeviceFamilyPrompt {
                 throw "Missing post-issuance first-run routing text: $text"
             }
         }
-        if ($raw -notmatch "sophos\s*=\s*@\{[^}]*TargetSystem\s*=\s*'firewall'") {
-            throw 'Sophos first-run menu choice is not routed to firewall issuance.'
+        if ($raw -notmatch "sophos\s*=\s*@\{[^}]*TargetSystem\s*=\s*'sophos'") {
+            throw 'Sophos first-run menu choice is not routed to the Sophos renewal hook.'
+        }
+        foreach ($text in @(
+            'The WACS scheduled renewal hook will reuse that saved selection automatically.',
+            'Invoke-SophosCertificateRequestSetup',
+            'Sophos XGS deployment needs a PFX file'
+        )) {
+            if ($raw -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos scheduled-hook setup text or wiring: $text"
+            }
         }
         if ($raw -notmatch "netscaler\s*=\s*@\{[^}]*TargetSystem\s*=\s*'waf'") {
             throw 'NetScaler first-run menu choice is not routed to WAF issuance.'

@@ -171,4 +171,46 @@ function Invoke-TestSophosFormPersistence {
             throw 'Sophos TLS skip still uses a PowerShell scriptblock callback, which fails on Windows PowerShell 5.1 worker threads.'
         }
     }
+
+    & $Assert 'Sophos certificate request saves live target selection for WACS renewal hook' {
+        $runnerPath = Join-Path $PSScriptRoot '..\setup\Sophos-Runner.psm1'
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'function Invoke-SophosCertificateRequestSetup',
+            'function Invoke-SophosCertificateTargetSelection',
+            'Get-SophosLiveCertificateTargets',
+            'Get-SophosAdminWebSettings',
+            'Get-SophosWafRules',
+            'Save-SophosDeploymentSelection',
+            'ACME_SCRIPT_PARAMETERS',
+            "-PfxPath '{CacheFile}' -ConfigDir",
+            'The WACS scheduled renewal hook will reuse'
+        )) {
+            if ($runner -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos renewal-hook target selection wiring: $text"
+            }
+        }
+    }
+
+    & $Assert 'Sophos deploy hook can load saved profile config during WACS scheduled renewal' {
+        $scriptPath = Join-Path $PSScriptRoot '..\Scripts\deploy-sophos.ps1'
+        $raw = Get-Content -LiteralPath $scriptPath -Raw
+        foreach ($text in @(
+            '[string]$ConfigDir',
+            '[string]$DeviceId = ''sophos-firewall''',
+            'function Get-SophosHookProfileSettings',
+            'Get-DeviceConfig -DeviceId $DeviceId',
+            'Apply-SophosHookProfileSettings',
+            'bind_admin_portal',
+            'bind_vpn_portal',
+            'bind_user_portal',
+            'waf_rule_names',
+            'pfx_password_secure_file',
+            'Configure the Sophos device profile before running the hook.'
+        )) {
+            if ($raw -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos scheduled hook config loading wiring: $text"
+            }
+        }
+    }
 }
