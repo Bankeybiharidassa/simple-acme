@@ -173,75 +173,7 @@ function Invoke-KempProfileForm {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
-    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
-    $fields = Get-KempProfileFields
-    $current = Get-KempProfileValues -ProjectRoot $ProjectRoot
-    $values = @{}
-    foreach ($key in $current.Keys) { $values[[string]$key] = [string]$current[$key] }
-
-    Write-Host 'Kemp LoadMaster connection profile'
-    Write-Host '----------------------------------'
-    Write-Host 'Press Esc at any question to cancel.'
-    Write-Host ''
-
-    foreach ($field in $fields) {
-        $name = [string]$field['Name']
-        $label = if ($field.ContainsKey('Label')) { [string]$field['Label'] } else { $name }
-        $required = ($field.ContainsKey('Required') -and [bool]$field['Required'])
-        $prompt = if ($required) { "$label *" } else { $label }
-        $default = Get-DeviceProfileFieldDefault -Field $field -CurrentValues $values
-        $type = if ($field.ContainsKey('Type')) { [string]$field['Type'] } else { 'string' }
-        $isSecret = ($type -eq 'secret') -or ($name -match '(?i)password|api_key|token|secret')
-        while ($true) {
-            $answer = Read-DeviceProfileConsoleLine -Prompt $prompt -Default $default -Secret:$isSecret
-            if ($null -eq $answer) { return [pscustomobject]@{ Status = 'Canceled' } }
-            if ($required -and [string]::IsNullOrWhiteSpace($answer)) { Write-Host 'This value is required.' -ForegroundColor Yellow; continue }
-            $values[$name] = [string]$answer
-            break
-        }
-    }
-
-    $values = Remove-DeviceProfilePlaceholderValues -Values $values -Fields $fields
-    $values = Add-DeviceProfileDefaults -Values $values -Fields $fields
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -Values $values -SecretFields @('password','api_key') -DefaultDeviceId 'kemp-loadmaster'
-    Show-DeviceProfileSummary -Title 'Saved Kemp connection profile' -Values $values -Fields $fields
-
-    $shouldTest = Read-DeviceProfileGuidedYesNo -Prompt 'Test communication with Kemp now?' -Default $true
-    if ($null -eq $shouldTest) { return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir } }
-    if ($shouldTest) {
-        try {
-            $result = Invoke-KempProfileCommunicationTest -ProjectRoot $ProjectRoot -Values $values
-            $path = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType 'kemp' -Data $result
-            Write-Host ''
-            Write-Host 'Communication test summary'
-            Write-Host '--------------------------'
-            Write-Host ("Status: {0}" -f $result.Status)
-            Write-Host ("Message: {0}" -f $result.Message)
-            Write-Host ("Endpoint: {0}" -f $result.Endpoint)
-            Write-Host ("Log: {0}" -f $path)
-            $values = Invoke-KempTargetSelection -ProjectRoot $ProjectRoot -Values $values
-            Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -Values $values -SecretFields @('password','api_key') -DefaultDeviceId 'kemp-loadmaster'
-            Show-DeviceProfileSummary -Title 'Saved Kemp certificate targets' -Values $values -Fields ($fields + @(
-                @{ Name='virtual_service_ids'; Label='Virtual service IDs'; Type='string' },
-                @{ Name='certificate_name'; Label='Name in Kemp certificate store'; Type='string' }
-            ))
-        } catch {
-            $result = [pscustomobject]@{ Status = 'Failed'; Message = $_.Exception.Message }
-            $path = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType 'kemp' -Data $result
-            Write-Host ''
-            Write-Host 'Communication test summary'
-            Write-Host '--------------------------'
-            Write-Host 'Status: Failed'
-            Write-Host ("Message: {0}" -f $_.Exception.Message)
-            Write-Host ("Log: {0}" -f $path)
-        }
-        Wait-DeviceProfileOperatorKey
-    } else {
-        Write-Host ''
-        Write-Host 'Communication test skipped by operator.'
-        Wait-DeviceProfileOperatorKey
-    }
-    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir }
+    Invoke-DeviceProfileConnectorWizard -ProjectRoot $ProjectRoot -ConnectorType 'kemp'
 }
 
 function Invoke-KempDiagnostics {

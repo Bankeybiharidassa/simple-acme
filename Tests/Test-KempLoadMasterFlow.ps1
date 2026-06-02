@@ -44,6 +44,22 @@ function Invoke-TestKempLoadMasterFlow {
         }
     }
 
+    & $Assert 'Dedicated Kemp profile action uses shared managed-device editor' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            "Invoke-DeviceProfileConnectorWizard -ProjectRoot `$ProjectRoot -ConnectorType 'kemp'",
+            'function Invoke-DeviceProfileConnectorWizard',
+            'Invoke-DeviceProfileEditorForChoice -ProjectRoot $ProjectRoot'
+        )) {
+            $source = if ($text -eq 'function Invoke-DeviceProfileConnectorWizard' -or $text -eq 'Invoke-DeviceProfileEditorForChoice -ProjectRoot $ProjectRoot') {
+                Get-Content -LiteralPath (Join-Path $root 'setup\Device-Profile-Runner.psm1') -Raw
+            } else {
+                $runner
+            }
+            if (-not $source.Contains($text)) { throw "Missing shared Kemp profile editor wiring: $text" }
+        }
+    }
+
     & $Assert 'Kemp is supported during first-run issuance with PFX hook parameters' {
         $registry = Get-Content -LiteralPath $registryPath -Raw
         foreach ($text in @(

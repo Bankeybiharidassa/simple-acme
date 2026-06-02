@@ -721,6 +721,59 @@ function Invoke-DeviceProfileWizard {
     return Invoke-DeviceProfileForm -ProjectRoot $ProjectRoot -ConnectorType $selected.ConnectorType -DeviceId $selectedDeviceId -FriendlyName $friendlyName
 }
 
+function Invoke-DeviceProfileConnectorWizard {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConnectorType
+    )
+
+    $schemaChoices = @(Get-DeviceProfileSchemaChoices -ProjectRoot $ProjectRoot)
+    $selected = @($schemaChoices | Where-Object { [string]$_.ConnectorType -eq $ConnectorType } | Select-Object -First 1)
+    if ($selected.Count -lt 1 -or $null -eq $selected[0]) {
+        throw "No setup schema is available for connector type '$ConnectorType'."
+    }
+    $selected = $selected[0]
+
+    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    $existingProfiles = @(Get-AllDeviceConfigs -ConfigDir $configDir -SkipIntegrityFailures | Where-Object {
+        $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]($_['connector_type']) -eq [string]$selected.ConnectorType
+    } | Sort-Object @{ Expression = { if ($_ -is [System.Collections.IDictionary] -and $_.ContainsKey('label')) { [string]($_['label']) } else { '' } } })
+
+    $selectedDeviceId = ''
+    $friendlyName = ''
+    if ($existingProfiles.Count -gt 0) {
+        $profileChoices = @([pscustomobject]@{ Kind = 'new'; Device = $null; Label = ("Create new {0}" -f $selected.Label) })
+        foreach ($profile in $existingProfiles) {
+            $label = if ($profile.ContainsKey('label') -and -not [string]::IsNullOrWhiteSpace([string]$profile['label'])) { [string]$profile['label'] } else { [string]$profile['device_id'] }
+            $profileChoices += [pscustomobject]@{ Kind = 'existing'; Device = $profile; Label = ("Edit {0} ({1})" -f $label, [string]$profile['device_id']) }
+        }
+        $profileChoice = Select-DeviceProfileNumberedItem -Title ("{0}: choose profile" -f $selected.Label) -Items $profileChoices -LabelSelector {
+            param($item)
+            return [string]$item.Label
+        }
+        if ($null -eq $profileChoice) { return [pscustomobject]@{ Status = 'Canceled' } }
+        if ([string]$profileChoice.Kind -eq 'existing') {
+            $selectedDeviceId = [string]$profileChoice.Device['device_id']
+            $friendlyName = if ($profileChoice.Device.ContainsKey('label') -and -not [string]::IsNullOrWhiteSpace([string]$profileChoice.Device['label'])) { [string]$profileChoice.Device['label'] } else { $selected.Label }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($selectedDeviceId)) {
+        Clear-Host
+        Write-Host ("Create {0} profile" -f $selected.Label)
+        Write-Host ('-' * ("Create {0} profile" -f $selected.Label).Length)
+        Write-Host 'Give this device a short friendly name operators can recognize later.'
+        Write-Host ''
+        $friendlyName = Read-DeviceProfileConsoleLine -Prompt 'Friendly name' -Default ([string]$selected.Label)
+        if ($null -eq $friendlyName) { return [pscustomobject]@{ Status = 'Canceled' } }
+        if ([string]::IsNullOrWhiteSpace($friendlyName)) { $friendlyName = [string]$selected.Label }
+        $selectedDeviceId = New-DeviceProfileId -ConfigDir $configDir -ConnectorType ([string]$selected.ConnectorType) -FriendlyName $friendlyName
+    }
+
+    return Invoke-DeviceProfileEditorForChoice -ProjectRoot $ProjectRoot -Choice $selected -DeviceId $selectedDeviceId -FriendlyName $friendlyName
+}
+
 function Get-DeviceProfileSchemaChoices {
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
@@ -997,4 +1050,4 @@ function Invoke-DeviceProfileInventory {
     return [pscustomobject]@{ Status = 'Shown'; Count = $devices.Count; ConfigDir = $configDir }
 }
 
-Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId
+Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileConnectorWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId
