@@ -462,7 +462,7 @@ function Invoke-KempDeviceProfileApiTest {
         $services = @(Get-KempVirtualServices -HostName $hostName -Port $port -ApiKey $apiKey -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 60)
         return [pscustomobject]@{
             Status = 'Succeeded'
-            Message = "Kemp APIv2 connected and returned $($services.Count) virtual service(s)."
+            Message = "Kemp API connected and returned $($services.Count) virtual service(s)."
             Endpoint = $endpoint
             Host = $hostName
             Port = $port

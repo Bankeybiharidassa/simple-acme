@@ -150,12 +150,12 @@ $DeviceSchemas = @{
         @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='ADC_PASSWORD'; HelpText='Environment variable name for NITRO API password' },
         @{ Name='vserver'; Label='vServer'; Type='string'; Required=$true; Placeholder='prod-vsrv'; HelpText='Target virtual server name' }
     )}
-    kemp = @{ ConnectorType='kemp'; Label='Kemp LoadMaster'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_key'; Label='Kemp APIv2 key'; DefaultPort='443' },@{ Key='api_basic'; Label='Kemp APIv2 username and password'; DefaultPort='443' }); Fields=@(
+    kemp = @{ ConnectorType='kemp'; Label='Kemp LoadMaster'; Category='network_appliance'; SetupMode='guided'; Fields=@(
         @{ Name='host'; Label='LoadMaster address'; Type='string'; Required=$true; Placeholder='192.168.45.150'; HelpText='Kemp LoadMaster management IP or DNS name.' },
         @{ Name='port'; Label='Management/API port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS management/API port. Default is 443.' },
-        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='bal'; Placeholder='bal'; HelpText='Optional API username. API key is preferred when available.'; Methods=@('api_basic') },
-        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional API password. Leave empty when using API key only.'; Methods=@('api_basic') },
-        @{ Name='api_key'; Label='API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='Kemp API key. Preferred for scheduled renewal hooks.'; Methods=@('api_key') },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='bal'; Placeholder='bal'; HelpText='LoadMaster administrator username. Used for classic /access API and as APIv2 fallback.' },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='LoadMaster administrator password. Used when APIv2 is unavailable and classic /access is enabled.' },
+        @{ Name='api_key'; Label='API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='Kemp APIv2 key. Leave empty when the LoadMaster only exposes the classic /access API.' },
         @{ Name='skip_certificate_check'; Label='Ignore LoadMaster TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed LoadMaster management certificates.' },
         @{ Name='virtual_service_ids'; Label='Virtual service IDs'; Type='string'; Required=$false; Placeholder='1'; HelpText='Selected LoadMaster virtual service IDs. Use the Kemp-specific target selection to fill this safely.' },
         @{ Name='certificate_name'; Label='Name in Kemp certificate store'; Type='string'; Required=$false; Placeholder='wildcard_example_com'; HelpText='Certificate object name uploaded to the LoadMaster.' }

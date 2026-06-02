@@ -9,6 +9,8 @@
     PowerShellVersion = '5.1'
     FunctionsToExport = @(
         'Invoke-KempApiV2',
+        'Invoke-KempClassicApi',
+        'Invoke-KempApi',
         'Connect-KempLoadMaster',
         'Get-KempVirtualServices',
         'Import-KempCertificate',

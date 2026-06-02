@@ -8,14 +8,21 @@ function New-KempApiEndpoint {
     param(
         [Parameter(Mandatory)][string]$HostName,
         [ValidateRange(1, 65535)][int]$Port = 443,
-        [switch]$UseHttp
+        [switch]$UseHttp,
+        [ValidateSet('v2','classic')][string]$ApiVersion = 'v2',
+        [string]$Command = ''
     )
 
     $scheme = if ($UseHttp) { 'http' } else { 'https' }
-    if (($scheme -eq 'https' -and $Port -eq 443) -or ($scheme -eq 'http' -and $Port -eq 80)) {
-        return "$scheme`://$HostName/accessv2"
+    $path = if ($ApiVersion -eq 'classic') {
+        if ([string]::IsNullOrWhiteSpace($Command)) { 'access' } else { 'access/' + [Uri]::EscapeDataString($Command) }
+    } else {
+        'accessv2'
     }
-    return "$scheme`://$HostName`:$Port/accessv2"
+    if (($scheme -eq 'https' -and $Port -eq 443) -or ($scheme -eq 'http' -and $Port -eq 80)) {
+        return "$scheme`://$HostName/$path"
+    }
+    return "$scheme`://$HostName`:$Port/$path"
 }
 
 function Invoke-KempWithCertificatePolicy {
@@ -134,6 +141,87 @@ function Invoke-KempApiV2 {
     }
 }
 
+function Invoke-KempClassicApi {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [ValidateRange(1, 65535)][int]$Port = 443,
+        [Parameter(Mandatory)][string]$Command,
+        [hashtable]$Parameters = @{},
+        [string]$Username = '',
+        [string]$Password = '',
+        [switch]$UseHttp,
+        [switch]$SkipCertificateCheck,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Username) -or [string]::IsNullOrWhiteSpace($Password)) {
+        throw 'Kemp classic /access API requires LoadMaster username and password.'
+    }
+
+    $endpoint = New-KempApiEndpoint -HostName $HostName -Port $Port -UseHttp:$UseHttp -ApiVersion classic -Command $Command
+    if ($Parameters.Count -gt 0) {
+        $pairs = @()
+        foreach ($key in $Parameters.Keys) {
+            $pairs += ('{0}={1}' -f [Uri]::EscapeDataString([string]$key), [Uri]::EscapeDataString([string]$Parameters[$key]))
+        }
+        $endpoint = $endpoint + '?' + ($pairs -join '&')
+    }
+
+    $secure = ConvertTo-SecureString -String $Password -AsPlainText -Force
+    $credential = New-Object Management.Automation.PSCredential($Username, $secure)
+
+    try {
+        Invoke-KempWithCertificatePolicy -SkipCertificateCheck:$SkipCertificateCheck -ScriptBlock {
+            Invoke-RestMethod -Uri $endpoint -Method Get -Credential $credential -TimeoutSec $TimeoutSeconds
+        }
+    } catch [System.Net.WebException] {
+        $response = $_.Exception.Response
+        if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
+            throw "Kemp classic API endpoint returned 404 at $endpoint. Enable RESTful API access on the LoadMaster and confirm the management port."
+        }
+        throw
+    } catch {
+        throw
+    }
+}
+
+function Invoke-KempApi {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [ValidateRange(1, 65535)][int]$Port = 443,
+        [Parameter(Mandatory)][string]$Command,
+        [hashtable]$Parameters = @{},
+        [string]$ApiKey = '',
+        [string]$Username = '',
+        [string]$Password = '',
+        [switch]$UseHttp,
+        [switch]$SkipCertificateCheck,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
+    )
+
+    $apiV2Endpoint = New-KempApiEndpoint -HostName $HostName -Port $Port -UseHttp:$UseHttp -ApiVersion v2
+    $classicEndpoint = New-KempApiEndpoint -HostName $HostName -Port $Port -UseHttp:$UseHttp -ApiVersion classic -Command $Command
+    $apiV2Failure = ''
+
+    try {
+        return Invoke-KempApiV2 -HostName $HostName -Port $Port -Command $Command -Parameters $Parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    } catch [System.Net.WebException] {
+        if ($_.Exception.Response -eq $null -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+        $apiV2Failure = $_.Exception.Message
+    } catch {
+        if ($_.Exception.Message -notmatch 'Kemp APIv2 endpoint returned 404') { throw }
+        $apiV2Failure = $_.Exception.Message
+    }
+
+    try {
+        return Invoke-KempClassicApi -HostName $HostName -Port $Port -Command $Command -Parameters $Parameters -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        throw "Kemp API did not respond on either supported REST endpoint. Tried APIv2 $apiV2Endpoint and classic $classicEndpoint. APIv2 result: $apiV2Failure Classic result: $($_.Exception.Message)"
+    }
+}
+
 function Connect-KempLoadMaster {
     [CmdletBinding()]
     param(
@@ -147,7 +235,7 @@ function Connect-KempLoadMaster {
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
     )
 
-    Invoke-KempApiV2 -HostName $HostName -Port $Port -Command 'listapi' -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    Invoke-KempApi -HostName $HostName -Port $Port -Command 'listvs' -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
 }
 
 function Get-KempResponseData {
@@ -171,7 +259,7 @@ function Get-KempVirtualServices {
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
     )
 
-    $response = Invoke-KempApiV2 -HostName $HostName -Port $Port -Command 'listvs' -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    $response = Invoke-KempApi -HostName $HostName -Port $Port -Command 'listvs' -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
     $data = Get-KempResponseData -Response $response
     if ($null -eq $data) { return @() }
 
@@ -239,7 +327,7 @@ function Import-KempCertificate {
     $data = [Convert]::ToBase64String([IO.File]::ReadAllBytes($PemBundlePath))
     $parameters = @{ cert = $CertificateName; data = $data; replace = $(if ($Replace) { '1' } else { '0' }) }
     if ($PSCmdlet.ShouldProcess($HostName, "Upload Kemp certificate '$CertificateName'")) {
-        Invoke-KempApiV2 -HostName $HostName -Port $Port -Command 'addcert' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        Invoke-KempApi -HostName $HostName -Port $Port -Command 'addcert' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
     }
 }
 
@@ -260,7 +348,7 @@ function Set-KempVirtualServiceCertificate {
 
     $parameters = @{ vs = $VirtualServiceId; cert = $CertificateName }
     if ($PSCmdlet.ShouldProcess($HostName, "Bind Kemp certificate '$CertificateName' to VS '$VirtualServiceId'")) {
-        Invoke-KempApiV2 -HostName $HostName -Port $Port -Command 'modvs' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        Invoke-KempApi -HostName $HostName -Port $Port -Command 'modvs' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
     }
 }
 
@@ -279,9 +367,9 @@ function Test-KempVirtualServiceCertificate {
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
     )
 
-    $response = Invoke-KempApiV2 -HostName $HostName -Port $Port -Command 'showvs' -Parameters @{ vs = $VirtualServiceId } -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    $response = Invoke-KempApi -HostName $HostName -Port $Port -Command 'showvs' -Parameters @{ vs = $VirtualServiceId } -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
     $text = $response | ConvertTo-Json -Depth 20 -Compress
     return ($text -match [regex]::Escape($CertificateName))
 }
 
-Export-ModuleMember -Function Invoke-KempApiV2,Connect-KempLoadMaster,Get-KempVirtualServices,Import-KempCertificate,Set-KempVirtualServiceCertificate,Test-KempVirtualServiceCertificate,Convert-KempPfxToPemBundle,Resolve-KempPassword,New-KempApiEndpoint
+Export-ModuleMember -Function Invoke-KempApiV2,Invoke-KempClassicApi,Invoke-KempApi,Connect-KempLoadMaster,Get-KempVirtualServices,Import-KempCertificate,Set-KempVirtualServiceCertificate,Test-KempVirtualServiceCertificate,Convert-KempPfxToPemBundle,Resolve-KempPassword,New-KempApiEndpoint

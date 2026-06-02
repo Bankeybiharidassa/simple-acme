@@ -80,7 +80,7 @@ function Invoke-TestKempLoadMasterFlow {
         }
     }
 
-    & $Assert 'Kemp hook is real APIv2 deployment code, not placeholder apply/verify' {
+    & $Assert 'Kemp hook supports APIv2 and classic REST deployment code, not placeholders' {
         foreach ($path in @($hookPath,$modulePath,$manifestPath)) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing Kemp runtime file: $path" }
         }
@@ -92,6 +92,9 @@ function Invoke-TestKempLoadMasterFlow {
             'Set-KempVirtualServiceCertificate',
             'Test-KempVirtualServiceCertificate',
             'accessv2',
+            "ApiVersion classic",
+            'Invoke-KempClassicApi',
+            'Invoke-KempApi',
             'addcert',
             'modvs'
         )) {
