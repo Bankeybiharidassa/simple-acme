@@ -35,13 +35,16 @@ REST procedures tested:
 
 ## Current Conclusion
 
-The LoadMaster management UI is reachable, but the certificate deployment API is not currently exposed on the configured management port from this workstation.
+The LoadMaster management UI is reachable, and the provided lab credentials can complete a normal WUI form login.
+
+The certificate deployment API is not currently exposed on the configured management port from this workstation. The documented classic REST paths and APIv2 path return the LoadMaster's own `404 Not found` page even after WUI login. This points to the REST API interface route being disabled or not exposed on this management listener, not to a bad TCP path.
 
 The simple-acme Kemp communication test should therefore report:
 
 - Management UI: reachable.
 - REST certificate API: failed.
 - Attempted REST endpoints: APIv2 `/accessv2` and classic `/access/listvs`.
+- Likely next setting to verify in the WUI: Certificates & Security > Remote Access > Enable API Interface.
 
 This is not enough for automatic certificate deployment. Certificate target selection and renewal-hook deployment need REST API access to return `listvs`.
 

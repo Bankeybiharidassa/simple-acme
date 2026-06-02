@@ -133,7 +133,7 @@ function Invoke-KempApiV2 {
     } catch [System.Net.WebException] {
         $response = $_.Exception.Response
         if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
-            throw "Kemp APIv2 endpoint returned 404 at $endpoint. Enable RESTful API/APIv2 access on the LoadMaster and confirm the management port."
+            throw "Kemp APIv2 endpoint returned 404 at $endpoint. The LoadMaster WUI may still be reachable when the REST API route is disabled. In Certificates & Security > Remote Access, enable the API interface and confirm this management listener exposes REST."
         }
         throw
     } catch {
@@ -178,7 +178,7 @@ function Invoke-KempClassicApi {
     } catch [System.Net.WebException] {
         $response = $_.Exception.Response
         if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
-            throw "Kemp classic API endpoint returned 404 at $endpoint. Enable RESTful API access on the LoadMaster and confirm the management port."
+            throw "Kemp classic API endpoint returned 404 at $endpoint. The LoadMaster WUI may still be reachable when the REST API route is disabled. In Certificates & Security > Remote Access, enable the API interface and confirm this management listener exposes REST."
         }
         throw
     } catch {
