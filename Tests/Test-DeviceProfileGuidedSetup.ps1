@@ -11,25 +11,31 @@ function Invoke-TestDeviceProfileGuidedSetup {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         foreach ($text in @(
             'function Invoke-DeviceProfileWizard',
+            'function Invoke-DeviceProfileInventory',
             'function Invoke-GuidedDeviceProfileForm',
             'function Invoke-DeviceProfileTcpTest',
+            'function New-DeviceProfileId',
             'Read-DeviceProfileConsoleLine',
             'Export-ModuleMember -Function',
-            'Invoke-DeviceProfileWizard'
+            'Invoke-DeviceProfileWizard',
+            'Invoke-DeviceProfileInventory'
         )) {
             if ($runner -notlike "*$text*") { throw "Missing guided profile runner wiring: $text" }
         }
 
         $menu = Get-Content -LiteralPath $menuPath -Raw
-        if ($menu -notlike '*Create or edit any device profile*' -or $menu -notlike "*Key='device-profile'*") {
+        if ($menu -notlike '*Create or edit any device profile*' -or $menu -notlike "*Key='device-profile'*" -or $menu -notlike '*View configured devices*' -or $menu -notlike "*Key='device-inventory'*") {
             throw 'Deployment targets menu does not expose the generic device profile wizard.'
         }
 
         $setup = Get-Content -LiteralPath $setupPath -Raw
         foreach ($text in @(
             "Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard'",
+            "Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileInventory'",
             "'device-profile'",
-            'Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot'
+            "'device-inventory'",
+            'Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot',
+            'Invoke-DeviceProfileInventory -ProjectRoot $PSScriptRoot'
         )) {
             if ($setup -notlike "*$text*") { throw "certificate-setup.ps1 missing device-profile dispatch: $text" }
         }
@@ -72,6 +78,32 @@ function Invoke-TestDeviceProfileGuidedSetup {
             'Protocol authentication was not attempted by the generic profile test'
         )) {
             if (-not $runner.Contains($text)) { throw "Missing guided interaction behavior: $text" }
+        }
+    }
+
+    & $Assert 'Device profile persistence supports multiple devices with friendly names' {
+        Import-Module $runnerPath -Force
+        $tempRoot = Join-Path $env:TEMP ("simple-acme-device-profiles-{0}" -f ([guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        try {
+            Save-DeviceProfile -ConfigDir $tempRoot -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -FriendlyName 'Kemp lab A' -DeviceId 'kemp-lab-a' -Values @{ host='192.0.2.10'; port='443' }
+            Save-DeviceProfile -ConfigDir $tempRoot -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -FriendlyName 'Kemp lab B' -DeviceId 'kemp-lab-b' -Values @{ host='192.0.2.11'; port='443' }
+
+            $devices = @(Get-AllDeviceConfigs -ConfigDir $tempRoot -SkipIntegrityFailures | Where-Object { $_['connector_type'] -eq 'kemp' })
+            if ($devices.Count -ne 2) { throw "Expected 2 Kemp profiles, found $($devices.Count)." }
+            $labels = @($devices | ForEach-Object { [string]($_['label']) } | Sort-Object)
+            if (($labels -join '|') -ne 'Kemp lab A|Kemp lab B') { throw "Friendly names were not preserved: $($labels -join ', ')" }
+
+            $currentA = Get-DeviceProfileCurrentValues -ConfigDir $tempRoot -ConnectorType 'kemp' -DeviceId 'kemp-lab-a'
+            $currentB = Get-DeviceProfileCurrentValues -ConfigDir $tempRoot -ConnectorType 'kemp' -DeviceId 'kemp-lab-b'
+            if ([string]$currentA['host'] -ne '192.0.2.10') { throw 'Device A current values were not loaded by device id.' }
+            if ([string]$currentB['host'] -ne '192.0.2.11') { throw 'Device B current values were not loaded by device id.' }
+
+            Save-DeviceProfile -ConfigDir $tempRoot -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -FriendlyName 'Kemp generated' -Values @{ host='192.0.2.12'; port='443' }
+            $nextId = New-DeviceProfileId -ConfigDir $tempRoot -ConnectorType 'kemp' -FriendlyName 'Kemp generated'
+            if ($nextId -ne 'kemp-kemp-generated-2') { throw "Expected unique friendly-name id suffix, got '$nextId'." }
+        } finally {
+            if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
         }
     }
 }

@@ -188,17 +188,104 @@ function Select-DeviceProfileNumberedItem {
     }
 }
 
+function ConvertTo-DeviceProfileIdPart {
+    param([string]$Value)
+
+    $text = if ([string]::IsNullOrWhiteSpace($Value)) { 'device' } else { $Value.Trim().ToLowerInvariant() }
+    $text = [regex]::Replace($text, '[^a-z0-9]+', '-')
+    $text = $text.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($text)) { return 'device' }
+    return $text
+}
+
+function Get-DeviceProfileById {
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$DeviceId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) { return $null }
+    try {
+        return Get-DeviceConfig -ConfigDir $ConfigDir -DeviceId $DeviceId
+    } catch {
+        return $null
+    }
+}
+
+function New-DeviceProfileId {
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$ConnectorType,
+        [Parameter(Mandatory)][string]$FriendlyName
+    )
+
+    $connectorPart = ConvertTo-DeviceProfileIdPart -Value $ConnectorType
+    $namePart = ConvertTo-DeviceProfileIdPart -Value $FriendlyName
+    $baseId = "$connectorPart-$namePart"
+    $candidate = $baseId
+    $suffix = 2
+    while ($null -ne (Get-DeviceProfileById -ConfigDir $ConfigDir -DeviceId $candidate)) {
+        $candidate = "{0}-{1}" -f $baseId, $suffix
+        $suffix++
+    }
+    return $candidate
+}
+
+function Get-DeviceProfileEndpointSummary {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Device)
+
+    $settings = if ($Device.ContainsKey('settings') -and $Device['settings'] -is [System.Collections.IDictionary]) { $Device['settings'] } else { @{} }
+    $host = ''
+    foreach ($key in @('host','hostname','address','management_host','firewall_address','endpoint')) {
+        if ($settings.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$settings[$key])) {
+            $host = [string]$settings[$key]
+            break
+        }
+    }
+    $port = ''
+    foreach ($key in @('port','api_port','admin_port','management_port')) {
+        if ($settings.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$settings[$key])) {
+            $port = [string]$settings[$key]
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($host) -and [string]::IsNullOrWhiteSpace($port)) { return '<not set>' }
+    if ([string]::IsNullOrWhiteSpace($port)) { return $host }
+    if ([string]::IsNullOrWhiteSpace($host)) { return "port $port" }
+    return "{0}:{1}" -f $host, $port
+}
+
+function Get-DeviceProfileTargetSummary {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Device)
+
+    $settings = if ($Device.ContainsKey('settings') -and $Device['settings'] -is [System.Collections.IDictionary]) { $Device['settings'] } else { @{} }
+    $parts = @()
+    foreach ($key in @('virtual_service_ids','waf_rule_names','bind_admin_portal','bind_vpn_portal','bind_user_portal','bind_waf_rules','target_names')) {
+        if ($settings.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$settings[$key])) {
+            $parts += ("{0}={1}" -f $key, (ConvertTo-DeviceProfileDisplayValue -Name $key -Value $settings[$key]))
+        }
+    }
+    if ($parts.Count -lt 1) { return '<not set>' }
+    return ($parts -join '; ')
+}
+
 function Get-DeviceProfileCurrentValues {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
         [Parameter(Mandatory)][string]$ConnectorType,
+        [string]$DeviceId = '',
         [string[]]$CertificateRuntimeKeys = @(),
         [hashtable]$PlaintextSecretNameFields = @{}
     )
 
-    $existing = @(Get-AllDeviceConfigs -ConfigDir $ConfigDir -SkipIntegrityFailures | Where-Object {
-        $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]($_['connector_type']) -eq $ConnectorType
-    } | Select-Object -First 1)
+    if (-not [string]::IsNullOrWhiteSpace($DeviceId)) {
+        $existingDevice = Get-DeviceProfileById -ConfigDir $ConfigDir -DeviceId $DeviceId
+        $existing = @($existingDevice)
+    } else {
+        $existing = @(Get-AllDeviceConfigs -ConfigDir $ConfigDir -SkipIntegrityFailures | Where-Object {
+            $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]($_['connector_type']) -eq $ConnectorType
+        } | Select-Object -First 1)
+    }
     if ($existing.Count -lt 1 -or $null -eq $existing[0]) { return @{} }
     if (-not ($existing[0] -is [System.Collections.IDictionary]) -or -not $existing[0].ContainsKey('settings')) { return @{} }
     $settings = $existing[0]['settings']
@@ -336,22 +423,27 @@ function Save-DeviceProfile {
         [Parameter(Mandatory)][string]$Label,
         [Parameter(Mandatory)][hashtable]$Values,
         [string[]]$SecretFields = @(),
-        [string]$DefaultDeviceId = ''
+        [string]$DefaultDeviceId = '',
+        [string]$DeviceId = '',
+        [string]$FriendlyName = ''
     )
 
     $now = (Get-Date).ToUniversalTime().ToString('o')
-    $existing = @(Get-AllDeviceConfigs -ConfigDir $ConfigDir -SkipIntegrityFailures | Where-Object {
-        $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]($_['connector_type']) -eq $ConnectorType
-    } | Select-Object -First 1)
-
-    $deviceId = if (-not [string]::IsNullOrWhiteSpace($DefaultDeviceId)) { $DefaultDeviceId } else { "$ConnectorType-device" }
-    $createdAt = $now
-    if ($existing.Count -gt 0 -and $null -ne $existing[0] -and $existing[0] -is [System.Collections.IDictionary]) {
-        if ($existing[0].ContainsKey('device_id') -and -not [string]::IsNullOrWhiteSpace([string]$existing[0]['device_id'])) {
-            $deviceId = [string]$existing[0]['device_id']
+    $effectiveLabel = if (-not [string]::IsNullOrWhiteSpace($FriendlyName)) { $FriendlyName.Trim() } else { $Label }
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        if (-not [string]::IsNullOrWhiteSpace($DefaultDeviceId)) {
+            $DeviceId = $DefaultDeviceId
+        } else {
+            $DeviceId = New-DeviceProfileId -ConfigDir $ConfigDir -ConnectorType $ConnectorType -FriendlyName $effectiveLabel
         }
-        if ($existing[0].ContainsKey('created_at') -and -not [string]::IsNullOrWhiteSpace([string]$existing[0]['created_at'])) {
-            $createdAt = [string]$existing[0]['created_at']
+    }
+
+    $deviceId = $DeviceId.Trim()
+    $createdAt = $now
+    $existing = Get-DeviceProfileById -ConfigDir $ConfigDir -DeviceId $deviceId
+    if ($null -ne $existing -and $existing -is [System.Collections.IDictionary]) {
+        if ($existing.ContainsKey('created_at') -and -not [string]::IsNullOrWhiteSpace([string]$existing['created_at'])) {
+            $createdAt = [string]$existing['created_at']
         }
     }
 
@@ -360,7 +452,7 @@ function Save-DeviceProfile {
     $device = @{
         device_id = $deviceId
         connector_type = $ConnectorType
-        label = $Label
+        label = $effectiveLabel
         created_at = $createdAt
         updated_at = $now
         settings = $settings
@@ -374,7 +466,9 @@ function Invoke-GuidedDeviceProfileForm {
         [Parameter(Mandatory)][string]$ProjectRoot,
         [Parameter(Mandatory)][string]$ConnectorType,
         [string]$Title = '',
-        [string]$DefaultDeviceId = ''
+        [string]$DefaultDeviceId = '',
+        [string]$DeviceId = '',
+        [string]$FriendlyName = ''
     )
 
     $schemaPath = Join-Path $ProjectRoot 'setup/Device-Schemas.ps1'
@@ -382,8 +476,9 @@ function Invoke-GuidedDeviceProfileForm {
     if (-not $DeviceSchemas.ContainsKey($ConnectorType)) { throw "Device schema '$ConnectorType' was not found in $schemaPath" }
     $schema = $DeviceSchemas[$ConnectorType]
     $profileLabel = if ($schema.ContainsKey('Label') -and -not [string]::IsNullOrWhiteSpace([string]$schema.Label)) { [string]$schema.Label } else { $ConnectorType }
+    $displayLabel = if (-not [string]::IsNullOrWhiteSpace($FriendlyName)) { $FriendlyName.Trim() } else { $profileLabel }
     $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
-    $currentValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType $ConnectorType) -Fields @($schema.Fields)
+    $currentValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType $ConnectorType -DeviceId $DeviceId) -Fields @($schema.Fields)
     $values = @{}
     foreach ($key in $currentValues.Keys) { $values[[string]$key] = [string]$currentValues[$key] }
 
@@ -406,7 +501,7 @@ function Invoke-GuidedDeviceProfileForm {
     }
 
     Clear-Host
-    $formTitle = if (-not [string]::IsNullOrWhiteSpace($Title)) { $Title } else { "{0} guided device profile" -f $profileLabel }
+    $formTitle = if (-not [string]::IsNullOrWhiteSpace($Title)) { $Title } else { "{0} guided device profile" -f $displayLabel }
     Write-Host $formTitle
     Write-Host ('-' * $formTitle.Length)
     Write-Host 'Press Esc at any question to cancel.'
@@ -447,17 +542,17 @@ function Invoke-GuidedDeviceProfileForm {
     }
     $secretFields = @($secretFields | Sort-Object -Unique)
 
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $profileLabel -Values $values -SecretFields $secretFields -DefaultDeviceId $DefaultDeviceId
-    Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $profileLabel) -Values $values -Fields @($schema.Fields)
+    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $profileLabel -Values $values -SecretFields $secretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
+    Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $displayLabel) -Values $values -Fields @($schema.Fields)
 
     $testResult = $null
     $testLogPath = $null
-    $shouldTest = Read-DeviceProfileGuidedYesNo -Prompt ("Test communication with {0} now?" -f $profileLabel) -Default $true
+    $shouldTest = Read-DeviceProfileGuidedYesNo -Prompt ("Test communication with {0} now?" -f $displayLabel) -Default $true
     if ($null -eq $shouldTest) { return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $null } }
     if ($shouldTest) {
         Write-Host ''
-        Write-Host ("Testing communication with {0}..." -f $profileLabel)
-        $testResult = Invoke-DeviceProfileTcpTest -Values $values -Label $profileLabel
+        Write-Host ("Testing communication with {0}..." -f $displayLabel)
+        $testResult = Invoke-DeviceProfileTcpTest -Values $values -Label $displayLabel
         $testLogPath = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType $ConnectorType -Data $testResult
         Write-Host ''
         Write-Host 'Communication test summary'
@@ -502,10 +597,46 @@ function Invoke-DeviceProfileWizard {
         return ("{0} ({1}, {2})" -f $item.Label, $item.Category, $mode)
     }
     if ($null -eq $selected) { return [pscustomobject]@{ Status = 'Canceled' } }
-    if ($selected.Guided) {
-        return Invoke-GuidedDeviceProfileForm -ProjectRoot $ProjectRoot -ConnectorType $selected.ConnectorType
+    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    $existingProfiles = @(Get-AllDeviceConfigs -ConfigDir $configDir -SkipIntegrityFailures | Where-Object {
+        $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]($_['connector_type']) -eq [string]$selected.ConnectorType
+    } | Sort-Object @{ Expression = { if ($_ -is [System.Collections.IDictionary] -and $_.ContainsKey('label')) { [string]($_['label']) } else { '' } } })
+
+    $selectedDeviceId = ''
+    $friendlyName = ''
+    if ($existingProfiles.Count -gt 0) {
+        $profileChoices = @([pscustomobject]@{ Kind = 'new'; Device = $null; Label = ("Create new {0}" -f $selected.Label) })
+        foreach ($profile in $existingProfiles) {
+            $label = if ($profile.ContainsKey('label') -and -not [string]::IsNullOrWhiteSpace([string]$profile['label'])) { [string]$profile['label'] } else { [string]$profile['device_id'] }
+            $profileChoices += [pscustomobject]@{ Kind = 'existing'; Device = $profile; Label = ("Edit {0} ({1})" -f $label, [string]$profile['device_id']) }
+        }
+        $profileChoice = Select-DeviceProfileNumberedItem -Title ("{0}: choose profile" -f $selected.Label) -Items $profileChoices -LabelSelector {
+            param($item)
+            return [string]$item.Label
+        }
+        if ($null -eq $profileChoice) { return [pscustomobject]@{ Status = 'Canceled' } }
+        if ([string]$profileChoice.Kind -eq 'existing') {
+            $selectedDeviceId = [string]$profileChoice.Device['device_id']
+            $friendlyName = if ($profileChoice.Device.ContainsKey('label') -and -not [string]::IsNullOrWhiteSpace([string]$profileChoice.Device['label'])) { [string]$profileChoice.Device['label'] } else { $selected.Label }
+        }
     }
-    return Invoke-DeviceProfileForm -ProjectRoot $ProjectRoot -ConnectorType $selected.ConnectorType
+
+    if ([string]::IsNullOrWhiteSpace($selectedDeviceId)) {
+        Clear-Host
+        Write-Host ("Create {0} profile" -f $selected.Label)
+        Write-Host ('-' * ("Create {0} profile" -f $selected.Label).Length)
+        Write-Host 'Give this device a short friendly name operators can recognize later.'
+        Write-Host ''
+        $friendlyName = Read-DeviceProfileConsoleLine -Prompt 'Friendly name' -Default ([string]$selected.Label)
+        if ($null -eq $friendlyName) { return [pscustomobject]@{ Status = 'Canceled' } }
+        if ([string]::IsNullOrWhiteSpace($friendlyName)) { $friendlyName = [string]$selected.Label }
+        $selectedDeviceId = New-DeviceProfileId -ConfigDir $configDir -ConnectorType ([string]$selected.ConnectorType) -FriendlyName $friendlyName
+    }
+
+    if ($selected.Guided) {
+        return Invoke-GuidedDeviceProfileForm -ProjectRoot $ProjectRoot -ConnectorType $selected.ConnectorType -DeviceId $selectedDeviceId -FriendlyName $friendlyName
+    }
+    return Invoke-DeviceProfileForm -ProjectRoot $ProjectRoot -ConnectorType $selected.ConnectorType -DeviceId $selectedDeviceId -FriendlyName $friendlyName
 }
 
 function Invoke-DeviceProfileForm {
@@ -515,6 +646,8 @@ function Invoke-DeviceProfileForm {
         [Parameter(Mandatory)][string]$ConnectorType,
         [string]$Title = '',
         [string]$DefaultDeviceId = '',
+        [string]$DeviceId = '',
+        [string]$FriendlyName = '',
         [string[]]$CertificateRuntimeKeys = @(),
         [hashtable]$PlaintextSecretNameFields = @{},
         [string[]]$SecretFields = @(),
@@ -526,27 +659,28 @@ function Invoke-DeviceProfileForm {
     if (-not $DeviceSchemas.ContainsKey($ConnectorType)) { throw "Device schema '$ConnectorType' was not found in $schemaPath" }
 
     $schema = $DeviceSchemas[$ConnectorType]
-    $formTitle = if (-not [string]::IsNullOrWhiteSpace($Title)) { $Title } else { "{0} device profile" -f [string]$schema.Label }
     $label = if ($schema.ContainsKey('Label') -and -not [string]::IsNullOrWhiteSpace([string]$schema.Label)) { [string]$schema.Label } else { $ConnectorType }
+    $displayLabel = if (-not [string]::IsNullOrWhiteSpace($FriendlyName)) { $FriendlyName.Trim() } else { $label }
+    $formTitle = if (-not [string]::IsNullOrWhiteSpace($Title)) { $Title } else { "{0} device profile" -f $displayLabel }
     $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
-    $currentValues = Remove-DeviceProfilePlaceholderValues -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType $ConnectorType -CertificateRuntimeKeys $CertificateRuntimeKeys -PlaintextSecretNameFields $PlaintextSecretNameFields) -Fields @($schema.Fields)
+    $currentValues = Remove-DeviceProfilePlaceholderValues -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType $ConnectorType -DeviceId $DeviceId -CertificateRuntimeKeys $CertificateRuntimeKeys -PlaintextSecretNameFields $PlaintextSecretNameFields) -Fields @($schema.Fields)
     $currentValues = Add-DeviceProfileDefaults -Values $currentValues -Fields @($schema.Fields)
     $values = Show-TuiForm -Fields ([hashtable[]]$schema.Fields) -CurrentValues $currentValues -Title $formTitle
     if ($null -eq $values) { return [pscustomobject]@{ Status = 'Canceled' } }
     $values = Remove-DeviceProfilePlaceholderValues -Values $values -Fields @($schema.Fields)
     $values = Add-DeviceProfileDefaults -Values $values -Fields @($schema.Fields)
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId
-    Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $label) -Values $values -Fields @($schema.Fields)
+    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
+    Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $displayLabel) -Values $values -Fields @($schema.Fields)
 
     $testResult = $null
     $testLogPath = $null
     if ($null -ne $CommunicationTest) {
-        $shouldTest = Read-DeviceProfileYesNo -Prompt ("Test communication with {0} now?" -f $label) -Default $true
+        $shouldTest = Read-DeviceProfileYesNo -Prompt ("Test communication with {0} now?" -f $displayLabel) -Default $true
         if ($shouldTest) {
             Write-Host ''
-            Write-Host ("Testing communication with {0}..." -f $label)
+            Write-Host ("Testing communication with {0}..." -f $displayLabel)
             try {
-                $testResult = & $CommunicationTest -ProjectRoot $ProjectRoot -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -Schema $schema
+                $testResult = & $CommunicationTest -ProjectRoot $ProjectRoot -ConfigDir $configDir -ConnectorType $ConnectorType -Label $displayLabel -Values $values -Schema $schema
             } catch {
                 $testResult = [pscustomobject]@{
                     Status = 'Failed'
@@ -568,9 +702,51 @@ function Invoke-DeviceProfileForm {
         }
     }
 
-    Show-TuiStatus -Message ("{0} device profile saved." -f $label) -Type Success -Row ([Math]::Max(0,[Console]::WindowHeight)-2)
+    Show-TuiStatus -Message ("{0} device profile saved." -f $displayLabel) -Type Success -Row ([Math]::Max(0,[Console]::WindowHeight)-2)
     Start-Sleep -Milliseconds 1200
     return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
 }
 
-Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey
+function Invoke-DeviceProfileInventory {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProjectRoot)
+
+    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    $devices = @(Get-AllDeviceConfigs -ConfigDir $configDir -SkipIntegrityFailures | Where-Object {
+        $_ -is [System.Collections.IDictionary]
+    } | Sort-Object `
+        @{ Expression = { if ($_.ContainsKey('connector_type')) { [string]($_['connector_type']) } else { '' } } }, `
+        @{ Expression = { if ($_.ContainsKey('label')) { [string]($_['label']) } else { '' } } }, `
+        @{ Expression = { if ($_.ContainsKey('device_id')) { [string]($_['device_id']) } else { '' } } })
+
+    Clear-Host
+    Write-Host 'Configured devices'
+    Write-Host '------------------'
+    Write-Host ("Config folder: {0}" -f $configDir)
+    Write-Host ''
+    if ($devices.Count -lt 1) {
+        Write-Host 'No device profiles are configured yet.'
+        Wait-DeviceProfileOperatorKey
+        return [pscustomobject]@{ Status = 'Empty'; Count = 0; ConfigDir = $configDir }
+    }
+
+    for ($i = 0; $i -lt $devices.Count; $i++) {
+        $device = $devices[$i]
+        $label = if ($device.ContainsKey('label') -and -not [string]::IsNullOrWhiteSpace([string]$device['label'])) { [string]$device['label'] } else { '<unnamed>' }
+        $deviceId = if ($device.ContainsKey('device_id')) { [string]$device['device_id'] } else { '<missing>' }
+        $connector = if ($device.ContainsKey('connector_type')) { [string]$device['connector_type'] } else { '<missing>' }
+        $updated = if ($device.ContainsKey('updated_at')) { [string]$device['updated_at'] } else { '<unknown>' }
+        Write-Host ("[{0}] {1}" -f ($i + 1), $label)
+        Write-Host ("    Type: {0}" -f $connector)
+        Write-Host ("    Device ID: {0}" -f $deviceId)
+        Write-Host ("    Endpoint: {0}" -f (Get-DeviceProfileEndpointSummary -Device $device))
+        Write-Host ("    Targets: {0}" -f (Get-DeviceProfileTargetSummary -Device $device))
+        Write-Host ("    Updated: {0}" -f $updated)
+        Write-Host ''
+    }
+
+    Wait-DeviceProfileOperatorKey
+    return [pscustomobject]@{ Status = 'Shown'; Count = $devices.Count; ConfigDir = $configDir }
+}
+
+Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileInventory,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId
