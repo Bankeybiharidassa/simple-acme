@@ -27,7 +27,7 @@ function Invoke-KempWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        if (-not $script:KempCertificatePolicyTypeLoaded) {
+        if (-not $script:KempCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmeKempCertificatePolicy' -as [type])) {
             Add-Type -TypeDefinition @'
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
@@ -44,9 +44,11 @@ public static class SimpleAcmeKempCertificatePolicy
     }
 }
 '@ -ErrorAction SilentlyContinue
-            $script:KempCertificatePolicyTypeLoaded = $true
         }
-        $method = [SimpleAcmeKempCertificatePolicy].GetMethod('TrustAnyCertificate')
+        $script:KempCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmeKempCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmeKempCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
         [Net.ServicePointManager]::ServerCertificateValidationCallback =
             [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }

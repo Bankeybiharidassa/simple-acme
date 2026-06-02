@@ -84,6 +84,18 @@ function Invoke-TestKempLoadMasterFlow {
         if ($hook.Contains('Placeholder: implement Kemp REST upload')) { throw 'Kemp hook still contains placeholder upload code.' }
     }
 
+    & $Assert 'Kemp TLS bypass type loader tolerates module reloads' {
+        $module = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            "'SimpleAcmeKempCertificatePolicy' -as [type]",
+            'Unable to load SimpleAcmeKempCertificatePolicy',
+            'RemoteCertificateValidationCallback',
+            'TrustAnyCertificate'
+        )) {
+            if (-not $module.Contains($text)) { throw "Missing Kemp reload-safe TLS callback behavior: $text" }
+        }
+    }
+
     & $Assert 'Kemp files are included in release inventory' {
         $release = Get-Content -LiteralPath $releasePath -Raw
         foreach ($text in @(

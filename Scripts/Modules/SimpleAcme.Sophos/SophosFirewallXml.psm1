@@ -119,7 +119,7 @@ function Invoke-SophosWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        if (-not $script:SophosCertificatePolicyTypeLoaded) {
+        if (-not $script:SophosCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmeSophosCertificatePolicy' -as [type])) {
             Add-Type -TypeDefinition @'
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
@@ -136,9 +136,11 @@ public static class SimpleAcmeSophosCertificatePolicy
     }
 }
 '@ -ErrorAction SilentlyContinue
-            $script:SophosCertificatePolicyTypeLoaded = $true
         }
-        $method = [SimpleAcmeSophosCertificatePolicy].GetMethod('TrustAnyCertificate')
+        $script:SophosCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmeSophosCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmeSophosCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
         [Net.ServicePointManager]::ServerCertificateValidationCallback = [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
     try {

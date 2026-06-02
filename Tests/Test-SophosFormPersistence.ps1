@@ -174,7 +174,9 @@ function Invoke-TestSophosFormPersistence {
             'SimpleAcmeSophosCertificatePolicy',
             'RemoteCertificateValidationCallback',
             'CreateDelegate',
-            'TrustAnyCertificate'
+            'TrustAnyCertificate',
+            "'SimpleAcmeSophosCertificatePolicy' -as [type]",
+            'Unable to load SimpleAcmeSophosCertificatePolicy'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos PowerShell 5.1 certificate callback wiring: $text"
