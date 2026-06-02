@@ -420,6 +420,84 @@ function Invoke-DeviceProfileTcpTest {
     }
 }
 
+function ConvertTo-DeviceProfileBoolean {
+    param([object]$Value, [bool]$Default = $false)
+
+    if ($null -eq $Value) { return $Default }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $Default }
+    switch ($text.ToLowerInvariant()) {
+        { $_ -in @('1','true','yes','y','on') } { return $true }
+        { $_ -in @('0','false','no','n','off') } { return $false }
+        default { return $Default }
+    }
+}
+
+function Invoke-KempDeviceProfileApiTest {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $modulePath = Join-Path $ProjectRoot 'Scripts/Modules/SimpleAcme.Kemp/SimpleAcme.Kemp.psd1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        return [pscustomobject]@{ Status = 'Failed'; Message = "Kemp module was not found: $modulePath"; Label = $Label }
+    }
+
+    Import-Module $modulePath -Force
+    $hostName = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = 443
+    if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [void][int]::TryParse([string]$Values['port'], [ref]$port) }
+    $username = if ($Values.ContainsKey('username')) { [string]$Values['username'] } else { '' }
+    $password = if ($Values.ContainsKey('password')) { [string]$Values['password'] } else { '' }
+    $apiKey = if ($Values.ContainsKey('api_key')) { [string]$Values['api_key'] } else { '' }
+    $skipCertificateCheck = ConvertTo-DeviceProfileBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $true }) -Default $true
+    $endpoint = New-KempApiEndpoint -HostName $hostName -Port $port
+    $started = Get-Date
+
+    try {
+        $null = Connect-KempLoadMaster -HostName $hostName -Port $port -ApiKey $apiKey -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 60
+        $services = @(Get-KempVirtualServices -HostName $hostName -Port $port -ApiKey $apiKey -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 60)
+        return [pscustomobject]@{
+            Status = 'Succeeded'
+            Message = "Kemp APIv2 connected and returned $($services.Count) virtual service(s)."
+            Endpoint = $endpoint
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            VirtualServiceCount = $services.Count
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+            VirtualServices = @($services | Select-Object Id,Address,Port,Protocol,NickName,CurrentCertificate)
+        }
+    } catch {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = $_.Exception.Message
+            Endpoint = $endpoint
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    }
+}
+
+function Invoke-DeviceProfileCommunicationTest {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConnectorType,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    switch ($ConnectorType) {
+        'kemp' { return Invoke-KempDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
+        default { return Invoke-DeviceProfileTcpTest -Values $Values -Label $Label }
+    }
+}
+
 function Save-DeviceProfile {
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
@@ -556,7 +634,7 @@ function Invoke-GuidedDeviceProfileForm {
     if ($shouldTest) {
         Write-Host ''
         Write-Host ("Testing communication with {0}..." -f $displayLabel)
-        $testResult = Invoke-DeviceProfileTcpTest -Values $values -Label $displayLabel
+        $testResult = Invoke-DeviceProfileCommunicationTest -ProjectRoot $ProjectRoot -ConnectorType $ConnectorType -Values $values -Label $displayLabel
         $testLogPath = Write-DeviceProfileJsonLog -ProjectRoot $ProjectRoot -ConnectorType $ConnectorType -Data $testResult
         Write-Host ''
         Write-Host 'Communication test summary'

@@ -101,6 +101,19 @@ function Invoke-TestDeviceProfileGuidedSetup {
         }
     }
 
+    & $Assert 'Kemp managed profile communication uses APIv2 not TCP only' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'function Invoke-DeviceProfileCommunicationTest',
+            "'kemp' { return Invoke-KempDeviceProfileApiTest",
+            'Connect-KempLoadMaster -HostName $hostName -Port $port',
+            'Get-KempVirtualServices -HostName $hostName -Port $port',
+            'Kemp APIv2 connected and returned'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Kemp API communication test wiring: $text" }
+        }
+    }
+
     & $Assert 'Device manager exposes view add change and delete actions' {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         foreach ($text in @(
