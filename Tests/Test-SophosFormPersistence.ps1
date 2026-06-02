@@ -247,4 +247,22 @@ function Invoke-TestSophosFormPersistence {
             }
         }
     }
+
+    & $Assert 'Sophos XML API posts raw XML to avoid XGS form post timeout' {
+        $modulePath = Join-Path $PSScriptRoot '..\Scripts\Modules\SimpleAcme.Sophos\SophosFirewallXml.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            'Body = $requestXml',
+            "ContentType = 'application/xml'",
+            'if ($response.IsEmpty -or $null -eq $response.Xml)',
+            'Sophos AdminSettings/WebAdminSettings cannot be updated because the API returned an empty response.'
+        )) {
+            if ($raw -notmatch [regex]::Escape($text)) {
+                throw "Missing Sophos raw XML POST behavior: $text"
+            }
+        }
+        if ($raw -match 'Body\s*=\s*@\{\s*reqxml\s*=') {
+            throw 'Sophos XML API still posts reqxml as a form field, which timed out against XGS.'
+        }
+    }
 }
