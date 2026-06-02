@@ -11,6 +11,7 @@
         'Invoke-KempApiV2',
         'Invoke-KempClassicApi',
         'Invoke-KempApi',
+        'Test-KempManagementUi',
         'Connect-KempLoadMaster',
         'Get-KempVirtualServices',
         'Import-KempCertificate',

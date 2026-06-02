@@ -95,6 +95,7 @@ function Invoke-TestKempLoadMasterFlow {
             "ApiVersion classic",
             'Invoke-KempClassicApi',
             'Invoke-KempApi',
+            'Test-KempManagementUi',
             'addcert',
             'modvs'
         )) {

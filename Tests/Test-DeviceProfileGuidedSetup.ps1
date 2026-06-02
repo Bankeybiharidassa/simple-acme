@@ -106,6 +106,9 @@ function Invoke-TestDeviceProfileGuidedSetup {
         foreach ($text in @(
             'function Invoke-DeviceProfileCommunicationTest',
             "'kemp' { return Invoke-KempDeviceProfileApiTest",
+            'Test-KempManagementUi -HostName $hostName -Port $port',
+            'Kemp management UI is reachable',
+            'Management UI: {0} ({1})',
             'Connect-KempLoadMaster -HostName $hostName -Port $port',
             'Get-KempVirtualServices -HostName $hostName -Port $port',
             'Kemp API connected and returned'

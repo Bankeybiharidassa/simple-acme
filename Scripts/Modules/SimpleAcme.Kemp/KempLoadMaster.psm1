@@ -222,6 +222,43 @@ function Invoke-KempApi {
     }
 }
 
+function Test-KempManagementUi {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [ValidateRange(1, 65535)][int]$Port = 443,
+        [switch]$UseHttp,
+        [switch]$SkipCertificateCheck,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 20
+    )
+
+    $scheme = if ($UseHttp) { 'http' } else { 'https' }
+    $uri = if (($scheme -eq 'https' -and $Port -eq 443) -or ($scheme -eq 'http' -and $Port -eq 80)) {
+        "$scheme`://$HostName/"
+    } else {
+        "$scheme`://$HostName`:$Port/"
+    }
+
+    try {
+        $response = Invoke-KempWithCertificatePolicy -SkipCertificateCheck:$SkipCertificateCheck -ScriptBlock {
+            Invoke-WebRequest -Uri $uri -Method Get -UseBasicParsing -TimeoutSec $TimeoutSeconds
+        }
+        return [pscustomobject]@{
+            Status = 'Succeeded'
+            Message = 'Kemp management UI responded.'
+            Endpoint = $uri
+            StatusCode = [int]$response.StatusCode
+            ContentType = [string]$response.Headers['Content-Type']
+        }
+    } catch {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = $_.Exception.Message
+            Endpoint = $uri
+        }
+    }
+}
+
 function Connect-KempLoadMaster {
     [CmdletBinding()]
     param(
@@ -372,4 +409,4 @@ function Test-KempVirtualServiceCertificate {
     return ($text -match [regex]::Escape($CertificateName))
 }
 
-Export-ModuleMember -Function Invoke-KempApiV2,Invoke-KempClassicApi,Invoke-KempApi,Connect-KempLoadMaster,Get-KempVirtualServices,Import-KempCertificate,Set-KempVirtualServiceCertificate,Test-KempVirtualServiceCertificate,Convert-KempPfxToPemBundle,Resolve-KempPassword,New-KempApiEndpoint
+Export-ModuleMember -Function Invoke-KempApiV2,Invoke-KempClassicApi,Invoke-KempApi,Test-KempManagementUi,Connect-KempLoadMaster,Get-KempVirtualServices,Import-KempCertificate,Set-KempVirtualServiceCertificate,Test-KempVirtualServiceCertificate,Convert-KempPfxToPemBundle,Resolve-KempPassword,New-KempApiEndpoint

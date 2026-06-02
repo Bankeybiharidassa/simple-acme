@@ -456,6 +456,7 @@ function Invoke-KempDeviceProfileApiTest {
     $skipCertificateCheck = ConvertTo-DeviceProfileBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $true }) -Default $true
     $endpoint = New-KempApiEndpoint -HostName $hostName -Port $port
     $started = Get-Date
+    $managementUi = Test-KempManagementUi -HostName $hostName -Port $port -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 20
 
     try {
         $null = Connect-KempLoadMaster -HostName $hostName -Port $port -ApiKey $apiKey -Username $username -Password $password -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 60
@@ -467,18 +468,25 @@ function Invoke-KempDeviceProfileApiTest {
             Host = $hostName
             Port = $port
             Label = $Label
+            ManagementUi = $managementUi
             VirtualServiceCount = $services.Count
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
             VirtualServices = @($services | Select-Object Id,Address,Port,Protocol,NickName,CurrentCertificate)
         }
     } catch {
+        $prefix = if ($managementUi.Status -eq 'Succeeded') {
+            "Kemp management UI is reachable at $($managementUi.Endpoint), but REST certificate API failed. "
+        } else {
+            "Kemp management UI probe failed at $($managementUi.Endpoint). "
+        }
         return [pscustomobject]@{
             Status = 'Failed'
-            Message = $_.Exception.Message
+            Message = $prefix + $_.Exception.Message
             Endpoint = $endpoint
             Host = $hostName
             Port = $port
             Label = $Label
+            ManagementUi = $managementUi
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
         }
     }
@@ -643,6 +651,9 @@ function Invoke-GuidedDeviceProfileForm {
         Write-Host ("Message: {0}" -f $testResult.Message)
         if ($testResult.PSObject.Properties.Name -contains 'Host') { Write-Host ("Host: {0}" -f $testResult.Host) }
         if ($testResult.PSObject.Properties.Name -contains 'Port') { Write-Host ("Port: {0}" -f $testResult.Port) }
+        if ($testResult.PSObject.Properties.Name -contains 'ManagementUi' -and $null -ne $testResult.ManagementUi) {
+            Write-Host ("Management UI: {0} ({1})" -f $testResult.ManagementUi.Status, $testResult.ManagementUi.Endpoint)
+        }
         Write-Host ("Log: {0}" -f $testLogPath)
         Wait-DeviceProfileOperatorKey
     } else {
