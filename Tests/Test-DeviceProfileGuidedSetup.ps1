@@ -11,30 +11,37 @@ function Invoke-TestDeviceProfileGuidedSetup {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         foreach ($text in @(
             'function Invoke-DeviceProfileWizard',
+            'function Invoke-DeviceProfileManager',
             'function Invoke-DeviceProfileInventory',
+            'function Invoke-DeviceProfileAdd',
+            'function Invoke-DeviceProfileEdit',
+            'function Invoke-DeviceProfileDelete',
             'function Invoke-GuidedDeviceProfileForm',
             'function Invoke-DeviceProfileTcpTest',
             'function New-DeviceProfileId',
             'Read-DeviceProfileConsoleLine',
             'Export-ModuleMember -Function',
             'Invoke-DeviceProfileWizard',
+            'Invoke-DeviceProfileManager',
             'Invoke-DeviceProfileInventory'
         )) {
             if ($runner -notlike "*$text*") { throw "Missing guided profile runner wiring: $text" }
         }
 
         $menu = Get-Content -LiteralPath $menuPath -Raw
-        if ($menu -notlike '*Create or edit any device profile*' -or $menu -notlike "*Key='device-profile'*" -or $menu -notlike '*View configured devices*' -or $menu -notlike "*Key='device-inventory'*") {
+        if ($menu -notlike '*Create or edit any device profile*' -or $menu -notlike "*Key='device-profile'*" -or $menu -notlike '*Manage configured devices (view/add/change/delete)*' -or $menu -notlike "*Key='device-manager'*") {
             throw 'Deployment targets menu does not expose the generic device profile wizard.'
         }
 
         $setup = Get-Content -LiteralPath $setupPath -Raw
         foreach ($text in @(
             "Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard'",
+            "Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileManager'",
             "Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileInventory'",
             "'device-profile'",
-            "'device-inventory'",
+            "'device-manager'",
             'Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot',
+            'Invoke-DeviceProfileManager -ProjectRoot $PSScriptRoot',
             'Invoke-DeviceProfileInventory -ProjectRoot $PSScriptRoot'
         )) {
             if ($setup -notlike "*$text*") { throw "certificate-setup.ps1 missing device-profile dispatch: $text" }
@@ -81,6 +88,22 @@ function Invoke-TestDeviceProfileGuidedSetup {
         }
     }
 
+    & $Assert 'Device manager exposes view add change and delete actions' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            "function Invoke-DeviceProfileManager",
+            "View configured devices",
+            "Add new device",
+            "Change existing device",
+            "Delete existing device",
+            "function Invoke-DeviceProfileDelete",
+            "Delete this configured device profile?",
+            "Remove-DeviceConfig -ConfigDir `$configDir -DeviceId `$deviceId"
+        )) {
+            if ($runner -notlike "*$text*") { throw "Missing device manager behavior: $text" }
+        }
+    }
+
     & $Assert 'Device profile persistence supports multiple devices with friendly names' {
         Import-Module $runnerPath -Force
         $tempRoot = Join-Path $env:TEMP ("simple-acme-device-profiles-{0}" -f ([guid]::NewGuid().ToString('N')))
@@ -102,6 +125,11 @@ function Invoke-TestDeviceProfileGuidedSetup {
             Save-DeviceProfile -ConfigDir $tempRoot -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -FriendlyName 'Kemp generated' -Values @{ host='192.0.2.12'; port='443' }
             $nextId = New-DeviceProfileId -ConfigDir $tempRoot -ConnectorType 'kemp' -FriendlyName 'Kemp generated'
             if ($nextId -ne 'kemp-kemp-generated-2') { throw "Expected unique friendly-name id suffix, got '$nextId'." }
+
+            Remove-DeviceConfig -ConfigDir $tempRoot -DeviceId 'kemp-lab-a'
+            $afterDelete = @(Get-AllDeviceConfigs -ConfigDir $tempRoot -SkipIntegrityFailures | Where-Object { $_['connector_type'] -eq 'kemp' })
+            if ($afterDelete.Count -ne 2) { throw "Expected 2 Kemp profiles after deleting one, found $($afterDelete.Count)." }
+            if (@($afterDelete | Where-Object { [string]($_['device_id']) -eq 'kemp-lab-a' }).Count -ne 0) { throw 'Deleted device profile is still present.' }
         } finally {
             if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
         }

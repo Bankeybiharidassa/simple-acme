@@ -9,7 +9,7 @@ $CertificateMenuTree = @{
         @{ Label='Setup new certificate'; Key='setup-new'; Type='action' },
         @{ Label='Manage existing certificates'; Key='manage-certs'; Type='action' },
         @{ Label='Deployment targets'; Key='deployment-targets'; Type='submenu'; Items=@(
-            @{ Label='View configured devices'; Key='device-inventory'; Type='action' },
+            @{ Label='Manage configured devices (view/add/change/delete)'; Key='device-manager'; Type='action' },
             @{ Label='Create or edit any device profile'; Key='device-profile'; Type='action' },
             @{ Label='Kemp LoadMaster - Create or edit device profile'; Key='kemp-profile'; Type='action' },
             @{ Label='Kemp LoadMaster - Check what would happen (safe preview, no changes)'; Key='kemp-whatif'; Type='action' },

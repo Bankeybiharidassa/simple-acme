@@ -167,6 +167,7 @@ if ($null -eq $deviceProfileRunnerModule) {
 }
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileManager' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileInventory' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-GuidedDeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Get-DeviceProfileCurrentValues' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
@@ -634,6 +635,7 @@ while ($menuStack.Count -gt 0) {
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'device-manager'        { Write-SetupDebugLog -Message "Executing action: device-manager"; Invoke-DeviceProfileManager -ProjectRoot $PSScriptRoot | Out-Null }
         'device-inventory'      { Write-SetupDebugLog -Message "Executing action: device-inventory"; Invoke-DeviceProfileInventory -ProjectRoot $PSScriptRoot | Out-Null }
         'device-profile'        { Write-SetupDebugLog -Message "Executing action: device-profile"; Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot | Out-Null }
         'kemp-profile'          { Write-SetupDebugLog -Message "Executing action: kemp-profile"; Invoke-KempProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
