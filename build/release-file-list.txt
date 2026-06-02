@@ -57,6 +57,8 @@ scripts/connectors/cert2waf.ps1
 scripts/core/connector-core.psm1
 scripts/modules/SimpleAcme.Netscaler/NetscalerNitro.psm1
 scripts/modules/SimpleAcme.Netscaler/SimpleAcme.Netscaler.psd1
+scripts/modules/SimpleAcme.Kemp/KempLoadMaster.psm1
+scripts/modules/SimpleAcme.Kemp/SimpleAcme.Kemp.psd1
 scripts/modules/SimpleAcme.Sophos/SophosFirewallXml.psm1
 scripts/modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1
 scripts/deploy-rds-farm.ps1
@@ -67,5 +69,6 @@ setup/Device-Schemas.ps1
 setup/Device-Profile-Runner.psm1
 setup/Form-Runner.psm1
 setup/Menu-Tree.ps1
+setup/Kemp-Runner.psm1
 setup/NetScaler-Runner.psm1
 setup/Sophos-Runner.psm1

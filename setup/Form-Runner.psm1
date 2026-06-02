@@ -1490,8 +1490,8 @@ function Select-FirstRunDeviceFamily {
             DeviceType = 'kemp'
             DeviceLabel = 'Kemp LoadMaster'
             Title = 'Kemp LoadMaster certificate issuance'
-            Message = 'Kemp deployment is configured after certificate issuance.'
-            Hook = 'generic load balancer/WAF hook'
+            Message = 'Kemp deployment will use the saved LoadMaster device profile and selected virtual services.'
+            Hook = 'Kemp LoadMaster deployment hook'
         }
     }
 
@@ -1502,6 +1502,9 @@ function Select-FirstRunDeviceFamily {
         [Console]::WriteLine("This step can issue or verify the certificate now using the $($selected['Hook']).")
         if ([string]$selected['DeviceType'] -eq 'sophos') {
             [Console]::WriteLine('During setup, the Sophos XGS portals and WAF rules will be pulled from the firewall so the operator can choose where this certificate is bound.')
+            [Console]::WriteLine('The WACS scheduled renewal hook will reuse that saved selection automatically.')
+        } elseif ([string]$selected['DeviceType'] -eq 'kemp') {
+            [Console]::WriteLine('During setup, Kemp virtual services will be pulled from the LoadMaster so the operator can choose where this certificate is bound.')
             [Console]::WriteLine('The WACS scheduled renewal hook will reuse that saved selection automatically.')
         } else {
             [Console]::WriteLine('After issuance, return to Deployment targets to configure and run the appliance-specific deployment.')
@@ -1585,8 +1588,13 @@ function Select-FirstRunDeviceFamily {
         if ($choice -ne 'generic-waf') {
             [Console]::WriteLine('')
             [Console]::WriteLine("$($labelMap[$choice]) selected.")
-            [Console]::WriteLine('This step issues the certificate with the generic load balancer/WAF hook.')
-            [Console]::WriteLine('After issuance, use Deployment targets or deployment policies for appliance-specific deployment.')
+            if ($choice -eq 'kemp') {
+                [Console]::WriteLine('This step issues the certificate with the Kemp LoadMaster deployment hook.')
+                [Console]::WriteLine('The setup will pull LoadMaster virtual services and save the selected bindings for scheduled renewals.')
+            } else {
+                [Console]::WriteLine('This step issues the certificate with the generic load balancer/WAF hook.')
+                [Console]::WriteLine('After issuance, use Deployment targets or deployment policies for appliance-specific deployment.')
+            }
             $confirm = Read-SetupChoice -Prompt 'Continue with certificate issuance now? [1] Yes [2] No' -Options @{ '1'='yes'; '2'='no' } -DefaultKey '1' -AllowBack
             if ($confirm -in @('__CANCEL__','__BACK__','no')) { return '__BACK__' }
         }
@@ -1627,7 +1635,7 @@ function Invoke-AcmeForm {
     [Console]::WriteLine('[5] Firewall / VPN')
     [Console]::WriteLine('[6] Load balancer / WAF')
     [Console]::WriteLine('[7] Custom script')
-    [Console]::WriteLine('[8] Kemp LoadMaster (Available after certificate issuance / post-deployment only)')
+    [Console]::WriteLine('[8] Kemp LoadMaster (issue now and save renewal hook targets)')
     [Console]::WriteLine('[9] NetScaler / Citrix ADC (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[10] Palo Alto firewall (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[11] Sophos firewall / XGS (issue now and save renewal hook targets)')
@@ -1666,9 +1674,13 @@ function Invoke-AcmeForm {
     }
 
     Start-ConsoleSection -Title 'Certificate distribution selection'
-    if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
-        [Console]::WriteLine('Sophos XGS deployment needs a PFX file so the firewall receives the certificate private key.')
-        [Console]::WriteLine('PFX distribution will be configured for the Sophos renewal hook.')
+    if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp')) {
+        if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
+            [Console]::WriteLine('Sophos XGS deployment needs a PFX file so the firewall receives the certificate private key.')
+        } else {
+            [Console]::WriteLine('Kemp LoadMaster deployment needs a PFX file so the API hook can upload the certificate and private key.')
+        }
+        [Console]::WriteLine('PFX distribution will be configured for the renewal hook.')
         $distributionMode = 'multi'
     } elseif ($target -eq 'rds-farm') {
         [Console]::WriteLine('RDS Gateway + Session Hosts farm always uses multi-system PFX distribution.')
@@ -1765,7 +1777,7 @@ function Invoke-AcmeForm {
             [Console]::WriteLine('RDS farm mode requires PFX distribution so the private key can be imported on Session Hosts.')
             $multiChoice = 'pfx'
         } else {
-            if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
+            if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp')) {
                 $multiChoice = 'pfx'
             } else {
                 [Console]::WriteLine('Choose distribution method:')
@@ -1848,6 +1860,16 @@ function Invoke-AcmeForm {
             return $null
         }
         $values = $sophosResult
+    }
+
+    if ([string]$targetSelection['DeviceType'] -eq 'kemp') {
+        $kempResult = Invoke-KempCertificateRequestSetup -ProjectRoot (Split-Path $PSScriptRoot -Parent) -Values $values
+        if ($null -eq $kempResult) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
+        $values = $kempResult
     }
 
     while ($true) {
