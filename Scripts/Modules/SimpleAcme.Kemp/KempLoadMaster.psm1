@@ -302,7 +302,11 @@ function Get-KempVirtualServices {
 
     $candidates = @()
     foreach ($name in @('VS','Vs','vs','VirtualService','VirtualServices','services')) {
-        if ($data.PSObject.Properties.Name -contains $name) { $candidates += @($data.$name) }
+        $property = @($data.PSObject.Properties | Where-Object { $_.Name -eq $name } | Select-Object -First 1)
+        if ($property.Count -gt 0) {
+            $candidates += @($property[0].Value)
+            break
+        }
     }
     if ($candidates.Count -eq 0) { $candidates = @($data) }
 

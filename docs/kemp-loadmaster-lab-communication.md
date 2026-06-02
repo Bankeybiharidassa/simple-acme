@@ -18,10 +18,12 @@ Working:
 - TCP connection to `192.168.45.150:443`.
 - HTTPS management UI responds on `https://192.168.45.150/` with HTTP `200 OK`.
 
-Not working yet:
+Working after enabling the LoadMaster API interface:
 
-- Kemp APIv2 endpoint `https://192.168.45.150/accessv2` returns HTTP `404 File not found`.
-- Kemp classic REST endpoint `https://192.168.45.150/access/listvs` returns HTTP `404 File not found`.
+- Kemp APIv2 endpoint `https://192.168.45.150/accessv2` returns HTTP `200`.
+- Kemp classic REST endpoint `https://192.168.45.150/access/listvs` returns HTTP `200`.
+- `listvs` returns virtual service `1`, `192.168.45.151:443`, nickname `rdsgw`.
+- The virtual service has one real server: `172.16.17.30:443`.
 
 REST procedures tested:
 
@@ -37,15 +39,15 @@ REST procedures tested:
 
 The LoadMaster management UI is reachable, and the provided lab credentials can complete a normal WUI form login.
 
-The certificate deployment API is not currently exposed on the configured management port from this workstation. The documented classic REST paths and APIv2 path return the LoadMaster's own `404 Not found` page even after WUI login. This points to the REST API interface route being disabled or not exposed on this management listener, not to a bad TCP path.
+The certificate deployment API is now exposed on the configured management port from this workstation.
 
 The simple-acme Kemp communication test should therefore report:
 
 - Management UI: reachable.
-- REST certificate API: failed.
+- REST certificate API: reachable.
 - Attempted REST endpoints: APIv2 `/accessv2` and classic `/access/listvs`.
-- Likely next setting to verify in the WUI: Certificates & Security > Remote Access > Enable API Interface.
+- Virtual services discovered: `1`.
 
-This is not enough for automatic certificate deployment. Certificate target selection and renewal-hook deployment need REST API access to return `listvs`.
+This is enough for certificate target selection and renewal-hook deployment to use REST API `listvs`.
 
 SSH is intentionally not part of the Kemp certificate deployment procedure.
