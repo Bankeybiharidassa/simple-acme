@@ -106,7 +106,11 @@ function Read-DeviceProfileConsoleLine {
         [switch]$Secret
     )
 
-    $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { '' } else { " [$Default]" }
+    $suffix = ''
+    if (-not [string]::IsNullOrWhiteSpace($Default)) {
+        $displayDefault = if ($Secret) { '<hidden>' } else { $Default }
+        $suffix = " [$displayDefault]"
+    }
     Write-Host -NoNewline ("{0}{1}: " -f $Prompt, $suffix)
     $buffer = New-Object System.Text.StringBuilder
     while ($true) {

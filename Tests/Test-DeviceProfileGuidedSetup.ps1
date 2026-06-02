@@ -88,6 +88,19 @@ function Invoke-TestDeviceProfileGuidedSetup {
         }
     }
 
+    & $Assert 'Secret prompt defaults are displayed as hidden' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            '$displayDefault = if ($Secret) { ''<hidden>'' } else { $Default }',
+            '$suffix = " [$displayDefault]"'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing hidden secret prompt default behavior: $text" }
+        }
+        if ($runner -match '\$suffix\s*=\s*if \(\[string\]::IsNullOrWhiteSpace\(\$Default\)\) \{ '''' \} else \{ " \[\$Default\]" \}') {
+            throw 'Secret prompt helper still renders raw default values.'
+        }
+    }
+
     & $Assert 'Device manager exposes view add change and delete actions' {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         foreach ($text in @(
