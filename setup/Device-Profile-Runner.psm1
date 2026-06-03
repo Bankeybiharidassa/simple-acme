@@ -264,7 +264,7 @@ function Get-DeviceProfileTargetSummary {
 
     $settings = if ($Device.ContainsKey('settings') -and $Device['settings'] -is [System.Collections.IDictionary]) { $Device['settings'] } else { @{} }
     $parts = @()
-    foreach ($key in @('virtual_service_ids','waf_rule_names','bind_admin_portal','bind_vpn_portal','bind_user_portal','bind_waf_rules','target_names')) {
+    foreach ($key in @('virtual_service_ids','waf_rule_names','bind_admin_portal','bind_vpn_portal','bind_user_portal','bind_waf_rules','target_names','bind_target_ids','bind_target_names')) {
         if ($settings.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$settings[$key])) {
             $parts += ("{0}={1}" -f $key, (ConvertTo-DeviceProfileDisplayValue -Name $key -Value $settings[$key]))
         }

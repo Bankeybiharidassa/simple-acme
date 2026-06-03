@@ -303,6 +303,124 @@ function Invoke-ClavisterSshCommand {
     [pscustomobject]@{ Status='Succeeded'; Command=$Command; Output=$result.Output; ToolFamily=$resolved.ToolFamily }
 }
 
+function Get-ClavisterCliPropertyValue {
+    param(
+        [AllowNull()][string]$Output,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return '' }
+    $escaped = [regex]::Escape($Name)
+    $match = [regex]::Match($Output, "(?im)^\s*$escaped\s*[:=]\s*(?<value>.+?)\s*$")
+    if ($match.Success) { return [string]$match.Groups['value'].Value.Trim() }
+    $match = [regex]::Match($Output, "(?im)^\s*$escaped\s+(?<value>\S.*?)\s*$")
+    if ($match.Success) { return [string]$match.Groups['value'].Value.Trim() }
+    return ''
+}
+
+function ConvertFrom-ClavisterShowListNames {
+    param([AllowNull()][string]$Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return @() }
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($Output -split "`r?`n")) {
+        $text = ([string]$line).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        if ($text -match '^(Device:|[-]+$|Name\s+|Index\s+|Property\s+|Object\s+|No\s+)') { continue }
+        $match = [regex]::Match($text, '^(?<name>[A-Za-z][A-Za-z0-9_.-]*)\b')
+        if (-not $match.Success) { continue }
+        $name = [string]$match.Groups['name'].Value
+        if ($name -in @('Name','Type','Comments','Property','Value','Remarks')) { continue }
+        if (-not $names.Contains($name)) { $names.Add($name) }
+    }
+    return @($names)
+}
+
+function Get-ClavisterCertificateServiceInventory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [ValidateRange(1, 65535)][int]$Port = 22,
+        [Parameter(Mandatory)][string]$Username,
+        [string]$Password = '',
+        [string]$PrivateKeyPath = '',
+        [string]$HostKeyFingerprint = '',
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
+    )
+
+    $items = New-Object System.Collections.Generic.List[object]
+    $remoteMgmt = Invoke-ClavisterSshCommand -HostName $HostName -Port $Port -Username $Username -Password $Password -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $HostKeyFingerprint -Command 'show Settings RemoteMgmtSettings' -TimeoutSeconds $TimeoutSeconds
+    $items.Add([pscustomobject]@{
+        Id = 'remote-mgmt'
+        Kind = 'remote_mgmt'
+        Name = 'Remote Management / WebUI / SSL VPN'
+        CurrentCertificate = Get-ClavisterCliPropertyValue -Output $remoteMgmt.Output -Name 'HTTPSCertificate'
+        Details = 'Settings RemoteMgmtSettings HTTPSCertificate'
+    })
+
+    try {
+        $ipsecList = Invoke-ClavisterSshCommand -HostName $HostName -Port $Port -Username $Username -Password $Password -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $HostKeyFingerprint -Command 'show Interface IPsecTunnel' -TimeoutSeconds $TimeoutSeconds
+        foreach ($name in @(ConvertFrom-ClavisterShowListNames -Output $ipsecList.Output)) {
+            $details = $null
+            try {
+                $details = Invoke-ClavisterSshCommand -HostName $HostName -Port $Port -Username $Username -Password $Password -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $HostKeyFingerprint -Command ("show Interface IPsecTunnel {0}" -f $name) -TimeoutSeconds $TimeoutSeconds
+            } catch {
+                $details = [pscustomobject]@{ Output = '' }
+            }
+            $authMethod = Get-ClavisterCliPropertyValue -Output $details.Output -Name 'AuthMethod'
+            $currentCert = Get-ClavisterCliPropertyValue -Output $details.Output -Name 'GatewayCertificate'
+            $remoteEndpoint = Get-ClavisterCliPropertyValue -Output $details.Output -Name 'RemoteEndpoint'
+            $items.Add([pscustomobject]@{
+                Id = "ipsec:$name"
+                Kind = 'ipsec'
+                Name = $name
+                CurrentCertificate = $currentCert
+                AuthMethod = $authMethod
+                RemoteEndpoint = $remoteEndpoint
+                Details = 'Interface IPsecTunnel'
+            })
+        }
+    } catch {
+        $items.Add([pscustomobject]@{
+            Id = 'ipsec:<inventory-failed>'
+            Kind = 'diagnostic'
+            Name = 'IPsec tunnel inventory failed'
+            CurrentCertificate = ''
+            Details = $_.Exception.Message
+        })
+    }
+
+    return @($items)
+}
+
+function Set-ClavisterCertificateServiceBinding {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [ValidateRange(1, 65535)][int]$Port = 22,
+        [Parameter(Mandatory)][string]$Username,
+        [Parameter(Mandatory)][string]$CertificateName,
+        [Parameter(Mandatory)][string]$TargetId,
+        [string]$Password = '',
+        [string]$PrivateKeyPath = '',
+        [string]$HostKeyFingerprint = '',
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
+    )
+
+    $command = ''
+    if ($TargetId -eq 'remote-mgmt') {
+        $command = "set Settings RemoteMgmtSettings HTTPSCertificate=$CertificateName"
+    } elseif ($TargetId -match '^ipsec:(?<name>.+)$' -and $Matches['name'] -ne '<inventory-failed>') {
+        $tunnelName = [string]$Matches['name']
+        $command = "set Interface IPsecTunnel $tunnelName AuthMethod=Certificate GatewayCertificate=$CertificateName"
+    } else {
+        throw "Unsupported Clavister certificate binding target '$TargetId'."
+    }
+
+    $result = Invoke-ClavisterSshCommand -HostName $HostName -Port $Port -Username $Username -Password $Password -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $HostKeyFingerprint -Command $command -TimeoutSeconds $TimeoutSeconds
+    [pscustomobject]@{ Status='Succeeded'; TargetId=$TargetId; Command=$command; Output=$result.Output }
+}
+
 function Test-ClavisterSshConnection {
     [CmdletBinding()]
     param(
@@ -323,4 +441,4 @@ function Test-ClavisterSshConnection {
     }
 }
 
-Export-ModuleMember -Function ConvertFrom-ClavisterSecureString,Convert-ClavisterPfxToPemFiles,Invoke-ClavisterScpUpload,Invoke-ClavisterSshCommand,Test-ClavisterSshConnection
+Export-ModuleMember -Function ConvertFrom-ClavisterSecureString,Convert-ClavisterPfxToPemFiles,Invoke-ClavisterScpUpload,Invoke-ClavisterSshCommand,Get-ClavisterCertificateServiceInventory,Set-ClavisterCertificateServiceBinding,Test-ClavisterSshConnection

@@ -12,6 +12,8 @@
         'Convert-ClavisterPfxToPemFiles',
         'Invoke-ClavisterScpUpload',
         'Invoke-ClavisterSshCommand',
+        'Get-ClavisterCertificateServiceInventory',
+        'Set-ClavisterCertificateServiceBinding',
         'Test-ClavisterSshConnection'
     )
     CmdletsToExport = @()

@@ -91,6 +91,7 @@ function Apply-ClavisterHookProfileSettings {
     if ([string]::IsNullOrWhiteSpace($PrivateKeyPath)) { $script:PrivateKeyPath = Get-ClavisterProfileValue -Settings $settings -Key 'private_key_path' }
     if ([string]::IsNullOrWhiteSpace($SshHostKeyFingerprint)) { $script:SshHostKeyFingerprint = Get-ClavisterProfileValue -Settings $settings -Key 'ssh_host_key_fingerprint' }
     if ([string]::IsNullOrWhiteSpace($CertificateName)) { $script:CertificateName = Get-ClavisterProfileValue -Settings $settings -Key 'certificate_name' }
+    $script:BindTargetIds = @(Get-ClavisterProfileValue -Settings $settings -Key 'bind_target_ids' -Default '' -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if (-not $PSBoundParameters.ContainsKey('Commit')) { $script:Commit = ConvertTo-ClavisterHookBoolean -Value (Get-ClavisterProfileValue -Settings $settings -Key 'commit_after_upload') -Default $true }
     if (-not $PSBoundParameters.ContainsKey('Activate')) { $script:Activate = ConvertTo-ClavisterHookBoolean -Value (Get-ClavisterProfileValue -Settings $settings -Key 'activate_after_commit') -Default $true }
     if ($null -eq $Password) {
@@ -99,6 +100,7 @@ function Apply-ClavisterHookProfileSettings {
     }
 }
 
+$BindTargetIds = @()
 Apply-ClavisterHookProfileSettings
 
 if ([string]::IsNullOrWhiteSpace($ClavisterHost)) { throw 'Clavister host is missing. Configure the Clavister device profile before running the hook.' }
@@ -139,6 +141,11 @@ try {
     $certUpload = Invoke-ClavisterScpUpload -HostName $ClavisterHost -Port $Port -Username $Username -Password $plainPassword -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $SshHostKeyFingerprint -LocalPath $sourceCertPath -CertificateName $CertificateName -TimeoutSeconds $TimeoutSeconds
     $keyUpload = Invoke-ClavisterScpUpload -HostName $ClavisterHost -Port $Port -Username $Username -Password $plainPassword -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $SshHostKeyFingerprint -LocalPath $sourceKeyPath -CertificateName $CertificateName -TimeoutSeconds $TimeoutSeconds
 
+    $bindingResults = @()
+    foreach ($targetId in @($BindTargetIds)) {
+        $bindingResults += Set-ClavisterCertificateServiceBinding -HostName $ClavisterHost -Port $Port -Username $Username -Password $plainPassword -PrivateKeyPath $PrivateKeyPath -HostKeyFingerprint $SshHostKeyFingerprint -CertificateName $CertificateName -TargetId $targetId -TimeoutSeconds $TimeoutSeconds
+    }
+
     $commitResult = $null
     $activateResult = $null
     if ($Commit) {
@@ -156,6 +163,7 @@ try {
         RemotePath = "certificate/$CertificateName"
         CertificateUpload = $certUpload.Status
         KeyUpload = $keyUpload.Status
+        Bindings = @($bindingResults | Select-Object TargetId,Status,Command)
         Commit = if ($null -eq $commitResult) { 'Skipped' } else { $commitResult.Status }
         Activate = if ($null -eq $activateResult) { 'Skipped' } else { $activateResult.Status }
     }

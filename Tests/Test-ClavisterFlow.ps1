@@ -66,12 +66,19 @@ function Invoke-TestClavisterFlow {
         }
     }
 
-    & $Assert 'Clavister hook implements documented SCP certificate upload and commit activate commands' {
+    & $Assert 'Clavister hook implements inventory, documented SCP upload, service binding, and commit activate commands' {
         $hook = Get-Content -LiteralPath $hookPath -Raw
         $module = Get-Content -LiteralPath $modulePath -Raw
         foreach ($text in @(
             'Convert-ClavisterPfxToPemFiles',
             'certificate/$CertificateName',
+            'Get-ClavisterCertificateServiceInventory',
+            'show Settings RemoteMgmtSettings',
+            'show Interface IPsecTunnel',
+            'Set-ClavisterCertificateServiceBinding',
+            'HTTPSCertificate=$CertificateName',
+            'GatewayCertificate=$CertificateName',
+            'bind_target_ids',
             'Invoke-ClavisterScpUpload',
             'Invoke-ClavisterSshCommand',
             "-Command 'commit'",
@@ -82,6 +89,21 @@ function Invoke-TestClavisterFlow {
             'ssh.exe'
         )) {
             if (-not ($hook.Contains($text) -or $module.Contains($text))) { throw "Missing Clavister deployment behavior: $text" }
+        }
+    }
+
+    & $Assert 'Clavister certificate request setup requires numbered target selection from inventory' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'function Invoke-ClavisterCertificateTargetSelection',
+            'Reading Clavister certificate targets from the firewall',
+            'Numbers only',
+            'Read-ClavisterTargetSelection',
+            'bind_target_ids',
+            'bind_target_names',
+            'Invoke-ClavisterCertificateTargetSelection -ProjectRoot $ProjectRoot -ConfigDir $configDir'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Clavister target selection behavior: $text" }
         }
     }
 
