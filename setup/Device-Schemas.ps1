@@ -86,6 +86,17 @@ $DeviceSchemas = @{
     juniper_srx = @{ ConnectorType='juniper_srx'; Label='Juniper SRX'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$ApiProfileFields }
     mikrotik = @{ ConnectorType='mikrotik'; Label='MikroTik RouterOS'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     ubiquiti = @{ ConnectorType='ubiquiti'; Label='Ubiquiti EdgeMAX / UniFi Gateway'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    clavister = @{ ConnectorType='clavister'; Label='Clavister NetWall / cOS Core'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=@(
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.1.1'; HelpText='Clavister firewall management IP address or DNS name for SSH/SCP.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='port'; Label='SSH/SCP port'; Type='string'; Required=$true; Default='22'; Placeholder='22'; HelpText='Clavister SSH/SCP management port. Default is 22.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$true; Default='admin'; Placeholder='admin'; HelpText='Clavister administrator username used for SSH/SCP upload.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Clavister administrator password. For unattended renewals, prefer SSH key or ensure plink.exe/pscp.exe are available.'; Methods=@('ssh_password') },
+        @{ Name='private_key_path'; Label='SSH private key file'; Type='string'; Required=$false; Placeholder='C:\keys\clavister.ppk'; HelpText='SSH private key file. OpenSSH keys work with ssh.exe/scp.exe; PPK keys work with plink.exe/pscp.exe.'; Methods=@('ssh_key') },
+        @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Optional pinned host key. Used by PuTTY tools when available.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='certificate_name'; Label='Name in Clavister'; Type='string'; Required=$true; Default='simple_acme_cert'; Placeholder='wildcard_itsecured_nl'; HelpText='Existing cOS Core certificate object name. Files are uploaded to certificate/<name>.' },
+        @{ Name='commit_after_upload'; Label='Commit after upload'; Type='choice'; Required=$true; Choices=@('true','false'); Default='true'; Placeholder='true'; HelpText='Run the cOS Core commit command after uploading the certificate and private key.' },
+        @{ Name='activate_after_commit'; Label='Activate after commit'; Type='choice'; Required=$true; Choices=@('true','false'); Default='true'; Placeholder='true'; HelpText='Run the cOS Core activate command after commit so scheduled renewals become active automatically.' }
+    )}
 
     cisco_asa = @{ ConnectorType='cisco_asa'; Label='Cisco ASA / Firepower'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$CiscoProfileFields }
     cisco_iosxe = @{ ConnectorType='cisco_iosxe'; Label='Cisco IOS XE'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$CiscoProfileFields }

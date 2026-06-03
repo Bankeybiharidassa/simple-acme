@@ -492,6 +492,54 @@ function Invoke-KempDeviceProfileApiTest {
     }
 }
 
+function Invoke-ClavisterDeviceProfileSshTest {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $modulePath = Join-Path $ProjectRoot 'Scripts/Modules/SimpleAcme.Clavister/SimpleAcme.Clavister.psd1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        return [pscustomobject]@{ Status = 'Failed'; Message = "Clavister module was not found: $modulePath"; Label = $Label }
+    }
+
+    Import-Module $modulePath -Force
+    $hostName = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = 22
+    if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [void][int]::TryParse([string]$Values['port'], [ref]$port) }
+    $username = if ($Values.ContainsKey('username')) { [string]$Values['username'] } else { 'admin' }
+    $password = if ($Values.ContainsKey('password')) { [string]$Values['password'] } else { '' }
+    $privateKeyPath = if ($Values.ContainsKey('private_key_path')) { [string]$Values['private_key_path'] } else { '' }
+    $fingerprint = if ($Values.ContainsKey('ssh_host_key_fingerprint')) { [string]$Values['ssh_host_key_fingerprint'] } else { '' }
+
+    $started = Get-Date
+    $tcp = Invoke-DeviceProfileTcpTest -Values $Values -Label $Label
+    if ([string]$tcp.Status -ne 'Success') {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = "TCP connection failed before SSH authentication: $($tcp.Message)"
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            Tcp = $tcp
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    }
+
+    $ssh = Test-ClavisterSshConnection -HostName $hostName -Port $port -Username $username -Password $password -PrivateKeyPath $privateKeyPath -HostKeyFingerprint $fingerprint -TimeoutSeconds 30
+    return [pscustomobject]@{
+        Status = $ssh.Status
+        Message = $ssh.Message
+        Host = $hostName
+        Port = $port
+        Label = $Label
+        Tcp = $tcp
+        ToolFamily = if ($ssh.PSObject.Properties.Name -contains 'ToolFamily') { $ssh.ToolFamily } else { '' }
+        ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+    }
+}
+
 function Invoke-DeviceProfileCommunicationTest {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -501,6 +549,7 @@ function Invoke-DeviceProfileCommunicationTest {
     )
 
     switch ($ConnectorType) {
+        'clavister' { return Invoke-ClavisterDeviceProfileSshTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         'kemp' { return Invoke-KempDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         default { return Invoke-DeviceProfileTcpTest -Values $Values -Label $Label }
     }

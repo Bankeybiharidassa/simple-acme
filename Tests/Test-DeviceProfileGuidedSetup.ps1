@@ -58,6 +58,7 @@ function Invoke-TestDeviceProfileGuidedSetup {
             'cisco_asa',
             'cisco_iosxe',
             'fortigate',
+            'clavister',
             'juniper_srx',
             'haproxy',
             'traefik',
@@ -114,6 +115,18 @@ function Invoke-TestDeviceProfileGuidedSetup {
             'Kemp API connected and returned'
         )) {
             if (-not $runner.Contains($text)) { throw "Missing Kemp API communication test wiring: $text" }
+        }
+    }
+
+    & $Assert 'Clavister managed profile communication uses SSH helper not TCP only' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'function Invoke-ClavisterDeviceProfileSshTest',
+            "'clavister' { return Invoke-ClavisterDeviceProfileSshTest",
+            'Test-ClavisterSshConnection -HostName $hostName -Port $port',
+            'Clavister module was not found'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Clavister SSH communication test wiring: $text" }
         }
     }
 

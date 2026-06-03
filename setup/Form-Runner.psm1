@@ -1496,6 +1496,14 @@ function Select-FirstRunDeviceFamily {
             Message = 'Kemp deployment will use the saved LoadMaster device profile and selected virtual services.'
             Hook = 'Kemp LoadMaster deployment hook'
         }
+        clavister = @{
+            TargetSystem = 'clavister'
+            DeviceType = 'clavister'
+            DeviceLabel = 'Clavister NetWall / cOS Core'
+            Title = 'Clavister NetWall / cOS Core certificate issuance'
+            Message = 'Clavister deployment will use the saved SSH/SCP device profile and certificate object name.'
+            Hook = 'Clavister SSH/SCP deployment hook'
+        }
     }
 
     if ($postIssuanceFirstRunMap.ContainsKey($TargetSystem)) {
@@ -1509,6 +1517,8 @@ function Select-FirstRunDeviceFamily {
         } elseif ([string]$selected['DeviceType'] -eq 'kemp') {
             [Console]::WriteLine('During setup, Kemp virtual services will be pulled from the LoadMaster so the operator can choose where this certificate is bound.')
             [Console]::WriteLine('The WACS scheduled renewal hook will reuse that saved selection automatically.')
+        } elseif ([string]$selected['DeviceType'] -eq 'clavister') {
+            [Console]::WriteLine('During setup, a Clavister device profile will be saved. The WACS scheduled renewal hook will upload the certificate and key to certificate/<name> automatically.')
         } else {
             [Console]::WriteLine('After issuance, return to Deployment targets to configure and run the appliance-specific deployment.')
         }
@@ -1530,11 +1540,13 @@ function Select-FirstRunDeviceFamily {
         [Console]::WriteLine('[1] Generic firewall/VPN hook during issuance')
         [Console]::WriteLine('[2] Sophos firewall - issue now and save Sophos renewal hook targets')
         [Console]::WriteLine('[3] Palo Alto firewall - issue now, deploy from Deployment targets after issuance')
+        [Console]::WriteLine('[4] Clavister NetWall / cOS Core - issue now and save SSH/SCP renewal hook')
         [Console]::WriteLine('[0] Back')
         $choice = Read-SetupChoice -Prompt 'Firewall/VPN device' -Options @{
             '1'='generic-firewall'
             '2'='sophos'
             '3'='paloalto'
+            '4'='clavister'
             '0'='back'
         } -DefaultKey '1' -AllowBack
         if ($choice -in @('__CANCEL__','__BACK__','back')) { return '__BACK__' }
@@ -1543,6 +1555,7 @@ function Select-FirstRunDeviceFamily {
             'generic-firewall' = 'Generic firewall/VPN'
             sophos = 'Sophos firewall'
             paloalto = 'Palo Alto firewall'
+            clavister = 'Clavister NetWall / cOS Core'
         }
         if ($choice -ne 'generic-firewall') {
             [Console]::WriteLine('')
@@ -1550,6 +1563,9 @@ function Select-FirstRunDeviceFamily {
             if ($choice -eq 'sophos') {
                 [Console]::WriteLine('This step issues the certificate with the Sophos XGS deployment hook.')
                 [Console]::WriteLine('The setup will pull portals/WAF rules from Sophos and save the selected bindings for scheduled renewals.')
+            } elseif ($choice -eq 'clavister') {
+                [Console]::WriteLine('This step issues the certificate with the Clavister SSH/SCP deployment hook.')
+                [Console]::WriteLine('The scheduled renewal hook will reuse the saved device profile and certificate object name.')
             } else {
                 [Console]::WriteLine('This step issues the certificate with the generic firewall hook.')
                 [Console]::WriteLine('After issuance, use Deployment targets to configure and run the appliance-specific deployment.')
@@ -1642,7 +1658,8 @@ function Invoke-AcmeForm {
     [Console]::WriteLine('[9] NetScaler / Citrix ADC (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[10] Palo Alto firewall (Available after certificate issuance / post-deployment only)')
     [Console]::WriteLine('[11] Sophos firewall / XGS (issue now and save renewal hook targets)')
-    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='rds-farm'; '3'='iis'; '4'='mail'; '5'='firewall'; '6'='waf'; '7'='custom'; '8'='kemp'; '9'='netscaler'; '10'='paloalto'; '11'='sophos' } -DefaultKey '1'
+    [Console]::WriteLine('[12] Clavister NetWall / cOS Core (issue now and save SSH/SCP renewal hook)')
+    $target = Read-SetupChoice -Prompt 'Target' -Options @{ '1'='rds'; '2'='rds-farm'; '3'='iis'; '4'='mail'; '5'='firewall'; '6'='waf'; '7'='custom'; '8'='kemp'; '9'='netscaler'; '10'='paloalto'; '11'='sophos'; '12'='clavister' } -DefaultKey '1'
     if ($target -in @('__CANCEL__','__BACK__')) {
         [Console]::WriteLine('')
         [Console]::WriteLine('Setup cancelled.')
@@ -1677,9 +1694,11 @@ function Invoke-AcmeForm {
     }
 
     Start-ConsoleSection -Title 'Certificate distribution selection'
-    if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp')) {
+    if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp','clavister')) {
         if ([string]$targetSelection['DeviceType'] -eq 'sophos') {
             [Console]::WriteLine('Sophos XGS deployment needs a PFX file so the firewall receives the certificate private key.')
+        } elseif ([string]$targetSelection['DeviceType'] -eq 'clavister') {
+            [Console]::WriteLine('Clavister deployment needs a PFX file so the hook can export PEM certificate and private key files for SCP upload.')
         } else {
             [Console]::WriteLine('Kemp LoadMaster deployment needs a PFX file so the API hook can upload the certificate and private key.')
         }
@@ -1780,7 +1799,7 @@ function Invoke-AcmeForm {
             [Console]::WriteLine('RDS farm mode requires PFX distribution so the private key can be imported on Session Hosts.')
             $multiChoice = 'pfx'
         } else {
-            if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp')) {
+            if ([string]$targetSelection['DeviceType'] -in @('sophos','kemp','clavister')) {
                 $multiChoice = 'pfx'
             } else {
                 [Console]::WriteLine('Choose distribution method:')
@@ -1877,6 +1896,16 @@ function Invoke-AcmeForm {
             return $null
         }
         $values = $kempResult
+    }
+
+    if ([string]$targetSelection['DeviceType'] -eq 'clavister') {
+        $clavisterResult = Invoke-ClavisterCertificateRequestSetup -ProjectRoot (Split-Path $PSScriptRoot -Parent) -Values $values
+        if ($null -eq $clavisterResult) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
+        $values = $clavisterResult
     }
 
     while ($true) {
