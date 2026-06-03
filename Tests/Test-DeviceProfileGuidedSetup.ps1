@@ -133,6 +133,13 @@ function Invoke-TestDeviceProfileGuidedSetup {
         }
     }
 
+    & $Assert 'Device inventory wraps profile list before Count access' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        if (-not $runner.Contains('$devices = @(Get-DeviceProfileList -ConfigDir $configDir)')) {
+            throw 'Device inventory must wrap Get-DeviceProfileList output before using .Count.'
+        }
+    }
+
     & $Assert 'Device profile persistence supports multiple devices with friendly names' {
         Import-Module $runnerPath -Force
         $tempRoot = Join-Path $env:TEMP ("simple-acme-device-profiles-{0}" -f ([guid]::NewGuid().ToString('N')))

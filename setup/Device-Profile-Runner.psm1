@@ -1029,7 +1029,7 @@ function Invoke-DeviceProfileInventory {
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
     $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
-    $devices = Get-DeviceProfileList -ConfigDir $configDir
+    $devices = @(Get-DeviceProfileList -ConfigDir $configDir)
 
     Clear-Host
     Write-Host 'Configured devices'
