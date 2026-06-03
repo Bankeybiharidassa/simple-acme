@@ -1420,6 +1420,9 @@ function Assert-SavedEnvMatchesSetup {
             [void]$keysToCompare.Add($key)
         }
     }
+    if ($Expected.ContainsKey('ACME_PFX_PASSWORD') -and -not [string]::IsNullOrWhiteSpace([string]$Expected['ACME_PFX_PASSWORD'])) {
+        [void]$keysToCompare.Add('ACME_PFX_PASSWORD')
+    }
 
     foreach ($key in $keysToCompare) {
         $expectedValue = ''
@@ -1810,7 +1813,11 @@ function Invoke-AcmeForm {
             $values.Store_CertificateStore_PrivateKeyExportable = 'true'
         } else {
             $values.ACME_PRIVATE_KEY_STRATEGY = 'pfx-distribution'
-            $values.ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+            if ([string]$targetSelection['DeviceType'] -eq 'kemp') {
+                $values.ACME_STORE_PLUGIN = 'pfxfile'
+            } else {
+                $values.ACME_STORE_PLUGIN = 'pfxfile,certificatestore'
+            }
             $values.ACME_PRIVATEKEY_EXPORTABLE = 'false'
             $values.Store_CertificateStore_PrivateKeyExportable = 'false'
             $values.ACME_INSTALLATION_PLUGINS = 'script'

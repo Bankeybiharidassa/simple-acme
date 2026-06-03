@@ -100,6 +100,21 @@ function Resolve-KempPassword {
     return ''
 }
 
+function Get-KempWebExceptionResponseText {
+    [CmdletBinding()]
+    param([AllowNull()]$Response)
+
+    if ($null -eq $Response) { return '' }
+    try {
+        $stream = $Response.GetResponseStream()
+        if ($null -eq $stream) { return '' }
+        $reader = New-Object IO.StreamReader($stream)
+        try { return [string]$reader.ReadToEnd() } finally { $reader.Close() }
+    } catch {
+        return ''
+    }
+}
+
 function Invoke-KempApiV2 {
     [CmdletBinding()]
     param(
@@ -134,6 +149,10 @@ function Invoke-KempApiV2 {
         $response = $_.Exception.Response
         if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
             throw "Kemp APIv2 endpoint returned 404 at $endpoint. The LoadMaster WUI may still be reachable when the REST API route is disabled. In Certificates & Security > Remote Access, enable the API interface and confirm this management listener exposes REST."
+        }
+        $responseText = Get-KempWebExceptionResponseText -Response $response
+        if (-not [string]::IsNullOrWhiteSpace($responseText)) {
+            throw "Kemp APIv2 command '$Command' failed at $endpoint with HTTP $([int]$response.StatusCode): $responseText"
         }
         throw
     } catch {
@@ -179,6 +198,10 @@ function Invoke-KempClassicApi {
         $response = $_.Exception.Response
         if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
             throw "Kemp classic API endpoint returned 404 at $endpoint. The LoadMaster WUI may still be reachable when the REST API route is disabled. In Certificates & Security > Remote Access, enable the API interface and confirm this management listener exposes REST."
+        }
+        $responseText = Get-KempWebExceptionResponseText -Response $response
+        if (-not [string]::IsNullOrWhiteSpace($responseText)) {
+            throw "Kemp classic command '$Command' failed at $endpoint with HTTP $([int]$response.StatusCode): $responseText"
         }
         throw
     } catch {
@@ -334,18 +357,160 @@ function Convert-KempPfxToPemBundle {
 
     if (-not (Test-Path -LiteralPath $PfxPath -PathType Leaf)) { throw "PFX file was not found: $PfxPath" }
     if ([string]::IsNullOrWhiteSpace($OpenSslPath)) {
-        $cmd = Get-Command openssl.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $cmd) { throw 'OpenSSL was not found. Kemp PFX deployment needs openssl.exe to export the private key as PEM.' }
-        $OpenSslPath = [string]$cmd.Source
+        $OpenSslPath = Resolve-KempOpenSslPath
+        if ([string]::IsNullOrWhiteSpace($OpenSslPath)) { throw 'OpenSSL was not found. Kemp PFX deployment needs openssl.exe to export the private key as PEM.' }
+    } else {
+        $OpenSslPath = Resolve-KempOpenSslPath -OpenSslPath $OpenSslPath
     }
     $tempPath = Join-Path ([IO.Path]::GetTempPath()) ("simple-acme-kemp-{0}.pem" -f ([guid]::NewGuid().ToString('N')))
     $passIn = if ([string]::IsNullOrEmpty($Password)) { 'pass:' } else { 'pass:' + $Password }
     $args = @('pkcs12','-in',$PfxPath,'-nodes','-out',$tempPath,'-passin',$passIn)
-    $process = Start-Process -FilePath $OpenSslPath -ArgumentList $args -NoNewWindow -Wait -PassThru
-    if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $tempPath -PathType Leaf)) {
-        throw "OpenSSL failed to convert PFX to PEM for Kemp upload. ExitCode=$($process.ExitCode)"
+    $result = Invoke-KempOpenSsl -OpenSslPath $OpenSslPath -ArgumentList $args
+    if (($result.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $tempPath -PathType Leaf)) -and ($result.Error -match 'unsupported|RC2-40-CBC|legacy')) {
+        if (Test-Path -LiteralPath $tempPath -PathType Leaf) { Remove-Item -LiteralPath $tempPath -Force }
+        $providerPath = Get-KempOpenSslProviderPath -OpenSslPath $OpenSslPath
+        $legacyArgs = @('pkcs12','-legacy')
+        if (-not [string]::IsNullOrWhiteSpace($providerPath)) {
+            $legacyArgs += @('-provider-path', $providerPath)
+        }
+        $legacyArgs += @('-in',$PfxPath,'-nodes','-out',$tempPath,'-passin',$passIn)
+        $result = Invoke-KempOpenSsl -OpenSslPath $OpenSslPath -ArgumentList $legacyArgs
+    }
+    if ($result.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $tempPath -PathType Leaf)) {
+        $detail = if ([string]::IsNullOrWhiteSpace([string]$result.Error)) { '' } else { " Error: $($result.Error.Trim())" }
+        throw "OpenSSL failed to convert PFX to PEM for Kemp upload. ExitCode=$($result.ExitCode).$detail"
     }
     return $tempPath
+}
+
+function Resolve-KempOpenSslPath {
+    [CmdletBinding()]
+    param([string]$OpenSslPath = '')
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($OpenSslPath)) {
+        $candidates += $OpenSslPath
+    } else {
+        $commands = @(Get-Command openssl.exe -All -ErrorAction SilentlyContinue)
+        foreach ($command in $commands) { $candidates += [string]$command.Source }
+    }
+
+    foreach ($candidate in @($candidates)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if ($candidate -match '\\Git\\usr\\bin\\openssl\.exe$') {
+            $gitRoot = Split-Path (Split-Path (Split-Path $candidate -Parent) -Parent) -Parent
+            $mingwOpenSsl = Join-Path $gitRoot 'mingw64\bin\openssl.exe'
+            if (Test-Path -LiteralPath $mingwOpenSsl -PathType Leaf) { return $mingwOpenSsl }
+        }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return ''
+}
+
+function Invoke-KempOpenSsl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OpenSslPath,
+        [Parameter(Mandatory)][string[]]$ArgumentList
+    )
+
+    $modulePath = Get-KempOpenSslModulePath -OpenSslPath $OpenSslPath
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $OpenSslPath
+    $psi.Arguments = Join-KempProcessArguments -ArgumentList $ArgumentList
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    if (-not [string]::IsNullOrWhiteSpace($modulePath)) {
+        $psi.EnvironmentVariables['OPENSSL_MODULES'] = $modulePath
+    }
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    try {
+        [void]$process.Start()
+        $errorText = $process.StandardError.ReadToEnd()
+        [void]$process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = [int]$process.ExitCode
+            Error = [string]$errorText
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Get-KempOpenSslModulePath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$OpenSslPath)
+
+    $candidates = @()
+    $opensslDir = Split-Path -Parent $OpenSslPath
+    if (-not [string]::IsNullOrWhiteSpace($opensslDir)) {
+        $candidates += Join-Path $opensslDir '..\lib\ossl-modules'
+        $candidates += Join-Path $opensslDir '..\..\mingw64\lib\ossl-modules'
+        $candidates += Join-Path $opensslDir '..\..\lib\ossl-modules'
+    }
+    foreach ($candidate in $candidates) {
+        try {
+            $resolved = [IO.Path]::GetFullPath($candidate)
+            if (Test-Path -LiteralPath (Join-Path $resolved 'legacy.dll') -PathType Leaf) { return $resolved }
+        } catch {
+            continue
+        }
+    }
+    return ''
+}
+
+function Get-KempOpenSslProviderPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$OpenSslPath)
+
+    $modulePath = Get-KempOpenSslModulePath -OpenSslPath $OpenSslPath
+    if ([string]::IsNullOrWhiteSpace($modulePath)) { return '' }
+
+    $cygpath = Join-Path (Split-Path -Parent $OpenSslPath) 'cygpath.exe'
+    if (Test-Path -LiteralPath $cygpath -PathType Leaf) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $cygpath
+        $psi.Arguments = Join-KempProcessArguments -ArgumentList @('-u', $modulePath)
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        try {
+            [void]$process.Start()
+            $stdout = $process.StandardOutput.ReadToEnd()
+            [void]$process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($stdout)) {
+                return $stdout.Trim()
+            }
+        } finally {
+            $process.Dispose()
+        }
+    }
+
+    return $modulePath
+}
+
+function Join-KempProcessArguments {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string[]]$ArgumentList)
+
+    $quoted = foreach ($arg in $ArgumentList) {
+        $text = if ($null -eq $arg) { '' } else { [string]$arg }
+        if ($text.Length -eq 0) { '""'; continue }
+        if ($text -notmatch '[\s"]') { $text; continue }
+        $escaped = $text -replace '(\\*)"', '$1$1\"'
+        $escaped = $escaped -replace '(\\+)$', '$1$1'
+        '"' + $escaped + '"'
+    }
+    return ($quoted -join ' ')
 }
 
 function Import-KempCertificate {
@@ -368,7 +533,13 @@ function Import-KempCertificate {
     $data = [Convert]::ToBase64String([IO.File]::ReadAllBytes($PemBundlePath))
     $parameters = @{ cert = $CertificateName; data = $data; replace = $(if ($Replace) { '1' } else { '0' }) }
     if ($PSCmdlet.ShouldProcess($HostName, "Upload Kemp certificate '$CertificateName'")) {
-        Invoke-KempApi -HostName $HostName -Port $Port -Command 'addcert' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        try {
+            Invoke-KempApi -HostName $HostName -Port $Port -Command 'addcert' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        } catch {
+            if (-not $Replace -or $_.Exception.Message -notmatch 'Certificate Identifier has been deleted') { throw }
+            $parameters['replace'] = '0'
+            Invoke-KempApi -HostName $HostName -Port $Port -Command 'addcert' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+        }
     }
 }
 
@@ -387,7 +558,7 @@ function Set-KempVirtualServiceCertificate {
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
     )
 
-    $parameters = @{ vs = $VirtualServiceId; cert = $CertificateName }
+    $parameters = @{ vs = $VirtualServiceId; SSLAcceleration = '1'; CertFile = $CertificateName }
     if ($PSCmdlet.ShouldProcess($HostName, "Bind Kemp certificate '$CertificateName' to VS '$VirtualServiceId'")) {
         Invoke-KempApi -HostName $HostName -Port $Port -Command 'modvs' -Parameters $parameters -ApiKey $ApiKey -Username $Username -Password $Password -UseHttp:$UseHttp -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
     }

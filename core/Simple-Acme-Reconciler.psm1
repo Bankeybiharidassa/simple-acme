@@ -597,7 +597,9 @@ function Compare-RenewalWithEnv {
     }
     $expectedStores = @(Get-NormalizedCsvValues -InputText (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore') | Sort-Object -Unique)
     $compareInstallPlugins = Get-InstallationPlugins -EnvValues $EnvValues
-    if ($compareInstallPlugins -contains 'script' -and $expectedStores -notcontains 'certificatestore') {
+    $compareScriptParams = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default '{CertThumbprint}'
+    $compareScriptNeedsThumbprint = ([string]$compareScriptParams -match '\{CertThumbprint\}')
+    if ($compareInstallPlugins -contains 'script' -and $compareScriptNeedsThumbprint -and $expectedStores -notcontains 'certificatestore') {
         $expectedStores = @($expectedStores + 'certificatestore' | Sort-Object -Unique)
     }
     $actualStores = @($RenewalSummary.StorePlugins | Sort-Object -Unique)
@@ -886,6 +888,30 @@ function Get-MaskedWacsArgumentsText {
     return @($masked)
 }
 
+function Test-WacsDeferredRetrySuggested {
+    param([AllowNull()][string[]]$OutputLines)
+
+    $text = (@($OutputLines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+
+    return (
+        $text -match '(?i)Unexpected order status processing' -or
+        $text -match '(?i)\border\b.*\bprocessing\b' -or
+        $text -match '(?i)rateLimited' -or
+        $text -match '(?i)Please wait a short moment before retrying this request'
+    )
+}
+
+function Get-WacsRetryArgumentList {
+    param(
+        [Alias('Args')][AllowNull()][string[]]$ArgumentList,
+        [switch]$AllowCache
+    )
+
+    if (-not $AllowCache) { return @($ArgumentList) }
+    return @($ArgumentList | Where-Object { [string]$_ -ne '--nocache' })
+}
+
 function Invoke-WacsWithRetry {
     param(
         [Parameter(Mandatory)][string[]]$Args,
@@ -904,6 +930,9 @@ WACS entered interactive menu. The generated command is incomplete.
     $delaySeconds = 2
     [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_RETRY_DELAY_SECONDS' -Default '2'), [ref]$delaySeconds)
     if ($delaySeconds -lt 0) { $delaySeconds = 0 }
+    $deferredDelaySeconds = 120
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_DEFERRED_RETRY_DELAY_SECONDS' -Default '120'), [ref]$deferredDelaySeconds)
+    if ($deferredDelaySeconds -lt 0) { $deferredDelaySeconds = 0 }
 
     $wacsPath = Resolve-WacsExecutable -EnvValues $EnvValues
     if (-not [System.IO.Path]::IsPathRooted([string]$wacsPath)) {
@@ -911,13 +940,22 @@ WACS entered interactive menu. The generated command is incomplete.
     }
 
     $last = $null
+    $allowCacheOnRetry = $false
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-        $last = Invoke-NativeProcess -FilePath $wacsPath -ArgumentList $Args -TimeoutSeconds $TimeoutSeconds -FatalPatterns @('(?i)\bfatal\b')
+        $attemptArgs = Get-WacsRetryArgumentList -Args $Args -AllowCache:$allowCacheOnRetry
+        $last = Invoke-NativeProcess -FilePath $wacsPath -ArgumentList $attemptArgs -TimeoutSeconds $TimeoutSeconds -FatalPatterns @('(?i)\bfatal\b')
         $null = Get-WacsOutputAnalysis -OutputLines @($last.OutputLines) -RequireNonInteractiveMode
         foreach ($line in $last.OutputLines) { Write-Host ([string]$line) }
         if ($last.Succeeded) { return $last }
         if ($attempt -lt $attempts) {
-            $effectiveDelay = [math]::Pow(2, ($attempt - 1)) * $delaySeconds
+            $deferredRetry = Test-WacsDeferredRetrySuggested -OutputLines @($last.OutputLines)
+            if ($deferredRetry) {
+                $allowCacheOnRetry = $true
+                $effectiveDelay = [math]::Max(([math]::Pow(2, ($attempt - 1)) * $delaySeconds), $deferredDelaySeconds)
+                Write-Warning "ACME order is still processing or temporarily rate limited. Waiting $([int][math]::Ceiling($effectiveDelay)) second(s) and retrying without --nocache so WACS can reuse the pending order."
+            } else {
+                $effectiveDelay = [math]::Pow(2, ($attempt - 1)) * $delaySeconds
+            }
             Start-Sleep -Seconds ([int][math]::Ceiling($effectiveDelay))
         }
     }
@@ -1171,9 +1209,11 @@ function Get-WacsIssueArguments {
     }
 
     $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
-    if ($installationPlugins -contains 'script' -and -not ($storePlugins -contains 'certificatestore')) {
+    $scriptParamsForStoreDecision = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default ''
+    $scriptNeedsThumbprint = ([string]$scriptParamsForStoreDecision -match '\{CertThumbprint\}')
+    if ($installationPlugins -contains 'script' -and $scriptNeedsThumbprint -and -not ($storePlugins -contains 'certificatestore')) {
         $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
-        Write-Warning 'ACME_INSTALLATION_PLUGINS includes script but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
+        Write-Warning 'ACME_INSTALLATION_PLUGINS includes a script that uses {CertThumbprint}, but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
     }
 
     $sourcePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual'
@@ -1491,6 +1531,8 @@ $FunctionsToExport.Add('Get-WacsOutputAnalysis')
 $FunctionsToExport.Add('Invoke-WacsWithRetry')
 $FunctionsToExport.Add('Invoke-WacsIssue')
 $FunctionsToExport.Add('Get-MaskedWacsArgumentsText')
+$FunctionsToExport.Add('Test-WacsDeferredRetrySuggested')
+$FunctionsToExport.Add('Get-WacsRetryArgumentList')
 $FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
 $FunctionsToExport.Add('Get-WacsIssueArguments')
 $FunctionsToExport.Add('Get-MaskedWacsIssueCommandPreview')

@@ -425,6 +425,33 @@ No version here
         if (($masked -join ',') -ne '--eab-key,<hidden>') { throw "Expected masked secret, got $($masked -join ',')" }
     }
 
+    & $Assert 'wacs deferred retry detects processing and rate limit output' {
+        if (-not (Test-WacsDeferredRetrySuggested -OutputLines @('Unexpected order status processing'))) {
+            throw 'Expected processing status to request deferred retry.'
+        }
+        if (-not (Test-WacsDeferredRetrySuggested -OutputLines @('detail":"Please wait a short moment before retrying this request.'))) {
+            throw 'Expected ACME short-moment rate-limit detail to request deferred retry.'
+        }
+        if (Test-WacsDeferredRetrySuggested -OutputLines @('Create certificate failed')) {
+            throw 'Generic certificate failure should not force deferred retry handling.'
+        }
+    }
+
+    & $Assert 'wacs deferred retry can reuse pending order by dropping nocache' {
+        $args = @('--accepttos','--nocache','--csr','ec')
+        $normal = @(Get-WacsRetryArgumentList -Args $args)
+        if (($normal -join ',') -ne ($args -join ',')) {
+            throw "Expected normal retry args unchanged, got: $($normal -join ',')"
+        }
+        $deferred = @(Get-WacsRetryArgumentList -Args $args -AllowCache)
+        if ($deferred -contains '--nocache') {
+            throw 'Expected deferred retry args to remove --nocache.'
+        }
+        if (($deferred -join ',') -ne '--accepttos,--csr,ec') {
+            throw "Unexpected deferred retry args: $($deferred -join ',')"
+        }
+    }
+
     & $Assert 'csr plan supports explicit rsa' {
         $plan = Get-CsrExecutionPlan -EnvValues @{ ACME_CSR_ALGORITHM = 'rsa'; ACME_ALLOW_CSR_FALLBACK = '0' }
         if (($plan -join ',') -ne 'rsa') { throw "Expected rsa only, got $($plan -join ',')" }
@@ -499,6 +526,62 @@ No version here
         }
         $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
         if (-not $result.Matches) { throw "Expected auto-inject of certificatestore to produce a match, but got mismatches: $($result.Mismatches -join ', ')" }
+    }
+
+    & $Assert 'Get-WacsIssueArguments does not force certificatestore for PFX-only appliance hooks' {
+        $args = Get-WacsIssueArguments -EnvValues @{
+            DOMAINS = 'kemp.example.com'
+            ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_SCRIPT_PATH = 'C:\certificaat\Scripts\cert2kemp.ps1'
+            ACME_SCRIPT_PARAMETERS = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir 'C:\certificaat\config'"
+            ACME_STORE_PLUGIN = 'pfxfile'
+            ACME_PFX_FILE_PATH = 'C:\certs'
+            ACME_PFX_PASSWORD = 'secret-password'
+            ACME_PRIVATE_KEY_STRATEGY = 'pfx-distribution'
+        } -CsrAlgorithm 'ec'
+        $storeIndex = [Array]::IndexOf([object[]]$args, '--store')
+        if ($storeIndex -lt 0) { throw 'Expected --store argument.' }
+        if ($args[$storeIndex + 1] -ne 'pfxfile') {
+            throw "Expected pfxfile-only store for Kemp hook, got '$($args[$storeIndex + 1])'."
+        }
+    }
+
+    & $Assert 'Compare-RenewalWithEnv accepts PFX-only appliance hooks' {
+        $summary = [pscustomobject]@{
+            Hosts = @('kemp.example.com')
+            BaseUri = 'https://test-acme.networking4all.com/dv'
+            EabKid = ''
+            SourcePlugin = 'manual'
+            OrderPlugin = 'single'
+            AccountName = ''
+            HasValidationNone = $true
+            HasScriptInstallation = $true
+            InstallationPlugins = @('script')
+            ScriptPaths = @('C:\certificaat\Scripts\cert2kemp.ps1')
+            ScriptParameters = @("-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir 'C:\certificaat\config'")
+            StorePlugins = @('pfxfile')
+            CsrPlugin = $null
+            KeyType = $null
+        }
+        $envValues = @{
+            DOMAINS = 'kemp.example.com'
+            ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv'
+            ACME_KID = ''
+            ACME_SCRIPT_PATH = 'C:\certificaat\Scripts\cert2kemp.ps1'
+            ACME_SOURCE_PLUGIN = 'manual'
+            ACME_ORDER_PLUGIN = 'single'
+            ACME_STORE_PLUGIN = 'pfxfile'
+            ACME_VALIDATION_MODE = 'none'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_SCRIPT_PARAMETERS = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir 'C:\certificaat\config'"
+            ACME_ACCOUNT_NAME = ''
+        }
+        $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
+        if (-not $result.Matches) { throw "Expected PFX-only Kemp hook to match, but got mismatches: $($result.Mismatches -join ', ')" }
     }
 
     & $Assert 'Compare-RenewalWithEnv reports Store plugin mismatch when stores differ' {

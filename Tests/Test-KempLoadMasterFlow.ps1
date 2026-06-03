@@ -88,6 +88,8 @@ function Invoke-TestKempLoadMasterFlow {
         $module = Get-Content -LiteralPath $modulePath -Raw
         foreach ($text in @(
             'Convert-KempPfxToPemBundle',
+            "'-legacy'",
+            'Invoke-KempOpenSsl',
             'Import-KempCertificate',
             'Set-KempVirtualServiceCertificate',
             'Test-KempVirtualServiceCertificate',
@@ -97,7 +99,9 @@ function Invoke-TestKempLoadMasterFlow {
             'Invoke-KempApi',
             'Test-KempManagementUi',
             'addcert',
-            'modvs'
+            'modvs',
+            'SSLAcceleration',
+            'CertFile'
         )) {
             if (-not ($hook.Contains($text) -or $module.Contains($text))) { throw "Missing Kemp API deployment behavior: $text" }
         }
