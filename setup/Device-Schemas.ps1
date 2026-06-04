@@ -77,7 +77,16 @@ $DeviceSchemas = @{
     caddy = @{ ConnectorType='caddy'; Label='Caddy'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
     lighttpd = @{ ConnectorType='lighttpd'; Label='Lighttpd'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
 
-    opnsense = @{ ConnectorType='opnsense'; Label='OPNsense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    opnsense = @{ ConnectorType='opnsense'; Label='OPNsense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_key_secret'; Label='OPNsense API key and secret'; DefaultPort='443' }); Fields=@(
+        @{ Name='host'; Label='OPNsense address'; Type='string'; Required=$true; Placeholder='192.168.45.1'; HelpText='OPNsense WebGUI/API address.' },
+        @{ Name='port'; Label='WebGUI/API port'; Type='string'; Required=$true; Default='443'; Placeholder='1443'; HelpText='OPNsense WebGUI/API HTTPS port. Use your custom port when WebGUI is not on 443.' },
+        @{ Name='api_key'; Label='API key'; Type='secret'; Required=$true; Placeholder=''; HelpText='OPNsense API key. In OPNsense this is the Basic Auth username.' },
+        @{ Name='api_secret'; Label='API secret'; Type='secret'; Required=$true; Placeholder=''; HelpText='OPNsense API secret. In OPNsense this is the Basic Auth password and is only shown once when created.' },
+        @{ Name='skip_certificate_check'; Label='Ignore OPNsense TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed OPNsense management certificates.' },
+        @{ Name='certificate_name'; Label='Name in OPNsense trust store'; Type='string'; Required=$false; Placeholder='wildcard_itsecured_nl'; HelpText='Description/name used when importing the issued certificate into System > Trust > Certificates.' },
+        @{ Name='bind_target_ids'; Label='Selected service numbers'; Type='string'; Required=$false; Placeholder='1'; HelpText='Filled by OPNsense target selection. Numbers only; avoid typing manually.' },
+        @{ Name='bind_target_names'; Label='Selected services'; Type='string'; Required=$false; Placeholder='OPNsense Web GUI'; HelpText='Human-readable summary of selected OPNsense services.' }
+    )}
     pfsense = @{ ConnectorType='pfsense'; Label='pfSense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     fortigate = @{ ConnectorType='fortigate'; Label='Fortinet FortiGate'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     sonicwall = @{ ConnectorType='sonicwall'; Label='SonicWall firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }

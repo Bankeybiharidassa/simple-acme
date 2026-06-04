@@ -63,6 +63,8 @@ scripts/modules/SimpleAcme.Clavister/ClavisterSsh.psm1
 scripts/modules/SimpleAcme.Clavister/SimpleAcme.Clavister.psd1
 scripts/modules/SimpleAcme.Kemp/KempLoadMaster.psm1
 scripts/modules/SimpleAcme.Kemp/SimpleAcme.Kemp.psd1
+scripts/modules/SimpleAcme.OPNsense/OPNsenseApi.psm1
+scripts/modules/SimpleAcme.OPNsense/SimpleAcme.OPNsense.psd1
 scripts/modules/SimpleAcme.Sophos/SophosFirewallXml.psm1
 scripts/modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1
 scripts/deploy-rds-farm.ps1

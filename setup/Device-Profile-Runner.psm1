@@ -540,6 +540,55 @@ function Invoke-ClavisterDeviceProfileSshTest {
     }
 }
 
+function Invoke-OPNsenseDeviceProfileApiTest {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $modulePath = Join-Path $ProjectRoot 'Scripts/Modules/SimpleAcme.OPNsense/SimpleAcme.OPNsense.psd1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        return [pscustomobject]@{ Status = 'Failed'; Message = "OPNsense module was not found: $modulePath"; Label = $Label }
+    }
+
+    Import-Module $modulePath -Force
+    $hostName = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = 443
+    if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [void][int]::TryParse([string]$Values['port'], [ref]$port) }
+    $apiKey = if ($Values.ContainsKey('api_key')) { [string]$Values['api_key'] } else { '' }
+    $apiSecret = if ($Values.ContainsKey('api_secret')) { [string]$Values['api_secret'] } else { '' }
+    $skipCertificateCheck = ConvertTo-DeviceProfileBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $true }) -Default $true
+    $started = Get-Date
+
+    try {
+        $connection = Test-OPNsenseApiConnection -HostName $hostName -Port $port -ApiKey $apiKey -ApiSecret $apiSecret -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 60
+        $targets = @(Get-OPNsenseCertificateServiceInventory -HostName $hostName -Port $port -ApiKey $apiKey -ApiSecret $apiSecret -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 20)
+        return [pscustomobject]@{
+            Status = 'Succeeded'
+            Message = "OPNsense API connected. Inventory returned $($targets.Count) certificate service surface(s)."
+            Endpoint = $connection.Endpoint
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            Product = $connection.Product
+            Version = $connection.Version
+            TargetCount = $targets.Count
+            Targets = @($targets | Select-Object Id,Name,BindingStatus,Endpoint)
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    } catch {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = $_.Exception.Message
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    }
+}
+
 function Invoke-DeviceProfileCommunicationTest {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -551,6 +600,7 @@ function Invoke-DeviceProfileCommunicationTest {
     switch ($ConnectorType) {
         'clavister' { return Invoke-ClavisterDeviceProfileSshTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         'kemp' { return Invoke-KempDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
+        'opnsense' { return Invoke-OPNsenseDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         default { return Invoke-DeviceProfileTcpTest -Values $Values -Label $Label }
     }
 }
