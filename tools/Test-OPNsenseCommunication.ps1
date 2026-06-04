@@ -11,6 +11,25 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Enable-OPNsenseCertificateBypass {
+    if (-not ('SimpleAcmeOPNsenseCertificatePolicy' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+
+public class SimpleAcmeOPNsenseCertificatePolicy : ICertificatePolicy
+{
+    public bool CheckValidationResult(ServicePoint srvPoint, X509Certificate certificate, WebRequest request, int certificateProblem)
+    {
+        return true;
+    }
+}
+'@
+    }
+
+    [Net.ServicePointManager]::CertificatePolicy = New-Object SimpleAcmeOPNsenseCertificatePolicy
+}
+
 function Invoke-OPNsenseRequest {
     param(
         [Parameter(Mandatory)][string]$Uri,
@@ -22,9 +41,9 @@ function Invoke-OPNsenseRequest {
     )
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    $previousPolicy = [Net.ServicePointManager]::CertificatePolicy
     if ($SkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        Enable-OPNsenseCertificateBypass
     }
 
     try {
@@ -32,7 +51,7 @@ function Invoke-OPNsenseRequest {
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
         Invoke-RestMethod -Uri $Uri -Method $Method -Headers @{ Authorization = "Basic $basic" } -TimeoutSec $TimeoutSeconds
     } finally {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+        [Net.ServicePointManager]::CertificatePolicy = $previousPolicy
     }
 }
 
