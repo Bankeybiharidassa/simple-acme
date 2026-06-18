@@ -177,6 +177,22 @@ function Invoke-TestPaloAltoFlow {
         }
     }
 
+    & $Assert 'Palo Alto first-run setup pins renewal hook to the selected device profile' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        $form = Get-Content -LiteralPath (Join-Path $root 'setup\Form-Runner.psm1') -Raw
+        foreach ($text in @(
+            'function Invoke-PaloAltoCertificateRequestSetup',
+            "Invoke-DeviceProfileConnectorWizard -ProjectRoot `$ProjectRoot -ConnectorType 'paloalto'",
+            "ACME_TARGET_DEVICE_ID",
+            '-DeviceId $(ConvertTo-DeviceProfileSingleQuotedArgument -Value $deviceId)'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Palo Alto device-specific setup behavior: $text" }
+        }
+        if (-not $form.Contains('Invoke-PaloAltoCertificateRequestSetup')) {
+            throw 'First-run setup does not route Palo Alto issuance through the device-specific setup function.'
+        }
+    }
+
     & $Assert 'TUI form edits and help text stay inside the form box' {
         $tui = Get-Content -LiteralPath $tuiPath -Raw
         foreach ($text in @(
