@@ -27,6 +27,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$KeyPath,
 
+    [Parameter(Mandatory = $false)]
+    [ValidateLength(0, 31)]
+    [string]$KeyPassphrase = '',
+
     [Parameter(Mandatory = $true)]
     [ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')]
     [string]$BindingType,
@@ -56,7 +60,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:RetryCount = 3
-$script:LogDir = if ($IsWindows) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot 'logs' }
+$script:PaloAltoCertificatePolicyTypeLoaded = $false
+$script:LogDir = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot 'logs' }
 $script:LogFile = Join-Path $script:LogDir ("deploy-paloalto-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
 
 function Write-StructuredLog {
@@ -185,7 +190,30 @@ function Invoke-PaloAltoApiWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+        if (-not $script:PaloAltoCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmePaloAltoCertificatePolicy' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmePaloAltoCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        }
+        $script:PaloAltoCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmePaloAltoCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmePaloAltoCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback =
+            [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
 
     try {
@@ -372,13 +400,14 @@ function Upload-Certificate {
         [Parameter(Mandatory = $true)][string]$CertName,
         [Parameter(Mandatory = $true)][string]$CertPath,
         [Parameter(Mandatory = $true)][string]$KeyPath,
+        [Parameter(Mandatory = $false)][ValidateLength(0, 31)][string]$KeyPassphrase = '',
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     Write-StructuredLog -Action 'upload-certificate' -Target $Firewall -Result 'info' -Details @{ certName = $CertName }
 
     $certQuery = @{ type = 'import'; category = 'certificate'; 'certificate-name' = $CertName; format = 'pem' }
-    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = '' }
+    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = $KeyPassphrase }
 
     $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
     $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds
@@ -397,8 +426,8 @@ function Set-SSLProfile {
     )
 
     $profileName = "$CertName-tls-profile"
-    $profileXPath = "/config/shared/ssl-tls-service-profile/entry[@name='$(Get-XmlEscaped -Text $profileName)']"
-    $element = "<entry name='$(Get-XmlEscaped -Text $profileName)'><protocol-settings><min-version>tls1-2</min-version><max-version>tls1-3</max-version></protocol-settings><certificate><member>$(Get-XmlEscaped -Text $CertName)</member></certificate></entry>"
+    $profileXPath = "/config/shared/ssl-tls-service-profile"
+    $element = "<entry name='$(Get-XmlEscaped -Text $profileName)'><protocol-settings><min-version>tls1-2</min-version><max-version>tls1-3</max-version></protocol-settings><certificate>$(Get-XmlEscaped -Text $CertName)</certificate></entry>"
 
     Write-StructuredLog -Action 'set-ssl-profile' -Target $profileName -Result 'info' -Details @{}
     $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $profileXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
@@ -411,12 +440,15 @@ function Resolve-BindingXPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
+        [string]$BindingTarget = '',
         [Parameter(Mandatory = $true)][string]$Vsys
     )
 
     switch ($BindingType) {
         'waf' {
+            if ([string]::IsNullOrWhiteSpace($BindingTarget)) {
+                throw 'waf BindingTarget is required.'
+            }
             return "/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='$(Get-XmlEscaped -Text $Vsys)']/rulebase/decryption/rules/entry[@name='$(Get-XmlEscaped -Text $BindingTarget)']/ssl-tls-service-profile"
         }
         'globalprotect' {
@@ -447,16 +479,17 @@ function Bind-Certificate {
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [Parameter(Mandatory = $true)][ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')][string]$BindingType,
-        [Parameter(Mandatory = $true)][string]$BindingTarget,
+        [string]$BindingTarget = '',
         [Parameter(Mandatory = $true)][string]$Vsys,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     $bindingXPath = Resolve-BindingXPath -BindingType $BindingType -BindingTarget $BindingTarget -Vsys $Vsys
+    $bindingSetXPath = $bindingXPath -replace '/ssl-tls-service-profile$', ''
     $element = "<ssl-tls-service-profile>$(Get-XmlEscaped -Text $ProfileName)</ssl-tls-service-profile>"
 
     Write-StructuredLog -Action 'bind-certificate' -Target $bindingXPath -Result 'info' -Details @{ bindingType = $BindingType; bindingTarget = $BindingTarget }
-    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $bindingXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
+    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $bindingSetXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
     Write-StructuredLog -Action 'bind-certificate' -Target $bindingXPath -Result 'success' -Details @{ profile = $ProfileName }
 
     return $bindingXPath
@@ -519,7 +552,10 @@ function Validate-Deployment {
 
     $profileXPath = "/config/shared/ssl-tls-service-profile/entry[@name='$(Get-XmlEscaped -Text $ProfileName)']"
     $profileResp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $profileXPath } -TimeoutSeconds $TimeoutSeconds
-    $profileCert = [string]$profileResp.response.result.entry.certificate.member
+    $profileCert = [string]$profileResp.response.result.entry.certificate
+    if ([string]::IsNullOrWhiteSpace($profileCert)) {
+        $profileCert = [string]$profileResp.response.result.entry.certificate.member
+    }
     if ($profileCert -ne $CertName) {
         throw "Validation failed: profile '$ProfileName' references '$profileCert' instead of '$CertName'."
     }
@@ -546,13 +582,12 @@ try {
 
     $existingFingerprint = Get-ExistingCertificateFingerprint -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
     if ($existingFingerprint -and ($existingFingerprint -eq $certInfo.Thumbprint)) {
-        Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'success' -Details @{ decision = 'no-op'; reason = 'fingerprint-match' }
-        exit 0
+        Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'success' -Details @{ decision = 'skip-upload'; reason = 'fingerprint-match' }
+    } else {
+        Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'info' -Details @{ decision = 'deploy'; existing = $existingFingerprint; incoming = $certInfo.Thumbprint }
+        Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -KeyPassphrase $KeyPassphrase -TimeoutSeconds $TimeoutSeconds
     }
 
-    Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'info' -Details @{ decision = 'deploy'; existing = $existingFingerprint; incoming = $certInfo.Thumbprint }
-
-    Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -TimeoutSeconds $TimeoutSeconds
     $profileName = Set-SSLProfile -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
     $bindingXPath = Bind-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -ProfileName $profileName -BindingType $BindingType -BindingTarget $BindingTarget -Vsys $Vsys -TimeoutSeconds $TimeoutSeconds
 

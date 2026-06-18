@@ -12,7 +12,7 @@ function Invoke-TestFirstRunDeviceFamilyPrompt {
         foreach ($text in @(
             'Which firewall/VPN device family is this certificate for?',
             'Sophos firewall - issue now and save Sophos renewal hook targets',
-            'Palo Alto firewall - issue now, deploy from Deployment targets after issuance',
+            'Palo Alto firewall - issue now and save Palo Alto renewal hook',
             'Which load balancer/WAF family is this certificate for?',
             'NetScaler / Citrix ADC - issue now, deploy from Deployment targets after issuance',
             'Kemp LoadMaster - issue now, deploy from Deployment targets after issuance',
@@ -55,10 +55,15 @@ function Invoke-TestFirstRunDeviceFamilyPrompt {
         if ($raw -notmatch "sophos\s*=\s*@\{[^}]*TargetSystem\s*=\s*'sophos'") {
             throw 'Sophos first-run menu choice is not routed to the Sophos renewal hook.'
         }
+        if ($raw -notmatch "paloalto\s*=\s*@\{[^}]*TargetSystem\s*=\s*'paloalto'") {
+            throw 'Palo Alto first-run menu choice is not routed to the Palo Alto renewal hook.'
+        }
         foreach ($text in @(
             'The WACS scheduled renewal hook will reuse that saved selection automatically.',
             'Invoke-SophosCertificateRequestSetup',
-            'Sophos XGS deployment needs a PFX file'
+            'Sophos XGS deployment needs a PFX file',
+            'Palo Alto deployment needs a PFX file',
+            'Palo Alto XML/REST deployment hook'
         )) {
             if ($raw -notmatch [regex]::Escape($text)) {
                 throw "Missing Sophos scheduled-hook setup text or wiring: $text"

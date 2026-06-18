@@ -15,12 +15,20 @@ Describe 'Form runner deployment script wiring' {
             $template.ACME_SCRIPT_PARAMETERS | Should -Be '{CertThumbprint}'
         }
 
+        It 'Guided Palo Alto template uses profile-aware PFX hook' {
+            $template = Get-GuidedPipelineTemplate -TargetSystem 'paloalto' -ValidationMode 'none'
+            $expected = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts/cert2paloalto.ps1'
+            [System.IO.Path]::GetFullPath($template.ACME_SCRIPT_PATH) | Should -Be ([System.IO.Path]::GetFullPath($expected))
+            $template.ACME_STORE_PLUGIN | Should -Be 'pfxfile,certificatestore'
+            $template.ACME_SCRIPT_PARAMETERS | Should -Be "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -CertCommonName '{CertCommonName}'"
+        }
+
         It 'Connector script intent lookup uses registry-backed mappings' {
             Get-ConnectorScriptByIntent -TargetIntent 'mail' | Should -Be 'cert2mail.ps1'
             Get-ConnectorScriptByIntent -TargetIntent 'custom' | Should -Be ''
             Get-ConnectorScriptByIntent -TargetIntent 'kemp' | Should -Be 'cert2kemp.ps1'
             Get-ConnectorScriptByIntent -TargetIntent 'netscaler' | Should -Be 'cert2netscaler.ps1'
-            Get-ConnectorScriptByIntent -TargetIntent 'paloalto' | Should -Be 'deploy-paloalto.ps1'
+            Get-ConnectorScriptByIntent -TargetIntent 'paloalto' | Should -Be 'cert2paloalto.ps1'
             Get-ConnectorScriptByIntent -TargetIntent 'sophos' | Should -Be 'deploy-sophos.ps1'
         }
 

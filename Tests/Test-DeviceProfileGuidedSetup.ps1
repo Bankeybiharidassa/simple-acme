@@ -17,6 +17,7 @@ function Invoke-TestDeviceProfileGuidedSetup {
             'function Invoke-DeviceProfileEdit',
             'function Invoke-DeviceProfileDelete',
             'function Invoke-GuidedDeviceProfileForm',
+            'function Invoke-PaloAltoProfileForm',
             'function Invoke-DeviceProfileTcpTest',
             'function New-DeviceProfileId',
             'Read-DeviceProfileConsoleLine',
@@ -80,7 +81,7 @@ function Invoke-TestDeviceProfileGuidedSetup {
         foreach ($text in @(
             '[Console]::ReadKey($true)',
             '[ConsoleKey]::Escape',
-            'Press Esc at any question to cancel.',
+            'Show-TuiForm -Fields ([hashtable[]]$formFields)',
             'Wait-DeviceProfileOperatorKey',
             'Communication test summary',
             'Protocol authentication was not attempted by the generic profile test'

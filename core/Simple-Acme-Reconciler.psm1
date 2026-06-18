@@ -1336,6 +1336,25 @@ function Test-ExactDomainSetMatch {
     return (($left -join ',') -eq ($right -join ','))
 }
 
+function Test-RenewalAcmeDirectoryMatch {
+    param(
+        [Parameter(Mandatory)]$RenewalSummary,
+        [Parameter(Mandatory)][hashtable]$EnvValues
+    )
+
+    $renewalBaseUri = [string]$RenewalSummary.BaseUri
+    if ([string]::IsNullOrWhiteSpace($renewalBaseUri)) {
+        return $true
+    }
+
+    $expectedBaseUri = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'
+    if ([string]::IsNullOrWhiteSpace($expectedBaseUri)) {
+        return $true
+    }
+
+    return ($renewalBaseUri.TrimEnd('/') -eq ([string]$expectedBaseUri).TrimEnd('/'))
+}
+
 function Get-RenewalIdForCancel {
     param([Parameter(Mandatory)]$RenewalSummary)
     if (-not [string]::IsNullOrWhiteSpace([string]$RenewalSummary.RenewalId)) { return [string]$RenewalSummary.RenewalId }
@@ -1416,7 +1435,7 @@ function Invoke-SimpleAcmeReconcile {
     foreach ($file in $allRenewalFiles) {
         $summary = Get-RenewalSummarySafe -File $file
         if ($null -eq $summary) { continue }
-        if (Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) {
+        if ((Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) -and (Test-RenewalAcmeDirectoryMatch -RenewalSummary $summary -EnvValues $EnvValues)) {
             $matching += ,$summary
         }
     }
@@ -1432,7 +1451,7 @@ function Invoke-SimpleAcmeReconcile {
         foreach ($file in $allRenewalFiles) {
             $summary = Get-RenewalSummarySafe -File $file
             if ($null -eq $summary) { continue }
-            if (Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) { $postMatch += ,$summary }
+            if ((Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) -and (Test-RenewalAcmeDirectoryMatch -RenewalSummary $summary -EnvValues $EnvValues)) { $postMatch += ,$summary }
         }
 
         if ((Get-SafeCount $postMatch) -eq 0) {
@@ -1484,7 +1503,7 @@ function Invoke-SimpleAcmeReconcile {
     foreach ($file in $freshFiles) {
         $summary = Get-RenewalSummarySafe -File $file
         if ($null -eq $summary) { continue }
-        if (Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) { $postUpdate += ,$summary }
+        if ((Test-ExactDomainSetMatch -Requested $domains -Actual $summary.Hosts) -and (Test-RenewalAcmeDirectoryMatch -RenewalSummary $summary -EnvValues $EnvValues)) { $postUpdate += ,$summary }
     }
 
     if ((Get-SafeCount $postUpdate) -ne 1) {
@@ -1541,6 +1560,7 @@ $FunctionsToExport.Add('Get-NormalizedCsvValues')
 $FunctionsToExport.Add('Wait-RenewalFileRemoval')
 $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
+$FunctionsToExport.Add('Test-RenewalAcmeDirectoryMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
 
 Set-Alias -Name Normalize-WacsScriptParametersText -Value ConvertTo-NormalizedWacsScriptParametersText

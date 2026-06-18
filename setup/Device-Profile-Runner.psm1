@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$script:PaloAltoCertificatePolicyTypeLoaded = $false
+
 Import-Module "$PSScriptRoot/../core/Tui-Engine.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Config-Store.psm1" -Force -Global
 
@@ -578,9 +580,13 @@ function Invoke-OPNsenseDeviceProfileApiTest {
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
         }
     } catch {
+        $errorMessage = $_.Exception.Message
+        if ($_.Exception.InnerException -and -not [string]::IsNullOrWhiteSpace([string]$_.Exception.InnerException.Message)) {
+            $errorMessage = "{0} Inner: {1}" -f $errorMessage, $_.Exception.InnerException.Message
+        }
         return [pscustomobject]@{
             Status = 'Failed'
-            Message = $_.Exception.Message
+            Message = $errorMessage
             Host = $hostName
             Port = $port
             Label = $Label
@@ -601,7 +607,30 @@ function Invoke-PaloAltoDeviceProfileWebRequest {
     $supportsSkipCertificateCheck = (Get-Command -Name Invoke-WebRequest).Parameters.ContainsKey('SkipCertificateCheck')
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck -and -not $supportsSkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+        if (-not $script:PaloAltoCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmePaloAltoCertificatePolicy' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmePaloAltoCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        }
+        $script:PaloAltoCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmePaloAltoCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmePaloAltoCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback =
+            [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
 
     try {
@@ -734,9 +763,13 @@ function Invoke-PaloAltoDeviceProfileApiTest {
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
         }
     } catch {
+        $errorMessage = $_.Exception.Message
+        if ($_.Exception.InnerException -and -not [string]::IsNullOrWhiteSpace([string]$_.Exception.InnerException.Message)) {
+            $errorMessage = "{0} Inner: {1}" -f $errorMessage, $_.Exception.InnerException.Message
+        }
         return [pscustomobject]@{
             Status = 'Failed'
-            Message = $_.Exception.Message
+            Message = $errorMessage
             Host = $hostName
             Port = $port
             Label = $Label
@@ -847,35 +880,19 @@ function Invoke-GuidedDeviceProfileForm {
         }
     }
 
-    Clear-Host
     $formTitle = if (-not [string]::IsNullOrWhiteSpace($Title)) { $Title } else { "{0} guided device profile" -f $displayLabel }
-    Write-Host $formTitle
-    Write-Host ('-' * $formTitle.Length)
-    Write-Host 'Press Esc at any question to cancel.'
-    Write-Host ''
-
+    $formFields = @()
     foreach ($field in @($schema.Fields)) {
         if (-not ($field -is [System.Collections.IDictionary]) -or -not $field.ContainsKey('Name')) { continue }
         if (-not (Test-DeviceProfileFieldAppliesToMethod -Field $field -ConnectionMethod $connectionMethod)) { continue }
         $name = [string]$field['Name']
         if ($name -eq 'connection_method') { continue }
-        $labelText = if ($field.ContainsKey('Label') -and -not [string]::IsNullOrWhiteSpace([string]$field['Label'])) { [string]$field['Label'] } else { $name }
-        $required = ($field.ContainsKey('Required') -and [bool]$field['Required'])
-        $prompt = if ($required) { "$labelText *" } else { $labelText }
-        $default = Get-DeviceProfileFieldDefault -Field $field -CurrentValues $values
-        $isSecret = ($field.ContainsKey('Type') -and [string]$field['Type'] -eq 'secret') -or ($name -match '(?i)password|secret|token|api_key')
-
-        while ($true) {
-            $answer = Read-DeviceProfileConsoleLine -Prompt $prompt -Default $default -Secret:$isSecret
-            if ($null -eq $answer) { return [pscustomobject]@{ Status = 'Canceled' } }
-            if ($required -and [string]::IsNullOrWhiteSpace($answer)) {
-                Write-Host 'This value is required.' -ForegroundColor Yellow
-                continue
-            }
-            $values[$name] = [string]$answer
-            break
-        }
+        $formFields += $field
     }
+    if ($formFields.Count -lt 1) { throw "Device schema '$ConnectorType' has no editable fields for connection method '$connectionMethod'." }
+
+    $values = Show-TuiForm -Fields ([hashtable[]]$formFields) -CurrentValues $values -Title $formTitle
+    if ($null -eq $values) { return [pscustomobject]@{ Status = 'Canceled' } }
 
     $values = Remove-DeviceProfilePlaceholderValues -Values $values -Fields @($schema.Fields)
     $values = Add-DeviceProfileDefaults -Values $values -Fields @($schema.Fields)
@@ -920,6 +937,13 @@ function Invoke-GuidedDeviceProfileForm {
     }
 
     return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
+}
+
+function Invoke-PaloAltoProfileForm {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProjectRoot)
+
+    Invoke-DeviceProfileConnectorWizard -ProjectRoot $ProjectRoot -ConnectorType 'paloalto'
 }
 
 function Invoke-DeviceProfileWizard {
@@ -1243,6 +1267,16 @@ function Invoke-DeviceProfileForm {
     if ($null -eq $values) { return [pscustomobject]@{ Status = 'Canceled' } }
     $values = Remove-DeviceProfilePlaceholderValues -Values $values -Fields @($schema.Fields)
     $values = Add-DeviceProfileDefaults -Values $values -Fields @($schema.Fields)
+    if ($SecretFields.Count -lt 1) {
+        foreach ($field in @($schema.Fields)) {
+            if (-not ($field -is [System.Collections.IDictionary]) -or -not $field.ContainsKey('Name')) { continue }
+            $name = [string]$field['Name']
+            if (($field.ContainsKey('Type') -and [string]$field['Type'] -eq 'secret') -or $name -match '(?i)password|token|api_key|secret|passphrase') {
+                $SecretFields += $name
+            }
+        }
+        $SecretFields = @($SecretFields | Sort-Object -Unique)
+    }
     Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
     Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $displayLabel) -Values $values -Fields @($schema.Fields)
 
@@ -1318,4 +1352,4 @@ function Invoke-DeviceProfileInventory {
     return [pscustomobject]@{ Status = 'Shown'; Count = $devices.Count; ConfigDir = $configDir }
 }
 
-Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileConnectorWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId
+Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-PaloAltoProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileConnectorWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId

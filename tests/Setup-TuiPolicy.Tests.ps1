@@ -36,6 +36,43 @@ Describe 'Setup TUI and policy reliability' {
         $match.Value | Should -Not -Match '\bRead-Host\b'
     }
 
+    It 'Show-TuiForm renders long device forms with scroll paging' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            '$visibleRows = [Math]::Max(1, $layout.HelpRow - $layout.ContentStartRow)',
+            '$topIndex = [Math]::Max(0, [Math]::Min($selected - [Math]::Floor($visibleRows / 2), [Math]::Max(0, $Fields.Count - $visibleRows)))',
+            "'PageUp' { $selected = [Math]::Max(0, $selected - $visibleRows) }",
+            "'PageDown' { $selected = [Math]::Min($Fields.Count - 1, $selected + $visibleRows) }",
+            'field {0}/{1}'
+        )) {
+            $raw.Contains($text) | Should -BeTrue
+        }
+    }
+
+    It 'Read-TuiLineInput paints the initial value in-place before key input' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            '$startX = [Console]::CursorLeft',
+            '$startY = [Console]::CursorTop',
+            '$renderInput = {',
+            '& $renderInput',
+            '[Console]::SetCursorPosition($startX, $startY)',
+            '$visible.PadRight($fieldWidth)'
+        )) {
+            $raw.Contains($text) | Should -BeTrue
+        }
+        $raw | Should -Not -Match '\[Console\]::Write\(\("`r\{0\}"'
+    }
+
+    It 'Show-TuiForm keeps placeholders display-only instead of editable values' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        $raw.Contains("elseif (`$f.ContainsKey('Default'))") | Should -BeTrue
+        $raw | Should -Not -Match "elseif \(\`$f\.ContainsKey\('Placeholder'\)\) \{ \`$f\.Placeholder \}"
+    }
+
     It 'Policy editor warns and stays in loop when no policy exists for edit/delete' {
         $cfg = 'TestDrive:\cfg-no-policy'
         New-Item -ItemType Directory -Path $cfg -Force | Out-Null
