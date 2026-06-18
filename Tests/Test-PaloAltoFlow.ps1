@@ -107,7 +107,8 @@ function Invoke-TestPaloAltoFlow {
             '$bindingSetXPath = $bindingXPath -replace ''/ssl-tls-service-profile$'', ''''',
             'decision = ''skip-upload''',
             'Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey',
-            '$profileCert = [string]$profileResp.response.result.entry.certificate'
+            '$profileCert = [string]$profileResp.response.result.entry.certificate',
+            '$certNode.PSObject.Properties[$propertyName]'
         )) {
             if (-not $deploy.Contains($text)) { throw "Missing Palo Alto binding/idempotency behavior: $text" }
         }
@@ -116,6 +117,9 @@ function Invoke-TestPaloAltoFlow {
         }
         if ($deploy.Contains('decision = ''no-op''; reason = ''fingerprint-match''')) {
             throw 'Palo Alto deploy must not exit before binding when certificate fingerprint already matches.'
+        }
+        if ($deploy.Contains("if (`$certNode.'fingerprint')")) {
+            throw 'Palo Alto deploy must not use strict-mode fragile direct fingerprint property access.'
         }
         if ($deploy -match 'ServerCertificateValidationCallback\s*=\s*\{') {
             throw 'Palo Alto deploy transport must use a compiled certificate callback, not a PowerShell scriptblock.'

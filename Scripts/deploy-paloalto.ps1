@@ -384,8 +384,11 @@ function Get-ExistingCertificateFingerprint {
     $certNode = $resp.response.result.entry
     if ($null -eq $certNode) { return $null }
 
-    if ($certNode.'fingerprint') {
-        return ([string]$certNode.'fingerprint').Replace(':', '').ToUpperInvariant()
+    foreach ($propertyName in @('fingerprint','sha256-fingerprint','sha1-fingerprint')) {
+        $property = $certNode.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return ([string]$property.Value).Replace(':', '').ToUpperInvariant()
+        }
     }
 
     return $null
