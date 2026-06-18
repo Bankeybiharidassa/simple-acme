@@ -7,6 +7,7 @@ $CertificateMenuTree = @{
     Title = 'Certificate setup'
     Items = @(
         @{ Label='Setup new certificate'; Key='setup-new'; Type='action' },
+        @{ Label='View latest log'; Key='view-latest-log'; Type='action' },
         @{ Label='Manage existing certificates'; Key='manage-certs'; Type='action' },
         @{ Label='Deployment targets'; Key='deployment-targets'; Type='submenu'; Items=@(
             @{ Label='Manage configured devices (view/add/change/delete)'; Key='device-manager'; Type='action' },

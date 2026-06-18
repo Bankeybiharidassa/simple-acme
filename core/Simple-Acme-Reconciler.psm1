@@ -508,6 +508,32 @@ function Get-RenewalSummary {
         }
     }
 
+    $latestThumbprint = ''
+    $latestOrderErrorMessages = @()
+    try {
+        $historyProperty = $renewal.PSObject.Properties['History']
+        if ($null -ne $historyProperty -and $null -ne $historyProperty.Value) {
+            foreach ($historyItem in @($historyProperty.Value)) {
+                $orderResultsProperty = $historyItem.PSObject.Properties['OrderResults']
+                if ($null -eq $orderResultsProperty -or $null -eq $orderResultsProperty.Value) { continue }
+                foreach ($orderResult in @($orderResultsProperty.Value)) {
+                    $thumbProp = $orderResult.PSObject.Properties['Thumbprint']
+                    if ($null -ne $thumbProp -and -not [string]::IsNullOrWhiteSpace([string]$thumbProp.Value)) {
+                        $latestThumbprint = ([string]$thumbProp.Value).Trim().ToUpperInvariant()
+                        $latestOrderErrorMessages = @()
+                    }
+                    $errorsProp = $orderResult.PSObject.Properties['ErrorMessages']
+                    if ($null -ne $errorsProp -and $null -ne $errorsProp.Value -and -not [string]::IsNullOrWhiteSpace($latestThumbprint)) {
+                        $latestOrderErrorMessages = @($errorsProp.Value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    }
+                }
+            }
+        }
+    } catch {
+        $latestThumbprint = ''
+        $latestOrderErrorMessages = @()
+    }
+
     [pscustomobject]@{
         File             = $File
         Renewal          = $renewal
@@ -528,6 +554,8 @@ function Get-RenewalSummary {
         ScriptParameters = @($scriptParameterCandidates | Where-Object { $_ -is [string] })
         CsrPlugin        = ($csrCandidates | Where-Object { $_ -is [string] } | Select-Object -First 1)
         KeyType          = ($keyTypeCandidates | Where-Object { $_ -is [string] } | Select-Object -First 1)
+        LatestThumbprint = $latestThumbprint
+        LatestOrderErrorMessages = @($latestOrderErrorMessages)
     }
 }
 
@@ -547,6 +575,234 @@ function Get-NormalizedCsvValues {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
     )
+}
+
+function Test-IsAdministrator {
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Get-EffectiveWacsStorePlugins {
+    param([Parameter(Mandatory)][hashtable]$EnvValues)
+
+    $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
+    $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
+    if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
+    $validStorePlugins = @('certificatestore','pfxfile','pemfiles','centralssl','p7bfile','keyvault','userstore')
+    $repairedPlugins = New-Object System.Collections.Generic.List[string]
+    foreach ($token in $storePlugins) {
+        if ($validStorePlugins -contains $token) {
+            $repairedPlugins.Add($token)
+            continue
+        }
+
+        $remaining = $token
+        $parts = New-Object System.Collections.Generic.List[string]
+        $ok = $true
+        while ($remaining.Length -gt 0 -and $ok) {
+            $hit = @($validStorePlugins | Where-Object { $remaining.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
+            if ($hit.Count -eq 0) {
+                $ok = $false
+            } else {
+                $parts.Add($hit[0])
+                $remaining = $remaining.Substring($hit[0].Length)
+            }
+        }
+        if ($ok -and $parts.Count -gt 1) {
+            Write-Warning "ACME_STORE_PLUGIN token '$token' looks like plugin names concatenated without a comma separator. Auto-correcting to: $($parts -join ', '). Fix your config: ACME_STORE_PLUGIN=$($parts -join ',')."
+            foreach ($part in $parts) { $repairedPlugins.Add($part) }
+        } else {
+            $repairedPlugins.Add($token)
+        }
+    }
+
+    $storePlugins = @($repairedPlugins | Sort-Object -Unique)
+    $unknownStorePlugins = @($storePlugins | Where-Object { $validStorePlugins -notcontains $_ })
+    if ((Get-SafeCount $unknownStorePlugins) -gt 0) {
+        throw "ACME_STORE_PLUGIN contains unrecognized token(s): $($unknownStorePlugins -join ', '). Valid values: $($validStorePlugins -join ', '). Check for missing comma separator (e.g. 'pfxfile,certificatestore' not 'pfxfilecertificatestore')."
+    }
+
+    $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
+    $scriptParamsForStoreDecision = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default ''
+    $scriptNeedsThumbprint = ([string]$scriptParamsForStoreDecision -match '\{CertThumbprint\}')
+    if ($installationPlugins -contains 'script' -and $scriptNeedsThumbprint -and -not ($storePlugins -contains 'certificatestore')) {
+        $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
+        Write-Warning 'ACME_INSTALLATION_PLUGINS includes a script that uses {CertThumbprint}, but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
+    }
+
+    return @($storePlugins)
+}
+
+function Test-CertificateDomainPatternMatch {
+    param(
+        [Parameter(Mandatory)][string]$Pattern,
+        [Parameter(Mandatory)][string]$Domain
+    )
+
+    $candidatePattern = $Pattern.Trim().TrimEnd('.').ToLowerInvariant()
+    $candidateDomain = $Domain.Trim().TrimEnd('.').ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($candidatePattern) -or [string]::IsNullOrWhiteSpace($candidateDomain)) { return $false }
+    if ($candidatePattern -eq $candidateDomain) { return $true }
+    if (-not $candidatePattern.StartsWith('*.')) { return $false }
+
+    $suffix = $candidatePattern.Substring(1)
+    if (-not $candidateDomain.EndsWith($suffix, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $prefix = $candidateDomain.Substring(0, $candidateDomain.Length - $suffix.Length)
+    return ($prefix.Length -gt 0 -and $prefix.IndexOf('.') -lt 0)
+}
+
+function Get-CertificateDnsNames {
+    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($extension in @($Certificate.Extensions)) {
+        if ($extension.Oid.Value -ne '2.5.29.17') { continue }
+        $formatted = $extension.Format($true)
+        foreach ($match in [regex]::Matches($formatted, 'DNS Name=([^\r\n,]+)')) {
+            $name = ([string]$match.Groups[1].Value).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($name)) { $names.Add($name.ToLowerInvariant()) }
+        }
+    }
+
+    if ($names.Count -lt 1 -and $Certificate.Subject -match '(?i)(?:^|,\s*)CN\s*=\s*([^,]+)') {
+        $cn = ([string]$Matches[1]).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($cn)) { $names.Add($cn.ToLowerInvariant()) }
+    }
+
+    return @($names | Sort-Object -Unique)
+}
+
+function Test-CertificateCoversDomains {
+    param(
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [Parameter(Mandatory)][string[]]$Domains
+    )
+
+    $names = @(Get-CertificateDnsNames -Certificate $Certificate)
+    if ((Get-SafeCount $names) -lt 1) { return $false }
+    foreach ($domain in @($Domains)) {
+        $matched = $false
+        foreach ($name in $names) {
+            if (Test-CertificateDomainPatternMatch -Pattern $name -Domain $domain) {
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) { return $false }
+    }
+    return $true
+}
+
+function Get-RenewalCertificateCandidates {
+    param([Parameter(Mandatory)][string[]]$Domains)
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($storeRoot in @('Cert:\LocalMachine\My','Cert:\CurrentUser\My')) {
+        if (-not (Test-Path -LiteralPath $storeRoot)) { continue }
+        foreach ($cert in @(Get-ChildItem -LiteralPath $storeRoot -ErrorAction SilentlyContinue)) {
+            if ($null -eq $cert) { continue }
+            if (Test-CertificateCoversDomains -Certificate $cert -Domains $Domains) {
+                $candidates.Add($cert)
+            }
+        }
+    }
+    return @($candidates | Sort-Object NotAfter -Descending)
+}
+
+function Test-CertificateRevoked {
+    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+
+    $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+    try {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::EndCertificateOnly
+        $chain.ChainPolicy.UrlRetrievalTimeout = New-TimeSpan -Seconds 15
+        $null = $chain.Build($Certificate)
+        foreach ($status in @($chain.ChainStatus)) {
+            if (($status.Status -band [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::Revoked) -ne 0) {
+                return $true
+            }
+        }
+        return $false
+    } finally {
+        $chain.Dispose()
+    }
+}
+
+function Test-RenewalCertificateHealth {
+    param(
+        [Parameter(Mandatory)]$RenewalSummary,
+        [Parameter(Mandatory)][hashtable]$EnvValues
+    )
+
+    # Diagnostic only. Renewal timing belongs to simple-acme's ACME Renewal Information (ARI, RFC 9773) support.
+    if ((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_CERTIFICATE_HEALTH_CHECK' -Default '1') -in @('0','false','False','FALSE','no','No','NO')) {
+        return [pscustomobject]@{ Status = 'Skipped'; Message = 'Certificate health check disabled.' }
+    }
+
+    $expectedStores = @(Get-NormalizedCsvValues -InputText (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'))
+    $actualStores = @($RenewalSummary.StorePlugins)
+    if (($expectedStores -notcontains 'certificatestore') -and ($actualStores -notcontains 'certificatestore')) {
+        return [pscustomobject]@{ Status = 'Skipped'; Message = 'Certificate store is not part of this renewal.' }
+    }
+
+    $domains = @(Get-NormalizedDomains -Domains (Get-EnvValue -EnvValues $EnvValues -Key 'DOMAINS'))
+    if ((Get-SafeCount $domains) -lt 1) {
+        return [pscustomobject]@{ Status = 'Skipped'; Message = 'No domains available for certificate health check.' }
+    }
+
+    $latestErrors = @()
+    $latestErrorsProperty = $RenewalSummary.PSObject.Properties['LatestOrderErrorMessages']
+    if ($null -ne $latestErrorsProperty) { $latestErrors = @($latestErrorsProperty.Value) }
+    if ((Get-SafeCount $latestErrors) -gt 0) {
+        return [pscustomobject]@{ Status = 'InstallationFailed'; Message = "Renewal history recorded certificate/order error(s): $($latestErrors -join '; ')" }
+    }
+
+    $latestThumbprint = ''
+    $thumbProperty = $RenewalSummary.PSObject.Properties['LatestThumbprint']
+    if ($null -ne $thumbProperty) { $latestThumbprint = ([string]$thumbProperty.Value).Trim().ToUpperInvariant() }
+
+    $candidates = @(Get-RenewalCertificateCandidates -Domains $domains)
+    if (-not [string]::IsNullOrWhiteSpace($latestThumbprint)) {
+        $candidates = @($candidates | Where-Object { ([string]$_.Thumbprint).ToUpperInvariant() -eq $latestThumbprint })
+    }
+    if ((Get-SafeCount $candidates) -lt 1) {
+        if (-not [string]::IsNullOrWhiteSpace($latestThumbprint)) {
+            return [pscustomobject]@{ Status = 'Missing'; Message = "Renewal certificate '$latestThumbprint' was not found in Windows certificate stores." }
+        }
+        return [pscustomobject]@{ Status = 'Missing'; Message = 'No matching certificate found in Windows certificate stores.' }
+    }
+
+    $now = Get-Date
+    $sawExpired = $false
+    $sawNotYetValid = $false
+    foreach ($cert in $candidates) {
+        if ($cert.NotAfter -le $now) {
+            $sawExpired = $true
+            continue
+        }
+        if ($cert.NotBefore -gt $now) {
+            $sawNotYetValid = $true
+            continue
+        }
+        if (Test-CertificateRevoked -Certificate $cert) {
+            return [pscustomobject]@{ Status = 'Revoked'; Message = "Matching certificate '$($cert.Thumbprint)' is revoked; simple-acme ARI renewal check will decide the certificate request." }
+        }
+        return [pscustomobject]@{ Status = 'Valid'; Message = "Matching certificate '$($cert.Thumbprint)' is locally valid; simple-acme ARI remains authoritative for renewal timing." }
+    }
+
+    if ($sawExpired) {
+        return [pscustomobject]@{ Status = 'Expired'; Message = 'Only expired matching certificates were found.' }
+    }
+    if ($sawNotYetValid) {
+        return [pscustomobject]@{ Status = 'NotYetValid'; Message = 'Only not-yet-valid matching certificates were found.' }
+    }
+    return [pscustomobject]@{ Status = 'Unknown'; Message = 'Certificate health could not be determined.' }
 }
 
 function ConvertTo-NormalizedWacsScriptParametersText {
@@ -699,6 +955,12 @@ function Test-ReconcilePreflight {
     $EnvValues['ACME_SCRIPT_PATH'] = $scriptPath
     if ([string]::IsNullOrWhiteSpace((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS'))) {
         $EnvValues['ACME_SCRIPT_PARAMETERS'] = '{CertThumbprint}'
+    }
+    $effectiveStorePlugins = @(Get-EffectiveWacsStorePlugins -EnvValues $EnvValues)
+    if ($effectiveStorePlugins -contains 'certificatestore') {
+        if (-not (Test-IsAdministrator)) {
+            throw "ACME_STORE_PLUGIN resolves to certificatestore, but current Windows PowerShell is not elevated. Run Windows PowerShell as Administrator before reconcile/renewal so simple-acme can write the Windows certificate store."
+        }
     }
     $requiredRolesRaw = (Get-EnvValue -EnvValues $EnvValues -Key 'CERTIFICATE_REQUIRED_WINDOWS_ROLES')
     if (-not [string]::IsNullOrWhiteSpace($requiredRolesRaw) -and (Get-Command -Name Get-WindowsFeature -ErrorAction SilentlyContinue)) {
@@ -1185,36 +1447,8 @@ function Get-WacsIssueArguments {
         [switch]$EnsurePfxDirectory
     )
 
-    $storePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_STORE_PLUGIN' -Default 'certificatestore'
-    $storePlugins = Get-NormalizedCsvValues -InputText $storePlugin
-    if ((Get-SafeCount $storePlugins) -eq 0) { $storePlugins = @('certificatestore') }
-    $validStorePlugins = @('certificatestore','pfxfile','pemfiles','centralssl','p7bfile','keyvault','userstore')
-    $repairedPlugins = [System.Collections.Generic.List[string]]::new()
-    foreach ($token in $storePlugins) {
-        if ($validStorePlugins -contains $token) { $repairedPlugins.Add($token); continue }
-        $remaining = $token; $parts = [System.Collections.Generic.List[string]]::new(); $ok = $true
-        while ($remaining.Length -gt 0 -and $ok) {
-            $hit = @($validStorePlugins | Where-Object { $remaining.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
-            if ($hit.Count -eq 0) { $ok = $false } else { $parts.Add($hit[0]); $remaining = $remaining.Substring($hit[0].Length) }
-        }
-        if ($ok -and $parts.Count -gt 1) {
-            Write-Warning "ACME_STORE_PLUGIN token '$token' looks like plugin names concatenated without a comma separator. Auto-correcting to: $($parts -join ', '). Fix your config: ACME_STORE_PLUGIN=$($parts -join ',')."
-            foreach ($part in $parts) { $repairedPlugins.Add($part) }
-        } else { $repairedPlugins.Add($token) }
-    }
-    $storePlugins = @($repairedPlugins | Sort-Object -Unique)
-    $unknownStorePlugins = @($storePlugins | Where-Object { $validStorePlugins -notcontains $_ })
-    if ((Get-SafeCount $unknownStorePlugins) -gt 0) {
-        throw "ACME_STORE_PLUGIN contains unrecognized token(s): $($unknownStorePlugins -join ', '). Valid values: $($validStorePlugins -join ', '). Check for missing comma separator (e.g. 'pfxfile,certificatestore' not 'pfxfilecertificatestore')."
-    }
-
+    $storePlugins = @(Get-EffectiveWacsStorePlugins -EnvValues $EnvValues)
     $installationPlugins = Get-InstallationPlugins -EnvValues $EnvValues
-    $scriptParamsForStoreDecision = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SCRIPT_PARAMETERS' -Default ''
-    $scriptNeedsThumbprint = ([string]$scriptParamsForStoreDecision -match '\{CertThumbprint\}')
-    if ($installationPlugins -contains 'script' -and $scriptNeedsThumbprint -and -not ($storePlugins -contains 'certificatestore')) {
-        $storePlugins = @($storePlugins + 'certificatestore' | Sort-Object -Unique)
-        Write-Warning 'ACME_INSTALLATION_PLUGINS includes a script that uses {CertThumbprint}, but ACME_STORE_PLUGIN does not include certificatestore. Adding certificatestore automatically so script thumbprint lookups succeed.'
-    }
 
     $sourcePlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_SOURCE_PLUGIN' -Default 'manual'
     $orderPlugin = Get-EnvValue -EnvValues $EnvValues -Key 'ACME_ORDER_PLUGIN' -Default 'single'
@@ -1361,9 +1595,24 @@ function Get-RenewalIdForCancel {
     throw "Unable to determine renewal id from renewal JSON file '$($RenewalSummary.File.FullName)'"
 }
 
+function Invoke-WacsRenewalCheck {
+    param(
+        [Parameter(Mandatory)][hashtable]$EnvValues,
+        [Parameter(Mandatory)][string]$RenewalId,
+        [switch]$Force
+    )
+
+    $args = @('--baseuri', (Get-EnvValue -EnvValues $EnvValues -Key 'ACME_DIRECTORY'), '--renew', '--id', $RenewalId)
+    if ($Force) { $args += '--force' }
+    $timeoutSeconds = 600
+    [void][int]::TryParse((Get-EnvValue -EnvValues $EnvValues -Key 'ACME_WACS_TIMEOUT_SECONDS' -Default '600'), [ref]$timeoutSeconds)
+    if ($timeoutSeconds -lt 60) { $timeoutSeconds = 60 }
+    return Invoke-WacsWithRetry -Args $args -EnvValues $EnvValues -TimeoutSeconds $timeoutSeconds
+}
+
 function Write-ReconcileLog {
     param(
-        [Parameter(Mandatory)][ValidateSet('create','update','no-op')][string]$Action,
+        [Parameter(Mandatory)][ValidateSet('create','update','renew','no-op')][string]$Action,
         [Parameter(Mandatory)][string[]]$Domains,
         [Parameter(Mandatory)][ValidateSet('success','failure')][string]$Result,
         [Parameter(Mandatory)][string]$Message
@@ -1482,8 +1731,13 @@ function Invoke-SimpleAcmeReconcile {
     $current = $matching[0]
     $compare = Compare-RenewalWithEnv -RenewalSummary $current -EnvValues $EnvValues
     if ($compare.Matches) {
-        Write-ReconcileLog -Action 'no-op' -Domains $domains -Result 'success' -Message 'Renewal configuration already matches .env.'
-        return 'no-op'
+        $certificateHealth = Test-RenewalCertificateHealth -RenewalSummary $current -EnvValues $EnvValues
+        $renewalId = Get-RenewalIdForCancel -RenewalSummary $current
+        if (-not $SkipWacs) {
+            Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId | Out-Null
+        }
+        Write-ReconcileLog -Action 'renew' -Domains $domains -Result 'success' -Message ("Renewal configuration already matches .env. simple-acme ARI renewal check completed. Local certificate state: {0}. {1}" -f $certificateHealth.Status, $certificateHealth.Message)
+        return 'renew'
     }
 
     if (-not $SkipWacs) {
@@ -1554,6 +1808,7 @@ $FunctionsToExport.Add('Test-WacsDeferredRetrySuggested')
 $FunctionsToExport.Add('Get-WacsRetryArgumentList')
 $FunctionsToExport.Add('ConvertTo-WacsCommandLineText')
 $FunctionsToExport.Add('Get-WacsIssueArguments')
+$FunctionsToExport.Add('Invoke-WacsRenewalCheck')
 $FunctionsToExport.Add('Get-MaskedWacsIssueCommandPreview')
 $FunctionsToExport.Add('ConvertTo-NormalizedWacsScriptParametersText')
 $FunctionsToExport.Add('Get-NormalizedCsvValues')
@@ -1562,6 +1817,11 @@ $FunctionsToExport.Add('New-ReconcileConfigHash')
 $FunctionsToExport.Add('Test-ExactDomainSetMatch')
 $FunctionsToExport.Add('Test-RenewalAcmeDirectoryMatch')
 $FunctionsToExport.Add('Write-ReconcileLog')
+$FunctionsToExport.Add('Test-RenewalCertificateHealth')
+$FunctionsToExport.Add('Test-CertificateDomainPatternMatch')
+$FunctionsToExport.Add('Test-CertificateCoversDomains')
+$FunctionsToExport.Add('Get-EffectiveWacsStorePlugins')
+$FunctionsToExport.Add('Test-IsAdministrator')
 
 Set-Alias -Name Normalize-WacsScriptParametersText -Value ConvertTo-NormalizedWacsScriptParametersText
 
