@@ -16,6 +16,7 @@ $CertificateMenuTree = @{
             @{ Label='Kemp LoadMaster - Check what would happen (safe preview, no changes)'; Key='kemp-whatif'; Type='action' },
             @{ Label='Kemp LoadMaster - Install certificate on selected virtual services'; Key='kemp-deploy'; Type='action' },
             @{ Label='Kemp LoadMaster - Check setup and show diagnostics'; Key='kemp-diagnostics'; Type='action' },
+            @{ Label='Palo Alto Firewall - Create or edit device profile'; Key='paloalto-profile'; Type='action' },
             @{ Label='Sophos Firewall - Create or edit device profile'; Key='sophos-profile'; Type='action' },
             @{ Label='NetScaler / Citrix ADC - Check what would happen (safe preview, no changes)'; Key='netscaler-whatif'; Type='action' },
             @{ Label='NetScaler / Citrix ADC - Install certificate on appliance (asks for confirmation)'; Key='netscaler-deploy'; Type='action' },

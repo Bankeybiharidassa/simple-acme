@@ -27,6 +27,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$KeyPath,
 
+    [Parameter(Mandatory = $false)]
+    [ValidateLength(0, 31)]
+    [string]$KeyPassphrase = '',
+
     [Parameter(Mandatory = $true)]
     [ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')]
     [string]$BindingType,
@@ -372,13 +376,14 @@ function Upload-Certificate {
         [Parameter(Mandatory = $true)][string]$CertName,
         [Parameter(Mandatory = $true)][string]$CertPath,
         [Parameter(Mandatory = $true)][string]$KeyPath,
+        [Parameter(Mandatory = $false)][ValidateLength(0, 31)][string]$KeyPassphrase = '',
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     Write-StructuredLog -Action 'upload-certificate' -Target $Firewall -Result 'info' -Details @{ certName = $CertName }
 
     $certQuery = @{ type = 'import'; category = 'certificate'; 'certificate-name' = $CertName; format = 'pem' }
-    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = '' }
+    $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = $KeyPassphrase }
 
     $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
     $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds
@@ -552,7 +557,7 @@ try {
 
     Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'info' -Details @{ decision = 'deploy'; existing = $existingFingerprint; incoming = $certInfo.Thumbprint }
 
-    Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -TimeoutSeconds $TimeoutSeconds
+    Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -KeyPassphrase $KeyPassphrase -TimeoutSeconds $TimeoutSeconds
     $profileName = Set-SSLProfile -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
     $bindingXPath = Bind-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -ProfileName $profileName -BindingType $BindingType -BindingTarget $BindingTarget -Vsys $Vsys -TimeoutSeconds $TimeoutSeconds
 

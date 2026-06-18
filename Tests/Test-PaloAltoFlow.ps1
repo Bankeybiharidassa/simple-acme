@@ -6,6 +6,8 @@ function Invoke-TestPaloAltoFlow {
     $runnerPath = Join-Path $root 'setup\Device-Profile-Runner.psm1'
     $deployPath = Join-Path $root 'Scripts\deploy-paloalto.ps1'
     $docsPath = Join-Path $root 'docs\paloalto-lab-communication.md'
+    $menuPath = Join-Path $root 'setup\Menu-Tree.ps1'
+    $setupPath = Join-Path $root 'certificate-setup.ps1'
 
     & $Assert 'Palo Alto schema is guided and captures API deployment settings' {
         . $schemaPath
@@ -13,8 +15,25 @@ function Invoke-TestPaloAltoFlow {
         $schema = $DeviceSchemas['paloalto']
         if (-not $schema.ContainsKey('SetupMode') -or [string]$schema.SetupMode -ne 'guided') { throw 'Palo Alto schema is not guided.' }
         $fieldNames = @($schema.Fields | ForEach-Object { [string]$_['Name'] })
-        foreach ($required in @('host','port','api_key','username','password','skip_certificate_check','vsys','certificate_name','binding_type','binding_target','rest_location','bind_target_names')) {
+        foreach ($required in @('host','port','api_key','username','password','skip_certificate_check','vsys','certificate_name','cert_path','key_path','chain_path','key_passphrase','binding_type','binding_target','rest_location','bind_target_names')) {
             if ($fieldNames -notcontains $required) { throw "Palo Alto schema missing field: $required" }
+        }
+    }
+
+    & $Assert 'Palo Alto profile action is exposed and uses the managed-device editor' {
+        $menu = Get-Content -LiteralPath $menuPath -Raw
+        $setup = Get-Content -LiteralPath $setupPath -Raw
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'paloalto-profile',
+            "Assert-SetupCommandAvailable -CommandName 'Invoke-PaloAltoProfileForm'",
+            'Invoke-PaloAltoProfileForm -ProjectRoot $PSScriptRoot',
+            'function Invoke-PaloAltoProfileForm',
+            "Invoke-DeviceProfileConnectorWizard -ProjectRoot `$ProjectRoot -ConnectorType 'paloalto'"
+        )) {
+            if (-not ($menu.Contains($text) -or $setup.Contains($text) -or $runner.Contains($text))) {
+                throw "Missing Palo Alto profile action wiring: $text"
+            }
         }
     }
 
@@ -61,6 +80,9 @@ function Invoke-TestPaloAltoFlow {
             'Invoke-PaloAltoApiWithCertificatePolicy',
             'Invoke-PaloAltoRestMethod',
             "Parameters.ContainsKey('SkipCertificateCheck')",
+            '[ValidateLength(0, 31)]',
+            '$KeyPassphrase',
+            'passphrase = $KeyPassphrase',
             "if (`$_.Exception.Message -match 'No such node') { return `$null }",
             'Get-ExistingCertificateFingerprint -Firewall $Firewall -Port $Port'
         )) {

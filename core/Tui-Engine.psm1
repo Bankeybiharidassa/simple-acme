@@ -223,11 +223,14 @@ function Show-TuiForm {
     $selected = 0
     while ($true) {
         $layout = Get-TuiFormLayout -FieldCount $Fields.Count
+        $visibleRows = [Math]::Max(1, $layout.HelpRow - $layout.ContentStartRow)
+        $topIndex = [Math]::Max(0, [Math]::Min($selected - [Math]::Floor($visibleRows / 2), [Math]::Max(0, $Fields.Count - $visibleRows)))
+        $bottomIndex = [Math]::Min($Fields.Count - 1, $topIndex + $visibleRows - 1)
         Clear-TuiScreen
         Write-TuiBox -X $layout.X -Y $layout.Y -Width $layout.Width -Height $layout.Height -Title $Title
-        Write-TuiAt -X ($layout.X + 2) -Y ($layout.Y + 1) -Text 'up/dn  navigate  Enter edit/select  F10 save  Esc cancel' -Fg $TuiColors.Accent
+        Write-TuiAt -X ($layout.X + 2) -Y ($layout.Y + 1) -Text 'up/dn  navigate  pgup/pgdn  Enter edit/select  F10 save  Esc cancel' -Fg $TuiColors.Accent
 
-        for ($i = 0; $i -lt $Fields.Count; $i++) {
+        for ($i = $topIndex; $i -le $bottomIndex; $i++) {
             $field = $Fields[$i]
             $isSelected = $i -eq $selected
             $labelText = ("{0}{1}" -f $field.Label, $(if ($field.Required) { ' *' } else { '' }))
@@ -239,14 +242,16 @@ function Show-TuiForm {
                 $fieldValue = "<$($field.Placeholder)>"
             }
 
-            $rowY = $layout.ContentStartRow + $i
+            $rowY = $layout.ContentStartRow + ($i - $topIndex)
             $fg = if ($isSelected) { $TuiColors.Highlight } else { $TuiColors.Text }
             $bg = if ($isSelected) { $TuiColors.HighlightBg } else { $TuiColors.Background }
             Write-TuiAt -X ($layout.X + 2) -Y $rowY -Text ($labelText.PadRight(32)) -Fg $fg -Bg $bg
             Write-TuiAt -X ($layout.X + 35) -Y $rowY -Text ($fieldValue.PadRight([Math]::Max(1, $layout.Width - 38))) -Fg $fg -Bg $bg
         }
 
+        $positionText = if ($Fields.Count -gt $visibleRows) { "  field {0}/{1}" -f ($selected + 1), $Fields.Count } else { '' }
         $helpText = if ($Fields[$selected].ContainsKey('HelpText')) { [string]$Fields[$selected].HelpText } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($positionText)) { $helpText = "$helpText$positionText" }
         Show-TuiStatus -Message $helpText -Type Info -Row $layout.HelpRow
         Show-TuiStatus -Message '' -Type Info -Row $layout.StatusRow
 
@@ -254,6 +259,10 @@ function Show-TuiForm {
         switch ($key.Key) {
             'UpArrow' { $selected = if ($selected -le 0) { $Fields.Count - 1 } else { $selected - 1 } }
             'DownArrow' { $selected = if ($selected -ge $Fields.Count - 1) { 0 } else { $selected + 1 } }
+            'PageUp' { $selected = [Math]::Max(0, $selected - $visibleRows) }
+            'PageDown' { $selected = [Math]::Min($Fields.Count - 1, $selected + $visibleRows) }
+            'Home' { $selected = 0 }
+            'End' { $selected = $Fields.Count - 1 }
             'Escape' { return $null }
             'F10' {
                 $missing = @()

@@ -171,6 +171,7 @@ Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard' -Expected
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileManager' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileInventory' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-GuidedDeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-PaloAltoProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Get-DeviceProfileCurrentValues' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Save-DeviceProfile' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 
@@ -649,6 +650,7 @@ while ($menuStack.Count -gt 0) {
         'device-profile'        { Write-SetupDebugLog -Message "Executing action: device-profile"; Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot | Out-Null }
         'clavister-profile'     { Write-SetupDebugLog -Message "Executing action: clavister-profile"; Invoke-ClavisterProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
         'kemp-profile'          { Write-SetupDebugLog -Message "Executing action: kemp-profile"; Invoke-KempProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
+        'paloalto-profile'      { Write-SetupDebugLog -Message "Executing action: paloalto-profile"; Invoke-PaloAltoProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
         'kemp-deploy'           { Write-SetupDebugLog -Message "Executing action: kemp-deploy"; Invoke-KempDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'kemp-whatif'           { Write-SetupDebugLog -Message "Executing action: kemp-whatif"; Invoke-KempDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'kemp-diagnostics'      { Write-SetupDebugLog -Message "Executing action: kemp-diagnostics"; Invoke-KempDiagnostics -ProjectRoot $PSScriptRoot }

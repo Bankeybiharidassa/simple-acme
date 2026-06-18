@@ -36,6 +36,20 @@ Describe 'Setup TUI and policy reliability' {
         $match.Value | Should -Not -Match '\bRead-Host\b'
     }
 
+    It 'Show-TuiForm renders long device forms with scroll paging' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            '$visibleRows = [Math]::Max(1, $layout.HelpRow - $layout.ContentStartRow)',
+            '$topIndex = [Math]::Max(0, [Math]::Min($selected - [Math]::Floor($visibleRows / 2), [Math]::Max(0, $Fields.Count - $visibleRows)))',
+            "'PageUp' { $selected = [Math]::Max(0, $selected - $visibleRows) }",
+            "'PageDown' { $selected = [Math]::Min($Fields.Count - 1, $selected + $visibleRows) }",
+            'field {0}/{1}'
+        )) {
+            $raw.Contains($text) | Should -BeTrue
+        }
+    }
+
     It 'Policy editor warns and stays in loop when no policy exists for edit/delete' {
         $cfg = 'TestDrive:\cfg-no-policy'
         New-Item -ItemType Directory -Path $cfg -Force | Out-Null
