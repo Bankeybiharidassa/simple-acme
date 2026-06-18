@@ -5,6 +5,8 @@ function Invoke-TestPaloAltoFlow {
     $schemaPath = Join-Path $root 'setup\Device-Schemas.ps1'
     $runnerPath = Join-Path $root 'setup\Device-Profile-Runner.psm1'
     $deployPath = Join-Path $root 'Scripts\deploy-paloalto.ps1'
+    $hookPath = Join-Path $root 'Scripts\cert2paloalto.ps1'
+    $connectorHookPath = Join-Path $root 'Scripts\connectors\cert2paloalto.ps1'
     $docsPath = Join-Path $root 'docs\paloalto-lab-communication.md'
     $menuPath = Join-Path $root 'setup\Menu-Tree.ps1'
     $setupPath = Join-Path $root 'certificate-setup.ps1'
@@ -107,6 +109,33 @@ function Invoke-TestPaloAltoFlow {
         }
         if ($runner -match 'ServerCertificateValidationCallback\s*=\s*\{\s*param') {
             throw 'Palo Alto profile test must use a compiled certificate callback, not a PowerShell scriptblock.'
+        }
+    }
+
+    & $Assert 'Palo Alto first-run hook uses saved profile and PFX-to-PEM conversion' {
+        foreach ($path in @($hookPath,$connectorHookPath)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing Palo Alto hook: $path" }
+        }
+        $registry = Get-Content -LiteralPath (Join-Path $root 'setup\Connector-Registry.ps1') -Raw
+        foreach ($text in @(
+            "-ConnectorId 'paloalto'",
+            "-ScriptFileName 'cert2paloalto.ps1'",
+            'FirstRunAcmeSupported $true',
+            "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -CertCommonName '{CertCommonName}'"
+        )) {
+            if (-not $registry.Contains($text)) { throw "Missing Palo Alto registry wiring: $text" }
+        }
+        $hook = Get-Content -LiteralPath $connectorHookPath -Raw
+        foreach ($text in @(
+            'Get-PaloAltoHookProfileSettings',
+            'connector_type''] -eq ''paloalto''',
+            'Convert-ClavisterPfxToPemFiles',
+            'deploy-paloalto.ps1',
+            'SkipCertificateCheck',
+            'BindingType',
+            'BindingTarget'
+        )) {
+            if (-not $hook.Contains($text)) { throw "Missing Palo Alto hook behavior: $text" }
         }
     }
 }

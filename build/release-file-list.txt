@@ -47,6 +47,7 @@ scripts/cert2clavister.ps1
 scripts/cert2kemp.ps1
 scripts/cert2mail.ps1
 scripts/cert2netscaler.ps1
+scripts/cert2paloalto.ps1
 scripts/cert2rds.ps1
 scripts/cert2waf.ps1
 scripts/connectors/cert2fw.ps1
@@ -54,6 +55,7 @@ scripts/connectors/cert2iis.ps1
 scripts/connectors/cert2clavister.ps1
 scripts/connectors/cert2kemp.ps1
 scripts/connectors/cert2mail.ps1
+scripts/connectors/cert2paloalto.ps1
 scripts/connectors/cert2rds.ps1
 scripts/connectors/cert2waf.ps1
 scripts/core/connector-core.psm1
