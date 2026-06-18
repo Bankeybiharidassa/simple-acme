@@ -8,6 +8,7 @@ function Invoke-TestPaloAltoFlow {
     $hookPath = Join-Path $root 'Scripts\cert2paloalto.ps1'
     $connectorHookPath = Join-Path $root 'Scripts\connectors\cert2paloalto.ps1'
     $docsPath = Join-Path $root 'docs\paloalto-lab-communication.md'
+    $tuiPath = Join-Path $root 'core\Tui-Engine.psm1'
     $menuPath = Join-Path $root 'setup\Menu-Tree.ps1'
     $setupPath = Join-Path $root 'certificate-setup.ps1'
 
@@ -20,6 +21,10 @@ function Invoke-TestPaloAltoFlow {
         foreach ($required in @('host','port','api_key','username','password','skip_certificate_check','vsys','certificate_name','cert_path','key_path','chain_path','key_passphrase','binding_type','binding_target','rest_location','bind_target_names')) {
             if ($fieldNames -notcontains $required) { throw "Palo Alto schema missing field: $required" }
         }
+        $bindingTargetField = @($schema.Fields | Where-Object { $_.Name -eq 'binding_target' })[0]
+        if ([string]$bindingTargetField.Placeholder -ne '') { throw 'Palo Alto management binding target must not display a fake portal/gateway placeholder.' }
+        $selectedTargetsField = @($schema.Fields | Where-Object { $_.Name -eq 'bind_target_names' })[0]
+        if ([string]$selectedTargetsField.Placeholder -ne '') { throw 'Palo Alto selected targets summary must not display a fake placeholder value.' }
     }
 
     & $Assert 'Palo Alto profile action is exposed and uses the managed-device editor' {
@@ -78,6 +83,7 @@ function Invoke-TestPaloAltoFlow {
         foreach ($text in @(
             '[int]$Port = 443',
             '[switch]$SkipCertificateCheck',
+            '[Environment]::OSVersion.Platform',
             'New-PaloAltoApiUriBuilder',
             'Invoke-PaloAltoApiWithCertificatePolicy',
             'Invoke-PaloAltoRestMethod',
@@ -94,8 +100,28 @@ function Invoke-TestPaloAltoFlow {
         )) {
             if (-not $deploy.Contains($text)) { throw "Missing Palo Alto deploy transport behavior: $text" }
         }
+        foreach ($text in @(
+            '<certificate>$(Get-XmlEscaped -Text $CertName)</certificate>',
+            "[string]`$BindingTarget = ''",
+            "throw 'waf BindingTarget is required.'",
+            '$bindingSetXPath = $bindingXPath -replace ''/ssl-tls-service-profile$'', ''''',
+            'decision = ''skip-upload''',
+            'Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey',
+            '$profileCert = [string]$profileResp.response.result.entry.certificate'
+        )) {
+            if (-not $deploy.Contains($text)) { throw "Missing Palo Alto binding/idempotency behavior: $text" }
+        }
+        if ($deploy.Contains('<certificate><member>$(Get-XmlEscaped -Text $CertName)</member></certificate>')) {
+            throw 'Palo Alto SSL/TLS profile must write scalar certificate XML, not member XML.'
+        }
+        if ($deploy.Contains('decision = ''no-op''; reason = ''fingerprint-match''')) {
+            throw 'Palo Alto deploy must not exit before binding when certificate fingerprint already matches.'
+        }
         if ($deploy -match 'ServerCertificateValidationCallback\s*=\s*\{') {
             throw 'Palo Alto deploy transport must use a compiled certificate callback, not a PowerShell scriptblock.'
+        }
+        if ($deploy -match '\$IsWindows') {
+            throw 'Palo Alto deploy transport must not use PowerShell 6+ $IsWindows in Windows PowerShell 5.'
         }
 
         $runner = Get-Content -LiteralPath $runnerPath -Raw
@@ -128,14 +154,34 @@ function Invoke-TestPaloAltoFlow {
         $hook = Get-Content -LiteralPath $connectorHookPath -Raw
         foreach ($text in @(
             'Get-PaloAltoHookProfileSettings',
-            'connector_type''] -eq ''paloalto''',
+            'connector_type'') -or [string]$_[''connector_type''] -ne ''paloalto''',
+            'hasHost -and ($hasApiKey -or $hasLogin)',
+            'New-PaloAltoApiKeyFromCredentials',
+            'Invoke-PaloAltoHookWebRequest',
             'Convert-ClavisterPfxToPemFiles',
             'deploy-paloalto.ps1',
             'SkipCertificateCheck',
+            'Username',
+            'Password',
             'BindingType',
             'BindingTarget'
         )) {
             if (-not $hook.Contains($text)) { throw "Missing Palo Alto hook behavior: $text" }
+        }
+    }
+
+    & $Assert 'TUI form edits and help text stay inside the form box' {
+        $tui = Get-Content -LiteralPath $tuiPath -Raw
+        foreach ($text in @(
+            '$replaceOnFirstPrintableKey = -not [string]::IsNullOrEmpty($buffer)',
+            '$innerWidth = [Math]::Max(1, $layout.Width - 4)',
+            'Get-TuiClippedText -Text $helpText -Width $innerWidth',
+            'Write-TuiAt -X ($layout.X + 2) -Y $layout.HelpRow'
+        )) {
+            if (-not $tui.Contains($text)) { throw "Missing TUI form behavior: $text" }
+        }
+        if ($tui.Contains('Show-TuiStatus -Message $helpText -Type Info -Row $layout.HelpRow')) {
+            throw 'TUI help text must be rendered inside the form box, not across the full console width.'
         }
     }
 }

@@ -189,6 +189,7 @@ function Read-TuiLineInput {
     )
 
     $buffer = if ($null -eq $InitialValue) { '' } else { [string]$InitialValue }
+    $replaceOnFirstPrintableKey = -not [string]::IsNullOrEmpty($buffer)
     $startX = [Console]::CursorLeft
     $startY = [Console]::CursorTop
     $fieldWidth = [Math]::Max(1, [Math]::Min([Math]::Max(1, [Console]::WindowWidth - $startX - 1), $MaxLength))
@@ -207,13 +208,20 @@ function Read-TuiLineInput {
             'Enter' { return @{ Accepted = $true; Value = $buffer } }
             'Escape' { return @{ Accepted = $false; Value = $InitialValue } }
             'Backspace' {
+                $replaceOnFirstPrintableKey = $false
                 if ($buffer.Length -gt 0) {
                     $buffer = $buffer.Substring(0, $buffer.Length - 1)
                 }
             }
             default {
-                if (-not [char]::IsControl($key.KeyChar) -and $buffer.Length -lt $MaxLength) {
-                    $buffer += [string]$key.KeyChar
+                if (-not [char]::IsControl($key.KeyChar)) {
+                    if ($replaceOnFirstPrintableKey) {
+                        $buffer = ''
+                        $replaceOnFirstPrintableKey = $false
+                    }
+                    if ($buffer.Length -lt $MaxLength) {
+                        $buffer += [string]$key.KeyChar
+                    }
                 }
             }
         }
@@ -262,8 +270,10 @@ function Show-TuiForm {
         $positionText = if ($Fields.Count -gt $visibleRows) { "  field {0}/{1}" -f ($selected + 1), $Fields.Count } else { '' }
         $helpText = if ($Fields[$selected].ContainsKey('HelpText')) { [string]$Fields[$selected].HelpText } else { '' }
         if (-not [string]::IsNullOrWhiteSpace($positionText)) { $helpText = "$helpText$positionText" }
-        Show-TuiStatus -Message $helpText -Type Info -Row $layout.HelpRow
-        Show-TuiStatus -Message '' -Type Info -Row $layout.StatusRow
+        $innerWidth = [Math]::Max(1, $layout.Width - 4)
+        $clippedHelpText = Get-TuiClippedText -Text $helpText -Width $innerWidth
+        Write-TuiAt -X ($layout.X + 2) -Y $layout.HelpRow -Text ($clippedHelpText.PadRight($innerWidth)) -Fg $TuiColors.Text
+        Write-TuiAt -X ($layout.X + 2) -Y $layout.StatusRow -Text (' '.PadRight($innerWidth)) -Fg $TuiColors.Text
 
         $key = Read-TuiKey
         switch ($key.Key) {
@@ -282,7 +292,8 @@ function Show-TuiForm {
                     }
                 }
                 if ($missing.Count -gt 0) {
-                    Show-TuiStatus -Message ("Required fields missing: {0}" -f ($missing -join ', ')) -Type Error -Row $layout.StatusRow
+                    $errorText = Get-TuiClippedText -Text ("Required fields missing: {0}" -f ($missing -join ', ')) -Width $innerWidth
+                    Write-TuiAt -X ($layout.X + 2) -Y $layout.StatusRow -Text ($errorText.PadRight($innerWidth)) -Fg $TuiColors.Error
                     Start-Sleep -Milliseconds 1400
                     continue
                 }
@@ -293,7 +304,8 @@ function Show-TuiForm {
                 if ($activeField.Type -eq 'choice') {
                     $choices = @($activeField.Choices)
                     if ($choices.Count -eq 0) {
-                        Show-TuiStatus -Message "No choices configured for $($activeField.Label)." -Type Error -Row $layout.StatusRow
+                        $errorText = Get-TuiClippedText -Text "No choices configured for $($activeField.Label)." -Width $innerWidth
+                        Write-TuiAt -X ($layout.X + 2) -Y $layout.StatusRow -Text ($errorText.PadRight($innerWidth)) -Fg $TuiColors.Error
                         Start-Sleep -Milliseconds 1000
                         continue
                     }

@@ -15,6 +15,8 @@ param(
     [ValidateRange(1, 65535)][int]$Port = 443,
     [string]$ApiKey = '',
     [string]$ApiKeySecureFile = '',
+    [string]$Username = '',
+    [SecureString]$Password,
     [string]$CertName = '',
     [string]$BindingType = '',
     [string]$BindingTarget = '',

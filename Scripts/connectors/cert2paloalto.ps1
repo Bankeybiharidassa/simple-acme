@@ -15,6 +15,8 @@ param(
     [ValidateRange(1, 65535)][int]$Port = 443,
     [string]$ApiKey = '',
     [string]$ApiKeySecureFile = '',
+    [string]$Username = '',
+    [SecureString]$Password,
     [string]$CertName = '',
     [string]$BindingType = '',
     [string]$BindingTarget = '',
@@ -37,6 +39,8 @@ $configStorePath = Join-Path $repoRoot 'core/Config-Store.psm1'
 if (Test-Path -LiteralPath $configStorePath -PathType Leaf) {
     Import-Module $configStorePath -Force
 }
+
+$script:PaloAltoCertificatePolicyTypeLoaded = $false
 
 function ConvertTo-PaloAltoHookBoolean {
     param([object]$Value, [bool]$Default = $false)
@@ -64,8 +68,14 @@ function Get-PaloAltoHookProfileSettings {
     $profile = Get-DeviceConfig -DeviceId $DeviceId -ConfigDir $resolvedConfigDir
     if ($null -eq $profile) {
         $profiles = @(Get-AllDeviceConfigs -ConfigDir $resolvedConfigDir -SkipIntegrityFailures | Where-Object {
-            $_ -is [System.Collections.IDictionary] -and $_.ContainsKey('connector_type') -and [string]$_['connector_type'] -eq 'paloalto'
-        } | Select-Object -First 1)
+            if (-not ($_ -is [System.Collections.IDictionary]) -or -not $_.ContainsKey('connector_type') -or [string]$_['connector_type'] -ne 'paloalto') { return $false }
+            if (-not $_.ContainsKey('settings') -or -not ($_['settings'] -is [System.Collections.IDictionary])) { return $false }
+            $settings = $_['settings']
+            $hasHost = $settings.ContainsKey('host') -and -not [string]::IsNullOrWhiteSpace([string]$settings['host'])
+            $hasApiKey = $settings.ContainsKey('api_key') -and -not [string]::IsNullOrWhiteSpace([string]$settings['api_key'])
+            $hasLogin = $settings.ContainsKey('username') -and -not [string]::IsNullOrWhiteSpace([string]$settings['username']) -and $settings.ContainsKey('password') -and -not [string]::IsNullOrWhiteSpace([string]$settings['password'])
+            return ($hasHost -and ($hasApiKey -or $hasLogin))
+        } | Sort-Object @{ Expression = { if ($_ -is [System.Collections.IDictionary] -and $_.ContainsKey('updated_at')) { [datetime]$_['updated_at'] } else { [datetime]::MinValue } }; Descending = $true } | Select-Object -First 1)
         if ($profiles.Count -gt 0) { $profile = $profiles[0] }
     }
     if ($null -eq $profile -or -not ($profile -is [System.Collections.IDictionary]) -or -not $profile.ContainsKey('settings')) { return @{} }
@@ -105,6 +115,69 @@ function ConvertFrom-PaloAltoSecureString {
     }
 }
 
+function Invoke-PaloAltoHookWebRequest {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [switch]$SkipCertificateCheck,
+        [int]$TimeoutSeconds = 30
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ($SkipCertificateCheck) {
+        if (-not $script:PaloAltoCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmePaloAltoCertificatePolicy' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmePaloAltoCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        }
+        $script:PaloAltoCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmePaloAltoCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmePaloAltoCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback =
+            [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
+    }
+
+    try {
+        return Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec $TimeoutSeconds
+    } finally {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+    }
+}
+
+function New-PaloAltoApiKeyFromCredentials {
+    param(
+        [Parameter(Mandatory)][string]$Firewall,
+        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)][string]$Username,
+        [Parameter(Mandatory)][string]$PlainPassword,
+        [switch]$SkipCertificateCheck,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $base = "https://$Firewall`:$Port"
+    $keyUri = "{0}/api/?type=keygen&user={1}&password={2}" -f $base, [Uri]::EscapeDataString($Username), [Uri]::EscapeDataString($PlainPassword)
+    $keyResponse = Invoke-PaloAltoHookWebRequest -Uri $keyUri -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+    [xml]$keyXml = [string]$keyResponse.Content
+    if ([string]$keyXml.response.status -ne 'success' -or [string]::IsNullOrWhiteSpace([string]$keyXml.response.result.key)) {
+        throw "Palo Alto XML keygen failed: $($keyXml.response.msg.InnerText)"
+    }
+    return [string]$keyXml.response.result.key
+}
+
 function Apply-PaloAltoHookProfileSettings {
     $settings = Get-PaloAltoHookProfileSettings
     if ($settings.Count -eq 0) { return }
@@ -115,6 +188,11 @@ function Apply-PaloAltoHookProfileSettings {
         if (-not [string]::IsNullOrWhiteSpace($profilePort)) { $script:Port = [int]$profilePort }
     }
     if ([string]::IsNullOrWhiteSpace($ApiKey)) { $script:ApiKey = Get-PaloAltoProfileValue -Settings $settings -Key 'api_key' }
+    if ([string]::IsNullOrWhiteSpace($Username)) { $script:Username = Get-PaloAltoProfileValue -Settings $settings -Key 'username' }
+    if ($null -eq $Password) {
+        $plainPassword = Get-PaloAltoProfileValue -Settings $settings -Key 'password'
+        if (-not [string]::IsNullOrWhiteSpace($plainPassword)) { $script:Password = ConvertTo-SecureString $plainPassword -AsPlainText -Force }
+    }
     if ([string]::IsNullOrWhiteSpace($CertName)) { $script:CertName = Get-PaloAltoProfileValue -Settings $settings -Key 'certificate_name' }
     if ([string]::IsNullOrWhiteSpace($BindingType)) { $script:BindingType = Get-PaloAltoProfileValue -Settings $settings -Key 'binding_type' -Default 'management' }
     if ([string]::IsNullOrWhiteSpace($BindingTarget)) { $script:BindingTarget = Get-PaloAltoProfileValue -Settings $settings -Key 'binding_target' }
@@ -128,7 +206,13 @@ function Apply-PaloAltoHookProfileSettings {
 Apply-PaloAltoHookProfileSettings
 
 if ([string]::IsNullOrWhiteSpace($Firewall)) { throw 'Palo Alto firewall address is missing. Configure the Palo Alto device profile before running the hook.' }
-if ([string]::IsNullOrWhiteSpace($ApiKey) -and [string]::IsNullOrWhiteSpace($ApiKeySecureFile)) { throw 'Palo Alto API key is missing. Configure and test the Palo Alto device profile before running the hook.' }
+$plainPasswordForKeygen = if ($null -ne $Password) { ConvertFrom-PaloAltoSecureString -SecureString $Password } else { '' }
+if ([string]::IsNullOrWhiteSpace($ApiKey) -and [string]::IsNullOrWhiteSpace($ApiKeySecureFile)) {
+    if ([string]::IsNullOrWhiteSpace($Username) -or [string]::IsNullOrWhiteSpace($plainPasswordForKeygen)) {
+        throw 'Palo Alto API key is missing and no username/password credentials are available. Configure and test the Palo Alto device profile before running the hook.'
+    }
+    $ApiKey = New-PaloAltoApiKeyFromCredentials -Firewall $Firewall -Port $Port -Username $Username -PlainPassword $plainPasswordForKeygen -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSeconds $TimeoutSeconds
+}
 if ([string]::IsNullOrWhiteSpace($CertName)) { $CertName = ConvertTo-PaloAltoCertificateName -Name $CertCommonName }
 if ([string]::IsNullOrWhiteSpace($BindingType)) { $BindingType = 'management' }
 if ([string]::IsNullOrWhiteSpace($Vsys)) { $Vsys = 'vsys1' }
@@ -174,6 +258,7 @@ try {
     exit $LASTEXITCODE
 } finally {
     $plainPfxPassword = $null
+    $plainPasswordForKeygen = $null
     if (-not [string]::IsNullOrWhiteSpace($tempDirectory) -and (Test-Path -LiteralPath $tempDirectory -PathType Container)) {
         Remove-Item -LiteralPath $tempDirectory -Recurse -Force
     }
