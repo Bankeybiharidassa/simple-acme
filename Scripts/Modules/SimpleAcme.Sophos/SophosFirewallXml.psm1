@@ -119,7 +119,7 @@ function Invoke-SophosWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        if (-not $script:SophosCertificatePolicyTypeLoaded) {
+        if (-not $script:SophosCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmeSophosCertificatePolicy' -as [type])) {
             Add-Type -TypeDefinition @'
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
@@ -136,9 +136,11 @@ public static class SimpleAcmeSophosCertificatePolicy
     }
 }
 '@ -ErrorAction SilentlyContinue
-            $script:SophosCertificatePolicyTypeLoaded = $true
         }
-        $method = [SimpleAcmeSophosCertificatePolicy].GetMethod('TrustAnyCertificate')
+        $script:SophosCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmeSophosCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmeSophosCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
         [Net.ServicePointManager]::ServerCertificateValidationCallback = [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
     try {
@@ -268,7 +270,8 @@ function Invoke-SophosXmlRequest {
             $invokeParams = @{
                 Uri = $uri
                 Method = 'Post'
-                Body = @{ reqxml = $requestXml }
+                Body = $requestXml
+                ContentType = 'application/xml'
                 UseBasicParsing = $true
                 TimeoutSec = $session.TimeoutSeconds
             }
@@ -498,6 +501,16 @@ function Get-SophosAdminWebSettings {
     param()
 
     $response = Invoke-SophosXmlRequest -InnerXml '<Get><AdminSettings></AdminSettings></Get>' -Operation 'Get-SophosAdminWebSettings'
+    if ($response.IsEmpty -or $null -eq $response.Xml) {
+        return [pscustomobject]@{
+            Node = $null
+            Certificate = ''
+            HTTPSport = ''
+            UserPortalHTTPSPort = ''
+            VPNPortalHTTPSPort = ''
+            IsEmptyResponse = $true
+        }
+    }
     $node = $response.Xml.SelectSingleNode('//AdminSettings/WebAdminSettings')
     if ($null -eq $node) { throw 'Sophos AdminSettings/WebAdminSettings was not found in response.' }
     [pscustomobject]@{
@@ -506,6 +519,7 @@ function Get-SophosAdminWebSettings {
         HTTPSport = Get-SophosChildText -Node $node -Path 'HTTPSport'
         UserPortalHTTPSPort = Get-SophosChildText -Node $node -Path 'UserPortalHTTPSPort'
         VPNPortalHTTPSPort = Get-SophosChildText -Node $node -Path 'VPNPortalHTTPSPort'
+        IsEmptyResponse = $false
     }
 }
 
@@ -514,6 +528,7 @@ function Set-SophosAdminWebSettingsCertificate {
     param([Parameter(Mandatory)][string]$CertificateName)
 
     $settings = Get-SophosAdminWebSettings
+    if ($null -eq $settings.Node) { throw 'Sophos AdminSettings/WebAdminSettings cannot be updated because the API returned an empty response.' }
     $node = $settings.Node.Clone()
     $certNode = $node.SelectSingleNode('Certificate')
     if ($null -eq $certNode) {
@@ -535,6 +550,7 @@ function Get-SophosWafRules {
     param()
 
     $response = Invoke-SophosXmlRequest -InnerXml '<Get><FirewallRule></FirewallRule></Get>' -Operation 'Get-SophosWafRules'
+    if ($response.IsEmpty -or $null -eq $response.Xml) { return @() }
     @($response.Xml.SelectNodes('//FirewallRule') | Where-Object {
         (Get-SophosChildText -Node $_ -Path 'PolicyType') -eq 'HTTPBased' -or $null -ne $_.SelectSingleNode('.//HTTPSCertificate')
     } | ForEach-Object {

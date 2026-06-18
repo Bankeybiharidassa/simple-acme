@@ -6,6 +6,10 @@ param(
     [string]$Firewall,
 
     [Parameter(Mandatory = $false)]
+    [ValidateRange(1, 65535)]
+    [int]$Port = 443,
+
+    [Parameter(Mandatory = $false)]
     [string]$ApiKey,
 
     [Parameter(Mandatory = $false)]
@@ -27,9 +31,8 @@ param(
     [ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')]
     [string]$BindingType,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$BindingTarget,
+    [Parameter(Mandatory = $false)]
+    [string]$BindingTarget = 'deviceconfig/system',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -41,6 +44,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [switch]$DryRun,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipCertificateCheck,
 
     [Parameter(Mandatory = $false)]
     [switch]$VerboseLog
@@ -172,10 +178,64 @@ function Resolve-ApiKey {
     return Unprotect-DpapiValue -CiphertextBase64 $payload.ciphertext -Scope 'LocalMachine'
 }
 
+function Invoke-PaloAltoApiWithCertificatePolicy {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][scriptblock]$ScriptBlock)
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ($SkipCertificateCheck) {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+    }
+
+    try {
+        & $ScriptBlock
+    } finally {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+    }
+}
+
+function Invoke-PaloAltoRestMethod {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('Get','Post')][string]$Method,
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $false)][object]$Body = $null,
+        [Parameter(Mandatory = $false)][string]$ContentType = ''
+    )
+
+    $parameters = @{
+        Method = $Method
+        Uri = $Uri
+        TimeoutSec = $TimeoutSeconds
+    }
+    if ($null -ne $Body) { $parameters['Body'] = $Body }
+    if (-not [string]::IsNullOrWhiteSpace($ContentType)) { $parameters['ContentType'] = $ContentType }
+    if ($SkipCertificateCheck -and (Get-Command -Name Invoke-RestMethod).Parameters.ContainsKey('SkipCertificateCheck')) {
+        $parameters['SkipCertificateCheck'] = $true
+    }
+
+    return Invoke-RestMethod @parameters
+}
+
+function New-PaloAltoApiUriBuilder {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+
+    $uriBuilder = [System.UriBuilder]::new("https://$Firewall/api/")
+    $uriBuilder.Port = $Port
+    return $uriBuilder
+}
+
 function Invoke-PanApi {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][ValidateSet('GET','POST')][string]$Method,
         [Parameter(Mandatory = $true)][hashtable]$Query,
@@ -184,7 +244,7 @@ function Invoke-PanApi {
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
-    $uriBuilder = [System.UriBuilder]::new("https://$Firewall/api/")
+    $uriBuilder = New-PaloAltoApiUriBuilder -Firewall $Firewall -Port $Port
     $queryPairs = New-Object System.Collections.Generic.List[string]
     foreach ($k in $Query.Keys) {
         $queryPairs.Add(('{0}={1}' -f [System.Uri]::EscapeDataString($k), [System.Uri]::EscapeDataString([string]$Query[$k])))
@@ -199,7 +259,9 @@ function Invoke-PanApi {
         }
 
         if ($Method -eq 'GET') {
-            return Invoke-RestMethod -Method Get -Uri $uriBuilder.Uri.AbsoluteUri -TimeoutSec $TimeoutSeconds
+            return Invoke-PaloAltoApiWithCertificatePolicy -ScriptBlock {
+                Invoke-PaloAltoRestMethod -Method Get -Uri $uriBuilder.Uri.AbsoluteUri -TimeoutSeconds $TimeoutSeconds
+            }
         }
 
         if ($null -ne $FilePath) {
@@ -217,10 +279,14 @@ function Invoke-PanApi {
             [Array]::Copy($headerBytes, 0, $bodyBytes, 0, $headerBytes.Length)
             [Array]::Copy($bytes, 0, $bodyBytes, $headerBytes.Length, $bytes.Length)
             [Array]::Copy($footerBytes, 0, $bodyBytes, $headerBytes.Length + $bytes.Length, $footerBytes.Length)
-            return Invoke-RestMethod -Method Post -Uri $uriBuilder.Uri.AbsoluteUri -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec $TimeoutSeconds
+            return Invoke-PaloAltoApiWithCertificatePolicy -ScriptBlock {
+                Invoke-PaloAltoRestMethod -Method Post -Uri $uriBuilder.Uri.AbsoluteUri -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSeconds $TimeoutSeconds
+            }
         }
 
-        return Invoke-RestMethod -Method Post -Uri $uriBuilder.Uri.AbsoluteUri -Body $Form -TimeoutSec $TimeoutSeconds
+        return Invoke-PaloAltoApiWithCertificatePolicy -ScriptBlock {
+            Invoke-PaloAltoRestMethod -Method Post -Uri $uriBuilder.Uri.AbsoluteUri -Body $Form -TimeoutSeconds $TimeoutSeconds
+        }
     }
 
     $response = Invoke-WithRetry -Operation "PAN API $Method $($Query.type)" -ScriptBlock $invoke
@@ -274,13 +340,19 @@ function Get-ExistingCertificateFingerprint {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$CertName,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     $xpath = "/config/shared/certificate/entry[@name='$(Get-XmlEscaped -Text $CertName)']"
-    $resp = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $xpath } -TimeoutSeconds $TimeoutSeconds
+    try {
+        $resp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $xpath } -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        if ($_.Exception.Message -match 'No such node') { return $null }
+        throw
+    }
     $certNode = $resp.response.result.entry
     if ($null -eq $certNode) { return $null }
 
@@ -295,6 +367,7 @@ function Upload-Certificate {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$CertName,
         [Parameter(Mandatory = $true)][string]$CertPath,
@@ -307,8 +380,8 @@ function Upload-Certificate {
     $certQuery = @{ type = 'import'; category = 'certificate'; 'certificate-name' = $CertName; format = 'pem' }
     $keyQuery = @{ type = 'import'; category = 'private-key'; 'certificate-name' = $CertName; format = 'pem'; passphrase = '' }
 
-    $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
-    $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds
+    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $certQuery -FilePath $CertPath -TimeoutSeconds $TimeoutSeconds
+    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method POST -Query $keyQuery -FilePath $KeyPath -TimeoutSeconds $TimeoutSeconds
 
     Write-StructuredLog -Action 'upload-certificate' -Target $Firewall -Result 'success' -Details @{ certName = $CertName }
 }
@@ -317,6 +390,7 @@ function Set-SSLProfile {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$CertName,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
@@ -327,7 +401,7 @@ function Set-SSLProfile {
     $element = "<entry name='$(Get-XmlEscaped -Text $profileName)'><protocol-settings><min-version>tls1-2</min-version><max-version>tls1-3</max-version></protocol-settings><certificate><member>$(Get-XmlEscaped -Text $CertName)</member></certificate></entry>"
 
     Write-StructuredLog -Action 'set-ssl-profile' -Target $profileName -Result 'info' -Details @{}
-    $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $profileXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
+    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $profileXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
     Write-StructuredLog -Action 'set-ssl-profile' -Target $profileName -Result 'success' -Details @{ minVersion = 'tls1-2'; maxVersion = 'tls1-3' }
 
     return $profileName
@@ -369,6 +443,7 @@ function Bind-Certificate {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [Parameter(Mandatory = $true)][ValidateSet('waf', 'globalprotect', 'management', 'ssl-decrypt')][string]$BindingType,
@@ -381,7 +456,7 @@ function Bind-Certificate {
     $element = "<ssl-tls-service-profile>$(Get-XmlEscaped -Text $ProfileName)</ssl-tls-service-profile>"
 
     Write-StructuredLog -Action 'bind-certificate' -Target $bindingXPath -Result 'info' -Details @{ bindingType = $BindingType; bindingTarget = $BindingTarget }
-    $null = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $bindingXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
+    $null = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'set'; xpath = $bindingXPath; element = $element } -TimeoutSeconds $TimeoutSeconds
     Write-StructuredLog -Action 'bind-certificate' -Target $bindingXPath -Result 'success' -Details @{ profile = $ProfileName }
 
     return $bindingXPath
@@ -391,12 +466,13 @@ function Commit-Changes {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     Write-StructuredLog -Action 'commit-start' -Target $Firewall -Result 'info' -Details @{}
-    $commitResponse = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'commit'; cmd = '<commit></commit>' } -TimeoutSeconds $TimeoutSeconds
+    $commitResponse = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'commit'; cmd = '<commit></commit>' } -TimeoutSeconds $TimeoutSeconds
 
     $jobId = [string]$commitResponse.response.result.job
     if ([string]::IsNullOrWhiteSpace($jobId)) {
@@ -406,7 +482,7 @@ function Commit-Changes {
     $maxPolls = 90
     for ($poll = 1; $poll -le $maxPolls; $poll++) {
         Start-Sleep -Seconds 2
-        $job = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'op'; cmd = "<show><jobs><id>$jobId</id></jobs></show>" } -TimeoutSeconds $TimeoutSeconds
+        $job = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'op'; cmd = "<show><jobs><id>$jobId</id></jobs></show>" } -TimeoutSeconds $TimeoutSeconds
         $status = [string]$job.response.result.job.status
         $result = [string]$job.response.result.job.result
 
@@ -433,6 +509,7 @@ function Validate-Deployment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [Parameter(Mandatory = $true)][string]$CertName,
@@ -441,13 +518,13 @@ function Validate-Deployment {
     )
 
     $profileXPath = "/config/shared/ssl-tls-service-profile/entry[@name='$(Get-XmlEscaped -Text $ProfileName)']"
-    $profileResp = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $profileXPath } -TimeoutSeconds $TimeoutSeconds
+    $profileResp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $profileXPath } -TimeoutSeconds $TimeoutSeconds
     $profileCert = [string]$profileResp.response.result.entry.certificate.member
     if ($profileCert -ne $CertName) {
         throw "Validation failed: profile '$ProfileName' references '$profileCert' instead of '$CertName'."
     }
 
-    $bindResp = Invoke-PanApi -Firewall $Firewall -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $BindingXPath } -TimeoutSeconds $TimeoutSeconds
+    $bindResp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $BindingXPath } -TimeoutSeconds $TimeoutSeconds
     $boundValue = [string]$bindResp.response.result.'ssl-tls-service-profile'
     if ([string]::IsNullOrWhiteSpace($boundValue)) {
         $boundValue = [string]$bindResp.response.result
@@ -467,7 +544,7 @@ try {
     $certInfo = Get-CertificateInfo -CertPath $CertPath -KeyPath $KeyPath
     Write-StructuredLog -Action 'certificate-loaded' -Target $CertPath -Result 'success' -Details @{ thumbprint = $certInfo.Thumbprint; notAfter = $certInfo.Certificate.NotAfter.ToUniversalTime().ToString('o') }
 
-    $existingFingerprint = Get-ExistingCertificateFingerprint -Firewall $Firewall -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
+    $existingFingerprint = Get-ExistingCertificateFingerprint -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
     if ($existingFingerprint -and ($existingFingerprint -eq $certInfo.Thumbprint)) {
         Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'success' -Details @{ decision = 'no-op'; reason = 'fingerprint-match' }
         exit 0
@@ -475,12 +552,12 @@ try {
 
     Write-StructuredLog -Action 'idempotency-check' -Target $CertName -Result 'info' -Details @{ decision = 'deploy'; existing = $existingFingerprint; incoming = $certInfo.Thumbprint }
 
-    Upload-Certificate -Firewall $Firewall -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -TimeoutSeconds $TimeoutSeconds
-    $profileName = Set-SSLProfile -Firewall $Firewall -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
-    $bindingXPath = Bind-Certificate -Firewall $Firewall -ApiKey $resolvedApiKey -ProfileName $profileName -BindingType $BindingType -BindingTarget $BindingTarget -Vsys $Vsys -TimeoutSeconds $TimeoutSeconds
+    Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -CertPath $CertPath -KeyPath $KeyPath -TimeoutSeconds $TimeoutSeconds
+    $profileName = Set-SSLProfile -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds
+    $bindingXPath = Bind-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -ProfileName $profileName -BindingType $BindingType -BindingTarget $BindingTarget -Vsys $Vsys -TimeoutSeconds $TimeoutSeconds
 
-    $commitJob = Commit-Changes -Firewall $Firewall -ApiKey $resolvedApiKey -TimeoutSeconds $TimeoutSeconds
-    Validate-Deployment -Firewall $Firewall -ApiKey $resolvedApiKey -ProfileName $profileName -CertName $CertName -BindingXPath $bindingXPath -TimeoutSeconds $TimeoutSeconds
+    $commitJob = Commit-Changes -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -TimeoutSeconds $TimeoutSeconds
+    Validate-Deployment -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey -ProfileName $profileName -CertName $CertName -BindingXPath $bindingXPath -TimeoutSeconds $TimeoutSeconds
 
     Write-StructuredLog -Action 'completed' -Target $Firewall -Result 'success' -Details @{ commitJob = $commitJob; profileName = $profileName }
     exit 0

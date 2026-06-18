@@ -52,7 +52,7 @@ function New-TestRenewalSummary {
 Describe 'ACME connector registry' {
     It 'contains all required connector ids and maps scripts' {
         $registry = Get-AcmeConnectorRegistry
-        foreach ($id in @('iis','rds','rds-farm','mail','firewall','waf','kemp','netscaler','paloalto','sophos','custom')) {
+        foreach ($id in @('iis','rds','rds-farm','mail','firewall','waf','kemp','clavister','netscaler','paloalto','sophos','custom')) {
             $registry.ContainsKey($id) | Should -BeTrue
             $registry[$id].Label | Should -Not -BeNullOrEmpty
             $registry[$id].NoobDescription | Should -Not -BeNullOrEmpty

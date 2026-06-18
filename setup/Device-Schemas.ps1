@@ -77,7 +77,16 @@ $DeviceSchemas = @{
     caddy = @{ ConnectorType='caddy'; Label='Caddy'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
     lighttpd = @{ ConnectorType='lighttpd'; Label='Lighttpd'; Category='web_server'; SetupMode='guided'; ConnectionMethods=$ServerConnectionMethods; Fields=$ServerProfileFields }
 
-    opnsense = @{ ConnectorType='opnsense'; Label='OPNsense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    opnsense = @{ ConnectorType='opnsense'; Label='OPNsense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_key_secret'; Label='OPNsense API key and secret'; DefaultPort='443' }); Fields=@(
+        @{ Name='host'; Label='OPNsense address'; Type='string'; Required=$true; Placeholder='192.168.45.1'; HelpText='OPNsense WebGUI/API address.' },
+        @{ Name='port'; Label='WebGUI/API port'; Type='string'; Required=$true; Default='443'; Placeholder='1443'; HelpText='OPNsense WebGUI/API HTTPS port. Use your custom port when WebGUI is not on 443.' },
+        @{ Name='api_key'; Label='API key'; Type='secret'; Required=$true; Placeholder=''; HelpText='OPNsense API key. In OPNsense this is the Basic Auth username.' },
+        @{ Name='api_secret'; Label='API secret'; Type='secret'; Required=$true; Placeholder=''; HelpText='OPNsense API secret. In OPNsense this is the Basic Auth password and is only shown once when created.' },
+        @{ Name='skip_certificate_check'; Label='Ignore OPNsense TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed OPNsense management certificates.' },
+        @{ Name='certificate_name'; Label='Name in OPNsense trust store'; Type='string'; Required=$false; Placeholder='wildcard_itsecured_nl'; HelpText='Description/name used when importing the issued certificate into System > Trust > Certificates.' },
+        @{ Name='bind_target_ids'; Label='Selected service numbers'; Type='string'; Required=$false; Placeholder='1'; HelpText='Filled by OPNsense target selection. Numbers only; avoid typing manually.' },
+        @{ Name='bind_target_names'; Label='Selected services'; Type='string'; Required=$false; Placeholder='OPNsense Web GUI'; HelpText='Human-readable summary of selected OPNsense services.' }
+    )}
     pfsense = @{ ConnectorType='pfsense'; Label='pfSense firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     fortigate = @{ ConnectorType='fortigate'; Label='Fortinet FortiGate'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     sonicwall = @{ ConnectorType='sonicwall'; Label='SonicWall firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
@@ -86,6 +95,17 @@ $DeviceSchemas = @{
     juniper_srx = @{ ConnectorType='juniper_srx'; Label='Juniper SRX'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$ApiProfileFields }
     mikrotik = @{ ConnectorType='mikrotik'; Label='MikroTik RouterOS'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
     ubiquiti = @{ ConnectorType='ubiquiti'; Label='Ubiquiti EdgeMAX / UniFi Gateway'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$ApiProfileFields }
+    clavister = @{ ConnectorType='clavister'; Label='Clavister NetWall / cOS Core'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=@(
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.1.1'; HelpText='Clavister firewall management IP address or DNS name for SSH/SCP.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='port'; Label='SSH/SCP port'; Type='string'; Required=$true; Default='22'; Placeholder='22'; HelpText='Clavister SSH/SCP management port. Default is 22.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$true; Default='admin'; Placeholder='admin'; HelpText='Clavister administrator username used for SSH/SCP upload.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Clavister administrator password. For unattended renewals, prefer SSH key or ensure plink.exe/pscp.exe are available.'; Methods=@('ssh_password') },
+        @{ Name='private_key_path'; Label='SSH private key file'; Type='string'; Required=$false; Placeholder='C:\keys\clavister.ppk'; HelpText='SSH private key file. OpenSSH keys work with ssh.exe/scp.exe; PPK keys work with plink.exe/pscp.exe.'; Methods=@('ssh_key') },
+        @{ Name='ssh_host_key_fingerprint'; Label='SSH host key fingerprint'; Type='string'; Required=$false; Placeholder='SHA256:...'; HelpText='Optional pinned host key. Used by PuTTY tools when available.'; Methods=@('ssh_key','ssh_password') },
+        @{ Name='certificate_name'; Label='Name in Clavister'; Type='string'; Required=$true; Default='simple_acme_cert'; Placeholder='wildcard_itsecured_nl'; HelpText='Existing cOS Core certificate object name. Files are uploaded to certificate/<name>.' },
+        @{ Name='commit_after_upload'; Label='Commit after upload'; Type='choice'; Required=$true; Choices=@('true','false'); Default='true'; Placeholder='true'; HelpText='Run the cOS Core commit command after uploading the certificate and private key.' },
+        @{ Name='activate_after_commit'; Label='Activate after commit'; Type='choice'; Required=$true; Choices=@('true','false'); Default='true'; Placeholder='true'; HelpText='Run the cOS Core activate command after commit so scheduled renewals become active automatically.' }
+    )}
 
     cisco_asa = @{ ConnectorType='cisco_asa'; Label='Cisco ASA / Firepower'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$ApiOrSshConnectionMethods; Fields=$CiscoProfileFields }
     cisco_iosxe = @{ ConnectorType='cisco_iosxe'; Label='Cisco IOS XE'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=$SshConnectionMethods; Fields=$CiscoProfileFields }
@@ -150,16 +170,31 @@ $DeviceSchemas = @{
         @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='ADC_PASSWORD'; HelpText='Environment variable name for NITRO API password' },
         @{ Name='vserver'; Label='vServer'; Type='string'; Required=$true; Placeholder='prod-vsrv'; HelpText='Target virtual server name' }
     )}
-    kemp = @{ ConnectorType='kemp'; Label='Kemp LoadMaster'; Category='network_appliance'; Fields=@(
-        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='kemp.example.com'; HelpText='Kemp LoadMaster host' },
-        @{ Name='user_env'; Label='User env-var name'; Type='string'; Required=$true; Placeholder='KEMP_USER'; HelpText='Environment variable name for API username' },
-        @{ Name='password_env'; Label='Password env-var name'; Type='string'; Required=$true; Placeholder='KEMP_PASSWORD'; HelpText='Environment variable name for API password' },
-        @{ Name='vs_id'; Label='Virtual service ID'; Type='string'; Required=$true; Placeholder='1'; HelpText='LoadMaster virtual service id' }
+    kemp = @{ ConnectorType='kemp'; Label='Kemp LoadMaster'; Category='network_appliance'; SetupMode='guided'; Fields=@(
+        @{ Name='host'; Label='LoadMaster address'; Type='string'; Required=$true; Placeholder='192.168.45.150'; HelpText='Kemp LoadMaster management IP or DNS name.' },
+        @{ Name='port'; Label='Management/API port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS management/API port. Default is 443.' },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='bal'; Placeholder='bal'; HelpText='LoadMaster administrator username. Used for classic /access API and as APIv2 fallback.' },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='LoadMaster administrator password. Used when APIv2 is unavailable and classic /access is enabled.' },
+        @{ Name='api_key'; Label='API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='Kemp APIv2 key. Leave empty when the LoadMaster only exposes the classic /access API.' },
+        @{ Name='skip_certificate_check'; Label='Ignore LoadMaster TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed LoadMaster management certificates.' },
+        @{ Name='virtual_service_ids'; Label='Virtual service IDs'; Type='string'; Required=$false; Placeholder='1'; HelpText='Selected LoadMaster virtual service IDs. Use the Kemp-specific target selection to fill this safely.' },
+        @{ Name='certificate_name'; Label='Name in Kemp certificate store'; Type='string'; Required=$false; Placeholder='wildcard_example_com'; HelpText='Certificate object name uploaded to the LoadMaster.' }
     )}
 
 
-    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
-        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
+    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; SetupMode='guided'; Fields=@(
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.155'; HelpText='Palo Alto management IP address or DNS name.' },
+        @{ Name='port'; Label='Management/API port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS management, XML API, and REST API port. Default is 443.' },
+        @{ Name='api_key'; Label='XML/REST API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='PAN-OS API key used for unattended XML and REST API calls. Preferred for scheduled renewals.' },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='admin'; Placeholder='admin'; HelpText='Optional PAN-OS admin username used only to generate/test an API key during setup.' },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional PAN-OS admin password used only to generate/test an API key during setup.' },
+        @{ Name='skip_certificate_check'; Label='Ignore Palo Alto TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed management certificates.' },
+        @{ Name='vsys'; Label='Virtual system'; Type='string'; Required=$true; Default='vsys1'; Placeholder='vsys1'; HelpText='PAN-OS virtual system used for REST inventory and policy/global-protect bindings.' },
+        @{ Name='certificate_name'; Label='Name in PAN-OS certificate store'; Type='string'; Required=$false; Placeholder='wildcard_example_com'; HelpText='Certificate object name created or updated by deploy-paloalto.ps1.' },
+        @{ Name='binding_type'; Label='Certificate binding type'; Type='choice'; Required=$true; Choices=@('management','globalprotect','waf','ssl-decrypt'); Default='management'; Placeholder='management'; HelpText='Deployment target surface for the certificate.' },
+        @{ Name='binding_target'; Label='Binding target'; Type='string'; Required=$false; Placeholder='portal:gp-portal or gateway:gp-gateway'; HelpText='For GlobalProtect use portal:<name> or gateway:<name>. For management use deviceconfig/system.' },
+        @{ Name='rest_location'; Label='REST inventory location'; Type='choice'; Required=$true; Choices=@('vsys','shared'); Default='vsys'; Placeholder='vsys'; HelpText='REST API inventory location. Lab PA-VM returned object/policy inventory with location=vsys and vsys=vsys1.' },
+        @{ Name='bind_target_names'; Label='Selected Palo Alto targets'; Type='string'; Required=$false; Placeholder='Management UI, GlobalProtect portal'; HelpText='Human-readable summary of selected Palo Alto deployment targets.' }
     )}
     sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_basic'; Label='Sophos WebAdmin API username and password'; DefaultPort='4444' }); Fields=@(
         @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.138'; HelpText='IP address or DNS name of the Sophos firewall admin/API page.' },

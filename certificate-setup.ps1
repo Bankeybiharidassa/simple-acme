@@ -92,6 +92,8 @@ Write-SetupDebugLog -Message "certificate-setup.ps1 started. ScriptRoot='$PSScri
 $tuiEngineModulePath = Join-Path $PSScriptRoot 'core/Tui-Engine.psm1'
 $formRunnerModulePath = Join-Path $PSScriptRoot 'setup/Form-Runner.psm1'
 $deviceProfileRunnerModulePath = Join-Path $PSScriptRoot 'setup/Device-Profile-Runner.psm1'
+$clavisterRunnerModulePath = Join-Path $PSScriptRoot 'setup/Clavister-Runner.psm1'
+$kempRunnerModulePath = Join-Path $PSScriptRoot 'setup/Kemp-Runner.psm1'
 $netScalerRunnerModulePath = Join-Path $PSScriptRoot 'setup/NetScaler-Runner.psm1'
 $sophosRunnerModulePath = Join-Path $PSScriptRoot 'setup/Sophos-Runner.psm1'
 $schedulerModulePath = Join-Path $PSScriptRoot 'core/Scheduler.psm1'
@@ -166,9 +168,29 @@ if ($null -eq $deviceProfileRunnerModule) {
 }
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileWizard' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileManager' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-DeviceProfileInventory' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Invoke-GuidedDeviceProfileForm' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Get-DeviceProfileCurrentValues' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
 Assert-SetupCommandAvailable -CommandName 'Save-DeviceProfile' -ExpectedModulePath $deviceProfileRunnerModulePath -ModuleInfo $deviceProfileRunnerModule
+
+$clavisterRunnerModule = Import-Module $clavisterRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $clavisterRunnerModulePath"
+if ($null -eq $clavisterRunnerModule) {
+    throw "Unable to import required Clavister setup module from path: $clavisterRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-ClavisterProfileForm' -ExpectedModulePath $clavisterRunnerModulePath -ModuleInfo $clavisterRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-ClavisterCertificateRequestSetup' -ExpectedModulePath $clavisterRunnerModulePath -ModuleInfo $clavisterRunnerModule
+
+$kempRunnerModule = Import-Module $kempRunnerModulePath -Force -Global -PassThru
+Write-SetupDebugLog -Message "Imported module: $kempRunnerModulePath"
+if ($null -eq $kempRunnerModule) {
+    throw "Unable to import required Kemp setup module from path: $kempRunnerModulePath"
+}
+Assert-SetupCommandAvailable -CommandName 'Invoke-KempProfileForm' -ExpectedModulePath $kempRunnerModulePath -ModuleInfo $kempRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-KempDeploymentForm' -ExpectedModulePath $kempRunnerModulePath -ModuleInfo $kempRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-KempDiagnostics' -ExpectedModulePath $kempRunnerModulePath -ModuleInfo $kempRunnerModule
+Assert-SetupCommandAvailable -CommandName 'Invoke-KempCertificateRequestSetup' -ExpectedModulePath $kempRunnerModulePath -ModuleInfo $kempRunnerModule
 
 $netScalerRunnerModule = Import-Module $netScalerRunnerModulePath -Force -Global -PassThru
 Write-SetupDebugLog -Message "Imported module: $netScalerRunnerModulePath"
@@ -622,7 +644,14 @@ while ($menuStack.Count -gt 0) {
         'netscaler-deploy'      { Write-SetupDebugLog -Message "Executing action: netscaler-deploy"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'netscaler-whatif'      { Write-SetupDebugLog -Message "Executing action: netscaler-whatif"; Invoke-NetScalerDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
         'netscaler-diagnostics' { Write-SetupDebugLog -Message "Executing action: netscaler-diagnostics"; Invoke-NetScalerDiagnostics -ProjectRoot $PSScriptRoot }
+        'device-manager'        { Write-SetupDebugLog -Message "Executing action: device-manager"; Invoke-DeviceProfileManager -ProjectRoot $PSScriptRoot | Out-Null }
+        'device-inventory'      { Write-SetupDebugLog -Message "Executing action: device-inventory"; Invoke-DeviceProfileInventory -ProjectRoot $PSScriptRoot | Out-Null }
         'device-profile'        { Write-SetupDebugLog -Message "Executing action: device-profile"; Invoke-DeviceProfileWizard -ProjectRoot $PSScriptRoot | Out-Null }
+        'clavister-profile'     { Write-SetupDebugLog -Message "Executing action: clavister-profile"; Invoke-ClavisterProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
+        'kemp-profile'          { Write-SetupDebugLog -Message "Executing action: kemp-profile"; Invoke-KempProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
+        'kemp-deploy'           { Write-SetupDebugLog -Message "Executing action: kemp-deploy"; Invoke-KempDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
+        'kemp-whatif'           { Write-SetupDebugLog -Message "Executing action: kemp-whatif"; Invoke-KempDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }
+        'kemp-diagnostics'      { Write-SetupDebugLog -Message "Executing action: kemp-diagnostics"; Invoke-KempDiagnostics -ProjectRoot $PSScriptRoot }
         'sophos-profile'        { Write-SetupDebugLog -Message "Executing action: sophos-profile"; Invoke-SophosProfileForm -ProjectRoot $PSScriptRoot | Out-Null }
         'sophos-deploy'         { Write-SetupDebugLog -Message "Executing action: sophos-deploy"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$false }
         'sophos-whatif'         { Write-SetupDebugLog -Message "Executing action: sophos-whatif"; Invoke-SophosDeploymentForm -ProjectRoot $PSScriptRoot -WhatIfMode:$true }

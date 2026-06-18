@@ -43,6 +43,7 @@ install.md
 policies.json
 scripts/cert2fw.ps1
 scripts/cert2iis.ps1
+scripts/cert2clavister.ps1
 scripts/cert2kemp.ps1
 scripts/cert2mail.ps1
 scripts/cert2netscaler.ps1
@@ -50,6 +51,7 @@ scripts/cert2rds.ps1
 scripts/cert2waf.ps1
 scripts/connectors/cert2fw.ps1
 scripts/connectors/cert2iis.ps1
+scripts/connectors/cert2clavister.ps1
 scripts/connectors/cert2kemp.ps1
 scripts/connectors/cert2mail.ps1
 scripts/connectors/cert2rds.ps1
@@ -57,6 +59,12 @@ scripts/connectors/cert2waf.ps1
 scripts/core/connector-core.psm1
 scripts/modules/SimpleAcme.Netscaler/NetscalerNitro.psm1
 scripts/modules/SimpleAcme.Netscaler/SimpleAcme.Netscaler.psd1
+scripts/modules/SimpleAcme.Clavister/ClavisterSsh.psm1
+scripts/modules/SimpleAcme.Clavister/SimpleAcme.Clavister.psd1
+scripts/modules/SimpleAcme.Kemp/KempLoadMaster.psm1
+scripts/modules/SimpleAcme.Kemp/SimpleAcme.Kemp.psd1
+scripts/modules/SimpleAcme.OPNsense/OPNsenseApi.psm1
+scripts/modules/SimpleAcme.OPNsense/SimpleAcme.OPNsense.psd1
 scripts/modules/SimpleAcme.Sophos/SophosFirewallXml.psm1
 scripts/modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1
 scripts/deploy-rds-farm.ps1
@@ -67,5 +75,7 @@ setup/Device-Schemas.ps1
 setup/Device-Profile-Runner.psm1
 setup/Form-Runner.psm1
 setup/Menu-Tree.ps1
+setup/Clavister-Runner.psm1
+setup/Kemp-Runner.psm1
 setup/NetScaler-Runner.psm1
 setup/Sophos-Runner.psm1

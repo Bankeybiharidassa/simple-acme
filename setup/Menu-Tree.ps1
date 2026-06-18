@@ -9,7 +9,13 @@ $CertificateMenuTree = @{
         @{ Label='Setup new certificate'; Key='setup-new'; Type='action' },
         @{ Label='Manage existing certificates'; Key='manage-certs'; Type='action' },
         @{ Label='Deployment targets'; Key='deployment-targets'; Type='submenu'; Items=@(
+            @{ Label='Manage configured devices (view/add/change/delete)'; Key='device-manager'; Type='action' },
             @{ Label='Create or edit any device profile'; Key='device-profile'; Type='action' },
+            @{ Label='Clavister NetWall / cOS Core - Create or edit device profile'; Key='clavister-profile'; Type='action' },
+            @{ Label='Kemp LoadMaster - Create or edit device profile'; Key='kemp-profile'; Type='action' },
+            @{ Label='Kemp LoadMaster - Check what would happen (safe preview, no changes)'; Key='kemp-whatif'; Type='action' },
+            @{ Label='Kemp LoadMaster - Install certificate on selected virtual services'; Key='kemp-deploy'; Type='action' },
+            @{ Label='Kemp LoadMaster - Check setup and show diagnostics'; Key='kemp-diagnostics'; Type='action' },
             @{ Label='Sophos Firewall - Create or edit device profile'; Key='sophos-profile'; Type='action' },
             @{ Label='NetScaler / Citrix ADC - Check what would happen (safe preview, no changes)'; Key='netscaler-whatif'; Type='action' },
             @{ Label='NetScaler / Citrix ADC - Install certificate on appliance (asks for confirmation)'; Key='netscaler-deploy'; Type='action' },
