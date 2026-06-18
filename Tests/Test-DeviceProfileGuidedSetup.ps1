@@ -130,6 +130,18 @@ function Invoke-TestDeviceProfileGuidedSetup {
         }
     }
 
+    & $Assert 'OPNsense managed profile communication uses OPNsense API not TCP only' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'function Invoke-OPNsenseDeviceProfileApiTest',
+            "'opnsense' { return Invoke-OPNsenseDeviceProfileApiTest",
+            'Test-OPNsenseApiConnection -HostName $hostName -Port $port',
+            'Get-OPNsenseCertificateServiceInventory -HostName $hostName -Port $port'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing OPNsense API communication test wiring: $text" }
+        }
+    }
+
     & $Assert 'Device manager exposes view add change and delete actions' {
         $runner = Get-Content -LiteralPath $runnerPath -Raw
         foreach ($text in @(
