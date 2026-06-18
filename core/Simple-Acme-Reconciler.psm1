@@ -1733,10 +1733,16 @@ function Invoke-SimpleAcmeReconcile {
     if ($compare.Matches) {
         $certificateHealth = Test-RenewalCertificateHealth -RenewalSummary $current -EnvValues $EnvValues
         $renewalId = Get-RenewalIdForCancel -RenewalSummary $current
+        $forceInstallRepair = ([string]$certificateHealth.Status -eq 'InstallationFailed')
         if (-not $SkipWacs) {
-            Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId | Out-Null
+            Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId -Force:$forceInstallRepair | Out-Null
         }
-        Write-ReconcileLog -Action 'renew' -Domains $domains -Result 'success' -Message ("Renewal configuration already matches .env. simple-acme ARI renewal check completed. Local certificate state: {0}. {1}" -f $certificateHealth.Status, $certificateHealth.Message)
+        $renewMessage = if ($forceInstallRepair) {
+            "Renewal configuration already matches .env. Previous installation failed, so simple-acme renewal was forced to rerun the installation hook. Local certificate state: $($certificateHealth.Status). $($certificateHealth.Message)"
+        } else {
+            "Renewal configuration already matches .env. simple-acme ARI renewal check completed. Local certificate state: $($certificateHealth.Status). $($certificateHealth.Message)"
+        }
+        Write-ReconcileLog -Action 'renew' -Domains $domains -Result 'success' -Message $renewMessage
         return 'renew'
     }
 

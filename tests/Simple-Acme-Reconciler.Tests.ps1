@@ -816,8 +816,10 @@ No version here
             'function Test-RenewalCertificateHealth',
             'ACME Renewal Information (ARI, RFC 9773)',
             'Renewal timing belongs to simple-acme',
-            'Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId | Out-Null',
+            '$forceInstallRepair = ([string]$certificateHealth.Status -eq ''InstallationFailed'')',
+            'Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId -Force:$forceInstallRepair | Out-Null',
             'simple-acme ARI renewal check completed',
+            'Previous installation failed, so simple-acme renewal was forced to rerun the installation hook',
             "Status = 'Revoked'",
             "Status = 'Missing'",
             "Status = 'InstallationFailed'",
@@ -835,10 +837,12 @@ No version here
             'ShouldRunWacsRenewal',
             'ForceWacsRenewal',
             'ShouldReissue',
-            'Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId -Force',
             'Renewal configuration already matches .env. Certificate health'
         )) {
             if ($raw.Contains($forbidden)) { throw "Wrapper must not override simple-acme ARI with local renewal decision: $forbidden" }
+        }
+        if (-not $raw.Contains("-Force:`$forceInstallRepair")) {
+            throw 'Forced simple-acme renewal must be tied only to previous installation failure repair.'
         }
     }
 }

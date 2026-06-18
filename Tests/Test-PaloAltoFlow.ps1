@@ -108,7 +108,10 @@ function Invoke-TestPaloAltoFlow {
             'decision = ''skip-upload''',
             'Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey',
             '$profileCert = [string]$profileResp.response.result.entry.certificate',
-            '$certNode.PSObject.Properties[$propertyName]'
+            '$certNode.PSObject.Properties[$propertyName]',
+            'function Test-PaloAltoCertificateExists',
+            "Validation failed: certificate '`$CertName' was not found in the PAN-OS certificate store.",
+            'Test-PaloAltoCertificateExists -Firewall $Firewall -Port $Port -ApiKey $ApiKey -CertName $CertName'
         )) {
             if (-not $deploy.Contains($text)) { throw "Missing Palo Alto binding/idempotency behavior: $text" }
         }
