@@ -589,6 +589,163 @@ function Invoke-OPNsenseDeviceProfileApiTest {
     }
 }
 
+function Invoke-PaloAltoDeviceProfileWebRequest {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [hashtable]$Headers = @{},
+        [switch]$SkipCertificateCheck,
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 20
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $supportsSkipCertificateCheck = (Get-Command -Name Invoke-WebRequest).Parameters.ContainsKey('SkipCertificateCheck')
+    $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ($SkipCertificateCheck -and -not $supportsSkipCertificateCheck) {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+    }
+
+    try {
+        $parameters = @{
+            Uri = $Uri
+            Method = 'Get'
+            TimeoutSec = $TimeoutSeconds
+            UseBasicParsing = $true
+        }
+        if ($Headers.Count -gt 0) { $parameters['Headers'] = $Headers }
+        if ($SkipCertificateCheck -and $supportsSkipCertificateCheck) { $parameters['SkipCertificateCheck'] = $true }
+        return Invoke-WebRequest @parameters
+    } finally {
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+    }
+}
+
+function Invoke-PaloAltoDeviceProfileApiTest {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $null = $ProjectRoot
+    $hostName = if ($Values.ContainsKey('host')) { [string]$Values['host'] } else { '' }
+    $port = 443
+    if ($Values.ContainsKey('port') -and -not [string]::IsNullOrWhiteSpace([string]$Values['port'])) { [void][int]::TryParse([string]$Values['port'], [ref]$port) }
+    $apiKey = if ($Values.ContainsKey('api_key')) { [string]$Values['api_key'] } else { '' }
+    $username = if ($Values.ContainsKey('username')) { [string]$Values['username'] } else { '' }
+    $password = if ($Values.ContainsKey('password')) { [string]$Values['password'] } else { '' }
+    $vsys = if ($Values.ContainsKey('vsys') -and -not [string]::IsNullOrWhiteSpace([string]$Values['vsys'])) { [string]$Values['vsys'] } else { 'vsys1' }
+    $restLocation = if ($Values.ContainsKey('rest_location') -and -not [string]::IsNullOrWhiteSpace([string]$Values['rest_location'])) { [string]$Values['rest_location'] } else { 'vsys' }
+    $skipCertificateCheck = ConvertTo-DeviceProfileBoolean -Value $(if ($Values.ContainsKey('skip_certificate_check')) { $Values['skip_certificate_check'] } else { $true }) -Default $true
+    $base = if ($port -eq 443) { "https://$hostName" } else { "https://${hostName}:$port" }
+    $started = Get-Date
+
+    $tcp = Invoke-DeviceProfileTcpTest -Values $Values -Label $Label
+    if ([string]$tcp.Status -ne 'Success') {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = "TCP connection failed before Palo Alto API authentication: $($tcp.Message)"
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            Tcp = $tcp
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    }
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) {
+                throw 'Palo Alto API key is missing, and username/password were not supplied for XML keygen.'
+            }
+            $keyUri = "{0}/api/?type=keygen&user={1}&password={2}" -f $base, [Uri]::EscapeDataString($username), [Uri]::EscapeDataString($password)
+            $keyResponse = Invoke-PaloAltoDeviceProfileWebRequest -Uri $keyUri -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 20
+            [xml]$keyXml = [string]$keyResponse.Content
+            if ([string]$keyXml.response.status -ne 'success' -or [string]::IsNullOrWhiteSpace([string]$keyXml.response.result.key)) {
+                throw "Palo Alto XML keygen failed: $($keyXml.response.msg.InnerText)"
+            }
+            $apiKey = [string]$keyXml.response.result.key
+        }
+
+        $systemCmd = '<show><system><info></info></system></show>'
+        $systemUri = "{0}/api/?type=op&cmd={1}&key={2}" -f $base, [Uri]::EscapeDataString($systemCmd), [Uri]::EscapeDataString($apiKey)
+        $systemResponse = Invoke-PaloAltoDeviceProfileWebRequest -Uri $systemUri -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 30
+        [xml]$systemXml = [string]$systemResponse.Content
+        if ([string]$systemXml.response.status -ne 'success') {
+            throw "Palo Alto XML system info failed: $($systemXml.response.msg.InnerText)"
+        }
+        $system = $systemXml.response.result.system
+
+        $apiKeyCertificateXPath = "/config/devices/entry[@name='localhost.localdomain']/deviceconfig/setting/management/api/key/certificate"
+        $apiKeyCertificateStatus = 'NotConfigured'
+        $apiKeyCertificateName = ''
+        $apiKeyCertificateMessage = ''
+        try {
+            $apiKeyCertificateUri = "{0}/api/?type=config&action=show&xpath={1}&key={2}" -f $base, [Uri]::EscapeDataString($apiKeyCertificateXPath), [Uri]::EscapeDataString($apiKey)
+            $apiKeyCertificateResponse = Invoke-PaloAltoDeviceProfileWebRequest -Uri $apiKeyCertificateUri -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 20
+            [xml]$apiKeyCertificateXml = [string]$apiKeyCertificateResponse.Content
+            if ([string]$apiKeyCertificateXml.response.status -eq 'success') {
+                $apiKeyCertificateName = ([string]$apiKeyCertificateXml.response.result.InnerText).Trim()
+                if ([string]::IsNullOrWhiteSpace($apiKeyCertificateName)) {
+                    $apiKeyCertificateStatus = 'Configured'
+                } else {
+                    $apiKeyCertificateStatus = 'Configured'
+                    $apiKeyCertificateMessage = "API key certificate '$apiKeyCertificateName' is configured."
+                }
+            } elseif ($apiKeyCertificateXml.response.msg.InnerText -match 'No such node') {
+                $apiKeyCertificateMessage = 'API key certificate is not configured; PAN-OS may warn that KeyGen uses the deprecated algorithm.'
+            } else {
+                $apiKeyCertificateStatus = 'Unknown'
+                $apiKeyCertificateMessage = $apiKeyCertificateXml.response.msg.InnerText
+            }
+        } catch {
+            $apiKeyCertificateStatus = 'Unknown'
+            $apiKeyCertificateMessage = $_.Exception.Message
+        }
+
+        $restQuery = if ($restLocation -eq 'vsys') { "location=vsys&vsys=$([Uri]::EscapeDataString($vsys))" } else { 'location=shared' }
+        $restUri = "{0}/restapi/v12.1/Objects/Addresses?{1}" -f $base, $restQuery
+        $restStatus = 'Skipped'
+        $restMessage = ''
+        try {
+            $restResponse = Invoke-PaloAltoDeviceProfileWebRequest -Uri $restUri -Headers @{ 'X-PAN-KEY' = $apiKey; 'Accept' = 'application/json' } -SkipCertificateCheck:$skipCertificateCheck -TimeoutSeconds 20
+            $restBody = [string]$restResponse.Content | ConvertFrom-Json
+            $restStatus = if ([string]$restBody.'@status' -eq 'success') { 'Succeeded' } else { 'Failed' }
+            $restMessage = "REST address inventory returned status $($restBody.'@status')."
+        } catch {
+            $restStatus = 'Failed'
+            $restMessage = $_.Exception.Message
+        }
+
+        return [pscustomobject]@{
+            Status = 'Succeeded'
+            Message = "Palo Alto XML API connected to $($system.hostname) on PAN-OS $($system.'sw-version'). REST inventory: $restStatus."
+            Endpoint = "$base/api/"
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            Hostname = [string]$system.hostname
+            Model = [string]$system.model
+            SwVersion = [string]$system.'sw-version'
+            Serial = [string]$system.serial
+            Vsys = $vsys
+            ApiKeyCertificate = [pscustomobject]@{ Status = $apiKeyCertificateStatus; Name = $apiKeyCertificateName; Message = $apiKeyCertificateMessage; XPath = $apiKeyCertificateXPath }
+            RestInventory = [pscustomobject]@{ Status = $restStatus; Endpoint = $restUri; Message = $restMessage }
+            Tcp = $tcp
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    } catch {
+        return [pscustomobject]@{
+            Status = 'Failed'
+            Message = $_.Exception.Message
+            Host = $hostName
+            Port = $port
+            Label = $Label
+            Tcp = $tcp
+            ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
+        }
+    }
+}
+
 function Invoke-DeviceProfileCommunicationTest {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -601,6 +758,7 @@ function Invoke-DeviceProfileCommunicationTest {
         'clavister' { return Invoke-ClavisterDeviceProfileSshTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         'kemp' { return Invoke-KempDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         'opnsense' { return Invoke-OPNsenseDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
+        'paloalto' { return Invoke-PaloAltoDeviceProfileApiTest -ProjectRoot $ProjectRoot -Values $Values -Label $Label }
         default { return Invoke-DeviceProfileTcpTest -Values $Values -Label $Label }
     }
 }

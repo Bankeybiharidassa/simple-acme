@@ -182,8 +182,19 @@ $DeviceSchemas = @{
     )}
 
 
-    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; Fields=@(
-        @{ Name='host'; Label='Host'; Type='string'; Required=$true; Placeholder='pa.example.com'; HelpText='Palo Alto management endpoint' }
+    paloalto = @{ ConnectorType='paloalto'; Label='Palo Alto firewall'; Category='network_appliance'; SetupMode='guided'; Fields=@(
+        @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.155'; HelpText='Palo Alto management IP address or DNS name.' },
+        @{ Name='port'; Label='Management/API port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS management, XML API, and REST API port. Default is 443.' },
+        @{ Name='api_key'; Label='XML/REST API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='PAN-OS API key used for unattended XML and REST API calls. Preferred for scheduled renewals.' },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='admin'; Placeholder='admin'; HelpText='Optional PAN-OS admin username used only to generate/test an API key during setup.' },
+        @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional PAN-OS admin password used only to generate/test an API key during setup.' },
+        @{ Name='skip_certificate_check'; Label='Ignore Palo Alto TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed management certificates.' },
+        @{ Name='vsys'; Label='Virtual system'; Type='string'; Required=$true; Default='vsys1'; Placeholder='vsys1'; HelpText='PAN-OS virtual system used for REST inventory and policy/global-protect bindings.' },
+        @{ Name='certificate_name'; Label='Name in PAN-OS certificate store'; Type='string'; Required=$false; Placeholder='wildcard_example_com'; HelpText='Certificate object name created or updated by deploy-paloalto.ps1.' },
+        @{ Name='binding_type'; Label='Certificate binding type'; Type='choice'; Required=$true; Choices=@('management','globalprotect','waf','ssl-decrypt'); Default='management'; Placeholder='management'; HelpText='Deployment target surface for the certificate.' },
+        @{ Name='binding_target'; Label='Binding target'; Type='string'; Required=$false; Placeholder='portal:gp-portal or gateway:gp-gateway'; HelpText='For GlobalProtect use portal:<name> or gateway:<name>. For management use deviceconfig/system.' },
+        @{ Name='rest_location'; Label='REST inventory location'; Type='choice'; Required=$true; Choices=@('vsys','shared'); Default='vsys'; Placeholder='vsys'; HelpText='REST API inventory location. Lab PA-VM returned object/policy inventory with location=vsys and vsys=vsys1.' },
+        @{ Name='bind_target_names'; Label='Selected Palo Alto targets'; Type='string'; Required=$false; Placeholder='Management UI, GlobalProtect portal'; HelpText='Human-readable summary of selected Palo Alto deployment targets.' }
     )}
     sophos = @{ ConnectorType='sophos'; Label='Sophos firewall'; Category='network_appliance'; SetupMode='guided'; ConnectionMethods=@(@{ Key='api_basic'; Label='Sophos WebAdmin API username and password'; DefaultPort='4444' }); Fields=@(
         @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.138'; HelpText='IP address or DNS name of the Sophos firewall admin/API page.' },
