@@ -69,6 +69,23 @@ function Invoke-TestSimpleAcmeReconciler {
         }
     }
 
+    & $Assert 'renewal ACME directory matching separates test and production endpoints' {
+        $envValues = @{ ACME_DIRECTORY = 'https://acme.networking4all.com/dv' }
+        $testSummary = [pscustomobject]@{ BaseUri = 'https://test-acme.networking4all.com/dv' }
+        $prodSummary = [pscustomobject]@{ BaseUri = 'https://acme.networking4all.com/dv' }
+        $legacySummary = [pscustomobject]@{ BaseUri = '' }
+
+        if (Test-RenewalAcmeDirectoryMatch -RenewalSummary $testSummary -EnvValues $envValues) {
+            throw 'Test ACME renewal should not match production ACME setup.'
+        }
+        if (-not (Test-RenewalAcmeDirectoryMatch -RenewalSummary $prodSummary -EnvValues $envValues)) {
+            throw 'Production ACME renewal should match production ACME setup.'
+        }
+        if (-not (Test-RenewalAcmeDirectoryMatch -RenewalSummary $legacySummary -EnvValues $envValues)) {
+            throw 'Renewals without BaseUri should remain compatible.'
+        }
+    }
+
     & $Assert 'installation plugins are parsed and normalized' {
         $plugins = Get-InstallationPlugins -EnvValues @{ ACME_INSTALLATION_PLUGINS = 'script, iis,script' }
         if (($plugins -join ',') -ne 'iis,script') {
