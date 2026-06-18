@@ -226,7 +226,7 @@ function Show-TuiForm {
 
     $values = @{}
     foreach ($f in $Fields) {
-        $defaultValue = if ($CurrentValues.ContainsKey($f.Name)) { $CurrentValues[$f.Name] } elseif ($f.ContainsKey('Placeholder')) { $f.Placeholder } else { '' }
+        $defaultValue = if ($CurrentValues.ContainsKey($f.Name)) { $CurrentValues[$f.Name] } elseif ($f.ContainsKey('Default')) { $f.Default } else { '' }
         $values[$f.Name] = [string]$defaultValue
     }
 

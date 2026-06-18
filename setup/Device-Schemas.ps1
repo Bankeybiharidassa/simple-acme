@@ -186,7 +186,7 @@ $DeviceSchemas = @{
         @{ Name='host'; Label='Firewall address'; Type='string'; Required=$true; Placeholder='192.168.45.155'; HelpText='Palo Alto management IP address or DNS name.' },
         @{ Name='port'; Label='Management/API port'; Type='string'; Required=$true; Default='443'; Placeholder='443'; HelpText='HTTPS management, XML API, and REST API port. Default is 443.' },
         @{ Name='api_key'; Label='XML/REST API key'; Type='secret'; Required=$false; Placeholder=''; HelpText='PAN-OS API key used for unattended XML and REST API calls. Preferred for scheduled renewals.' },
-        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Default='admin'; Placeholder='admin'; HelpText='Optional PAN-OS admin username used only to generate/test an API key during setup.' },
+        @{ Name='username'; Label='Admin username'; Type='string'; Required=$false; Placeholder='agentic or admin'; HelpText='Optional PAN-OS admin username used only to generate/test an API key during setup.' },
         @{ Name='password'; Label='Admin password'; Type='secret'; Required=$false; Placeholder=''; HelpText='Optional PAN-OS admin password used only to generate/test an API key during setup.' },
         @{ Name='skip_certificate_check'; Label='Ignore Palo Alto TLS warning'; Type='choice'; Required=$true; Choices=@('false','true'); Default='true'; Placeholder='true'; HelpText='Set true for lab/self-signed management certificates.' },
         @{ Name='vsys'; Label='Virtual system'; Type='string'; Required=$true; Default='vsys1'; Placeholder='vsys1'; HelpText='PAN-OS virtual system used for REST inventory and policy/global-protect bindings.' },

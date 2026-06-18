@@ -66,6 +66,13 @@ Describe 'Setup TUI and policy reliability' {
         $raw | Should -Not -Match '\[Console\]::Write\(\("`r\{0\}"'
     }
 
+    It 'Show-TuiForm keeps placeholders display-only instead of editable values' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        $raw.Contains("elseif (`$f.ContainsKey('Default'))") | Should -BeTrue
+        $raw | Should -Not -Match "elseif \(\`$f\.ContainsKey\('Placeholder'\)\) \{ \`$f\.Placeholder \}"
+    }
+
     It 'Policy editor warns and stays in loop when no policy exists for edit/delete' {
         $cfg = 'TestDrive:\cfg-no-policy'
         New-Item -ItemType Directory -Path $cfg -Force | Out-Null

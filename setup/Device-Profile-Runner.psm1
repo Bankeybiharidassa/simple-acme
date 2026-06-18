@@ -578,9 +578,13 @@ function Invoke-OPNsenseDeviceProfileApiTest {
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
         }
     } catch {
+        $errorMessage = $_.Exception.Message
+        if ($_.Exception.InnerException -and -not [string]::IsNullOrWhiteSpace([string]$_.Exception.InnerException.Message)) {
+            $errorMessage = "{0} Inner: {1}" -f $errorMessage, $_.Exception.InnerException.Message
+        }
         return [pscustomobject]@{
             Status = 'Failed'
-            Message = $_.Exception.Message
+            Message = $errorMessage
             Host = $hostName
             Port = $port
             Label = $Label
@@ -734,9 +738,13 @@ function Invoke-PaloAltoDeviceProfileApiTest {
             ElapsedMilliseconds = [int]((Get-Date) - $started).TotalMilliseconds
         }
     } catch {
+        $errorMessage = $_.Exception.Message
+        if ($_.Exception.InnerException -and -not [string]::IsNullOrWhiteSpace([string]$_.Exception.InnerException.Message)) {
+            $errorMessage = "{0} Inner: {1}" -f $errorMessage, $_.Exception.InnerException.Message
+        }
         return [pscustomobject]@{
             Status = 'Failed'
-            Message = $_.Exception.Message
+            Message = $errorMessage
             Host = $hostName
             Port = $port
             Label = $Label
