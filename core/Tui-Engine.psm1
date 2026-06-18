@@ -189,6 +189,18 @@ function Read-TuiLineInput {
     )
 
     $buffer = if ($null -eq $InitialValue) { '' } else { [string]$InitialValue }
+    $startX = [Console]::CursorLeft
+    $startY = [Console]::CursorTop
+    $fieldWidth = [Math]::Max(1, [Math]::Min([Math]::Max(1, [Console]::WindowWidth - $startX - 1), $MaxLength))
+    $renderInput = {
+        $display = if ($MaskInput) { ''.PadLeft($buffer.Length, '*') } else { $buffer }
+        $visible = if ($display.Length -gt $fieldWidth) { $display.Substring($display.Length - $fieldWidth) } else { $display }
+        [Console]::SetCursorPosition($startX, $startY)
+        [Console]::Write($visible.PadRight($fieldWidth))
+        [Console]::SetCursorPosition(($startX + [Math]::Min($visible.Length, $fieldWidth)), $startY)
+    }
+    & $renderInput
+
     while ($true) {
         $key = Read-TuiKey
         switch ($key.Key) {
@@ -205,9 +217,7 @@ function Read-TuiLineInput {
                 }
             }
         }
-        $display = if ($MaskInput) { ''.PadLeft($buffer.Length, '*') } else { $buffer }
-        $padWidth = [Math]::Max(1, [Math]::Min([Math]::Max(1, [Console]::WindowWidth - [Console]::CursorLeft - 1), $MaxLength))
-        [Console]::Write(("`r{0}" -f $display.PadRight($padWidth)))
+        & $renderInput
     }
 }
 

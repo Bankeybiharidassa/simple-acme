@@ -50,6 +50,22 @@ Describe 'Setup TUI and policy reliability' {
         }
     }
 
+    It 'Read-TuiLineInput paints the initial value in-place before key input' {
+        $modulePath = Join-Path $PSScriptRoot '../core/Tui-Engine.psm1'
+        $raw = Get-Content -LiteralPath $modulePath -Raw
+        foreach ($text in @(
+            '$startX = [Console]::CursorLeft',
+            '$startY = [Console]::CursorTop',
+            '$renderInput = {',
+            '& $renderInput',
+            '[Console]::SetCursorPosition($startX, $startY)',
+            '$visible.PadRight($fieldWidth)'
+        )) {
+            $raw.Contains($text) | Should -BeTrue
+        }
+        $raw | Should -Not -Match '\[Console\]::Write\(\("`r\{0\}"'
+    }
+
     It 'Policy editor warns and stays in loop when no policy exists for edit/delete' {
         $cfg = 'TestDrive:\cfg-no-policy'
         New-Item -ItemType Directory -Path $cfg -Force | Out-Null
