@@ -80,6 +80,10 @@ function Invoke-TestPaloAltoFlow {
             'Invoke-PaloAltoApiWithCertificatePolicy',
             'Invoke-PaloAltoRestMethod',
             "Parameters.ContainsKey('SkipCertificateCheck')",
+            'SimpleAcmePaloAltoCertificatePolicy',
+            'TrustAnyCertificate',
+            'RemoteCertificateValidationCallback',
+            'Unable to load SimpleAcmePaloAltoCertificatePolicy',
             '[ValidateLength(0, 31)]',
             '$KeyPassphrase',
             'passphrase = $KeyPassphrase',
@@ -87,6 +91,22 @@ function Invoke-TestPaloAltoFlow {
             'Get-ExistingCertificateFingerprint -Firewall $Firewall -Port $Port'
         )) {
             if (-not $deploy.Contains($text)) { throw "Missing Palo Alto deploy transport behavior: $text" }
+        }
+        if ($deploy -match 'ServerCertificateValidationCallback\s*=\s*\{') {
+            throw 'Palo Alto deploy transport must use a compiled certificate callback, not a PowerShell scriptblock.'
+        }
+
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            'SimpleAcmePaloAltoCertificatePolicy',
+            'TrustAnyCertificate',
+            'RemoteCertificateValidationCallback',
+            'Unable to load SimpleAcmePaloAltoCertificatePolicy'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Palo Alto profile TLS callback behavior: $text" }
+        }
+        if ($runner -match 'ServerCertificateValidationCallback\s*=\s*\{\s*param') {
+            throw 'Palo Alto profile test must use a compiled certificate callback, not a PowerShell scriptblock.'
         }
     }
 }

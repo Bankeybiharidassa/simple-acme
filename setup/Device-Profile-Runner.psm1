@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$script:PaloAltoCertificatePolicyTypeLoaded = $false
+
 Import-Module "$PSScriptRoot/../core/Tui-Engine.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Config-Store.psm1" -Force -Global
 
@@ -605,7 +607,30 @@ function Invoke-PaloAltoDeviceProfileWebRequest {
     $supportsSkipCertificateCheck = (Get-Command -Name Invoke-WebRequest).Parameters.ContainsKey('SkipCertificateCheck')
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck -and -not $supportsSkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+        if (-not $script:PaloAltoCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmePaloAltoCertificatePolicy' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmePaloAltoCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        }
+        $script:PaloAltoCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmePaloAltoCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmePaloAltoCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback =
+            [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
 
     try {

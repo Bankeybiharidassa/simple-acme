@@ -60,6 +60,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:RetryCount = 3
+$script:PaloAltoCertificatePolicyTypeLoaded = $false
 $script:LogDir = if ($IsWindows) { 'C:\ProgramData\acme-connector\logs' } else { Join-Path $PSScriptRoot 'logs' }
 $script:LogFile = Join-Path $script:LogDir ("deploy-paloalto-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
 
@@ -189,7 +190,30 @@ function Invoke-PaloAltoApiWithCertificatePolicy {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $previous = [Net.ServicePointManager]::ServerCertificateValidationCallback
     if ($SkipCertificateCheck) {
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { param($sender,$certificate,$chain,$sslPolicyErrors) return $true }
+        if (-not $script:PaloAltoCertificatePolicyTypeLoaded -and $null -eq ('SimpleAcmePaloAltoCertificatePolicy' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class SimpleAcmePaloAltoCertificatePolicy
+{
+    public static bool TrustAnyCertificate(
+        object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        return true;
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        }
+        $script:PaloAltoCertificatePolicyTypeLoaded = $true
+        $policyType = 'SimpleAcmePaloAltoCertificatePolicy' -as [type]
+        if ($null -eq $policyType) { throw 'Unable to load SimpleAcmePaloAltoCertificatePolicy for TLS certificate bypass.' }
+        $method = $policyType.GetMethod('TrustAnyCertificate')
+        [Net.ServicePointManager]::ServerCertificateValidationCallback =
+            [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $method)
     }
 
     try {
