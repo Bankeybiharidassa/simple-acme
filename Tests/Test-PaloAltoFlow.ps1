@@ -107,7 +107,11 @@ function Invoke-TestPaloAltoFlow {
             '$bindingSetXPath = $bindingXPath -replace ''/ssl-tls-service-profile$'', ''''',
             'decision = ''skip-upload''',
             'Upload-Certificate -Firewall $Firewall -Port $Port -ApiKey $resolvedApiKey',
-            '$profileCert = [string]$profileResp.response.result.entry.certificate'
+            '$profileCert = [string]$profileResp.response.result.entry.certificate',
+            '$certNode.PSObject.Properties[$propertyName]',
+            'function Test-PaloAltoCertificateExists',
+            "Validation failed: certificate '`$CertName' was not found in the PAN-OS certificate store.",
+            'Test-PaloAltoCertificateExists -Firewall $Firewall -Port $Port -ApiKey $ApiKey -CertName $CertName'
         )) {
             if (-not $deploy.Contains($text)) { throw "Missing Palo Alto binding/idempotency behavior: $text" }
         }
@@ -116,6 +120,9 @@ function Invoke-TestPaloAltoFlow {
         }
         if ($deploy.Contains('decision = ''no-op''; reason = ''fingerprint-match''')) {
             throw 'Palo Alto deploy must not exit before binding when certificate fingerprint already matches.'
+        }
+        if ($deploy.Contains("if (`$certNode.'fingerprint')")) {
+            throw 'Palo Alto deploy must not use strict-mode fragile direct fingerprint property access.'
         }
         if ($deploy -match 'ServerCertificateValidationCallback\s*=\s*\{') {
             throw 'Palo Alto deploy transport must use a compiled certificate callback, not a PowerShell scriptblock.'
@@ -167,6 +174,22 @@ function Invoke-TestPaloAltoFlow {
             'BindingTarget'
         )) {
             if (-not $hook.Contains($text)) { throw "Missing Palo Alto hook behavior: $text" }
+        }
+    }
+
+    & $Assert 'Palo Alto first-run setup pins renewal hook to the selected device profile' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        $form = Get-Content -LiteralPath (Join-Path $root 'setup\Form-Runner.psm1') -Raw
+        foreach ($text in @(
+            'function Invoke-PaloAltoCertificateRequestSetup',
+            "Invoke-DeviceProfileConnectorWizard -ProjectRoot `$ProjectRoot -ConnectorType 'paloalto'",
+            "ACME_TARGET_DEVICE_ID",
+            '-DeviceId $(ConvertTo-DeviceProfileSingleQuotedArgument -Value $deviceId)'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Palo Alto device-specific setup behavior: $text" }
+        }
+        if (-not $form.Contains('Invoke-PaloAltoCertificateRequestSetup')) {
+            throw 'First-run setup does not route Palo Alto issuance through the device-specific setup function.'
         }
     }
 

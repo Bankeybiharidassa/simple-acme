@@ -80,6 +80,17 @@ function Invoke-TestKempLoadMasterFlow {
         }
     }
 
+    & $Assert 'Kemp first-run setup pins renewal hook to the selected device profile' {
+        $runner = Get-Content -LiteralPath $runnerPath -Raw
+        foreach ($text in @(
+            "Invoke-DeviceProfileConnectorWizard -ProjectRoot `$ProjectRoot -ConnectorType 'kemp'",
+            "ACME_TARGET_DEVICE_ID",
+            '-DeviceId $(ConvertTo-KempSingleQuotedArgument -Value $deviceId)'
+        )) {
+            if (-not $runner.Contains($text)) { throw "Missing Kemp device-specific setup behavior: $text" }
+        }
+    }
+
     & $Assert 'Kemp hook supports APIv2 and classic REST deployment code, not placeholders' {
         foreach ($path in @($hookPath,$modulePath,$manifestPath)) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing Kemp runtime file: $path" }

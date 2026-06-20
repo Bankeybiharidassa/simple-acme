@@ -16,4 +16,12 @@ function Invoke-TestNoPlaceholdersInRuntimeMenus {
             }
         }
     }
+
+    & $Assert 'top-level menu exposes latest log viewer' {
+        $menu = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\setup\Menu-Tree.ps1') -Raw
+        $setup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\certificate-setup.ps1') -Raw
+        if (-not $menu.Contains("Label='View latest log'; Key='view-latest-log'")) { throw 'Top-level View latest log menu item is missing.' }
+        if (-not $setup.Contains("'view-latest-log'")) { throw 'View latest log action is not routed in certificate-setup.ps1.' }
+        if (-not $setup.Contains('Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot')) { throw 'View latest log action must open the log diagnostics viewer.' }
+    }
 }

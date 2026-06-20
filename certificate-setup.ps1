@@ -632,6 +632,7 @@ while ($menuStack.Count -gt 0) {
             }
         }
         'manage-certs'   { Invoke-ManageCertificatesMenu -ConfigDir $configDir }
+        'view-latest-log' { Write-SetupDebugLog -Message "Executing action: view-latest-log"; Invoke-ViewLogsDiagnostics -ProjectRoot $PSScriptRoot }
         'acme'           {
             Write-SetupDebugLog -Message "Executing action: acme"
             if (-not (Ensure-SetupEnvFileReadable -EnvFilePath $envPath)) {

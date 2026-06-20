@@ -342,9 +342,11 @@ No version here
                 ACME_DIRECTORY = 'https://test-acme.networking4all.com/dv'
                 DOMAINS = 'remote4.itsecured.nl'
                 ACME_SCRIPT_PATH = $scriptPath
-                ACME_SCRIPT_PARAMETERS = '{CertThumbprint}'
+                ACME_SCRIPT_PARAMETERS = '{CacheFile}'
                 ACME_WACS_PATH = $wacsPath
                 ACME_WACS_VERSION = 'Software version 2.3.0.0 (release)'
+                ACME_STORE_PLUGIN = 'pfxfile'
+                ACME_PFX_FILE_PATH = $root
             }
             $null = Test-ReconcilePreflight -EnvValues $envValues
         } finally {
@@ -679,6 +681,34 @@ No version here
         if (-not $threw) { throw 'Expected missing ACME_PFX_PASSWORD to throw for RDS farm PFX distribution.' }
     }
 
+    & $Assert 'Preflight blocks certificate store reconcile before cancellation when PowerShell is not elevated' {
+        $raw = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\core\Simple-Acme-Reconciler.psm1') -Raw
+        foreach ($text in @(
+            'function Test-IsAdministrator',
+            'function Get-EffectiveWacsStorePlugins',
+            "`$effectiveStorePlugins = @(Get-EffectiveWacsStorePlugins -EnvValues `$EnvValues)",
+            "`$effectiveStorePlugins -contains 'certificatestore'",
+            'current Windows PowerShell is not elevated',
+            'Run Windows PowerShell as Administrator before reconcile/renewal',
+            "Invoke-WacsWithRetry -Args @('--baseuri'"
+        )) {
+            if (-not $raw.Contains($text)) { throw "Missing preflight certificate-store elevation behavior: $text" }
+        }
+        if ($raw.IndexOf('current Windows PowerShell is not elevated') -gt $raw.IndexOf("Invoke-WacsWithRetry -Args @('--baseuri'")) {
+            throw 'Certificate-store elevation guard must appear before WACS cancel/update execution.'
+        }
+    }
+
+    & $Assert 'Effective WACS store plugins auto-add certificate store for thumbprint scripts' {
+        $plugins = @(Get-EffectiveWacsStorePlugins -EnvValues @{
+            ACME_STORE_PLUGIN = 'pfxfile'
+            ACME_INSTALLATION_PLUGINS = 'script'
+            ACME_SCRIPT_PARAMETERS = "-PfxPath '{CacheFile}' -CertThumbprint '{CertThumbprint}'"
+        })
+        if (-not ($plugins -contains 'pfxfile')) { throw "Expected pfxfile store plugin, got: $($plugins -join ',')" }
+        if (-not ($plugins -contains 'certificatestore')) { throw "Expected certificatestore auto-add, got: $($plugins -join ',')" }
+    }
+
     & $Assert 'Invoke-WacsIssue throws when ACME_PFX_FILE_PATH is a file path with extension' {
         $threw = $false
         try {
@@ -771,5 +801,48 @@ No version here
         }
         $result = Compare-RenewalWithEnv -RenewalSummary $summary -EnvValues $envValues
         if (-not $result.Matches) { throw "Expected match but got mismatches: $($result.Mismatches -join ', ')" }
+    }
+
+    & $Assert 'Certificate health check matches exact and single-label wildcard domains' {
+        if (-not (Test-CertificateDomainPatternMatch -Pattern 'example.com' -Domain 'example.com')) { throw 'Exact certificate/domain match failed.' }
+        if (-not (Test-CertificateDomainPatternMatch -Pattern '*.example.com' -Domain 'www.example.com')) { throw 'Wildcard certificate/domain match failed.' }
+        if (Test-CertificateDomainPatternMatch -Pattern '*.example.com' -Domain 'deep.www.example.com') { throw 'Wildcard matched more than one label.' }
+        if (Test-CertificateDomainPatternMatch -Pattern '*.example.com' -Domain 'example.com') { throw 'Wildcard matched the apex domain.' }
+    }
+
+    & $Assert 'Reconcile matching renewal delegates lifecycle timing to simple-acme ARI' {
+        $raw = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\core\Simple-Acme-Reconciler.psm1') -Raw
+        foreach ($text in @(
+            'function Test-RenewalCertificateHealth',
+            'ACME Renewal Information (ARI, RFC 9773)',
+            'Renewal timing belongs to simple-acme',
+            '$forceInstallRepair = ([string]$certificateHealth.Status -eq ''InstallationFailed'')',
+            'Invoke-WacsRenewalCheck -EnvValues $EnvValues -RenewalId $renewalId -Force:$forceInstallRepair | Out-Null',
+            'simple-acme ARI renewal check completed',
+            'Previous installation failed, so simple-acme renewal was forced to rerun the installation hook',
+            "Status = 'Revoked'",
+            "Status = 'Missing'",
+            "Status = 'InstallationFailed'",
+            'LatestThumbprint',
+            'LatestOrderErrorMessages',
+            'Renewal history recorded certificate/order error(s)',
+            "Renewal certificate '`$latestThumbprint' was not found",
+            'simple-acme ARI remains authoritative for renewal timing.'
+        )) {
+            if (-not $raw.Contains($text)) { throw "Missing ARI-aware certificate-health reconcile behavior: $text" }
+        }
+        foreach ($forbidden in @(
+            'ACME_CERTIFICATE_REISSUE_WITHIN_DAYS',
+            'ExpiringSoon',
+            'ShouldRunWacsRenewal',
+            'ForceWacsRenewal',
+            'ShouldReissue',
+            'Renewal configuration already matches .env. Certificate health'
+        )) {
+            if ($raw.Contains($forbidden)) { throw "Wrapper must not override simple-acme ARI with local renewal decision: $forbidden" }
+        }
+        if (-not $raw.Contains("-Force:`$forceInstallRepair")) {
+            throw 'Forced simple-acme renewal must be tied only to previous installation failure repair.'
+        }
     }
 }
