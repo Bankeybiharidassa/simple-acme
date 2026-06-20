@@ -421,13 +421,14 @@ function Save-SophosDeploymentSelection {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
-        [Parameter(Mandatory)][hashtable]$Values
+        [Parameter(Mandatory)][hashtable]$Values,
+        [string]$DeviceId = 'sophos-firewall'
     )
 
     $settings = @{}
     foreach ($key in $Values.Keys) { $settings[[string]$key] = [string]$Values[$key] }
     $device = @{
-        device_id = 'sophos-firewall'
+        device_id = $DeviceId
         connector_type = 'sophos'
         label = 'Sophos firewall'
         created_at = (Get-Date).ToUniversalTime().ToString('o')
@@ -435,6 +436,7 @@ function Save-SophosDeploymentSelection {
         settings = $settings
     }
     Save-DeviceConfig -Device $device -ConfigDir $ConfigDir -SecretFields @('password') | Out-Null
+    return [pscustomobject]@{ Status = 'Saved'; DeviceId = $DeviceId; ConfigDir = $ConfigDir }
 }
 
 function Invoke-SophosCertificateRequestSetup {
@@ -456,12 +458,14 @@ function Invoke-SophosCertificateRequestSetup {
     $Values['CERTIFICATE_CONFIG_DIR'] = $configDir
 
     $schema = $DeviceSchemas['sophos']
+    $deviceId = 'sophos-firewall'
     $profileValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'sophos' -CertificateRuntimeKeys @('pfx_path','pfx_password','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') -PlaintextSecretNameFields @{ password_secret_name = 'password' }) -Fields @($schema.Fields)
     if ($profileValues.Count -eq 0 -or -not $profileValues.ContainsKey('host') -or [string]::IsNullOrWhiteSpace([string]$profileValues['host'])) {
         Write-Host ''
         Write-Host 'No Sophos device profile exists yet. Create the firewall connection profile first.' -ForegroundColor Yellow
         $profileResult = Invoke-SophosProfileForm -ProjectRoot $ProjectRoot
         if ($null -eq $profileResult -or [string]$profileResult.Status -ne 'Saved') { return $null }
+        if ($profileResult.PSObject.Properties.Name -contains 'DeviceId' -and -not [string]::IsNullOrWhiteSpace([string]$profileResult.DeviceId)) { $deviceId = [string]$profileResult.DeviceId }
         $profileValues = Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'sophos' -CertificateRuntimeKeys @('pfx_path','pfx_password','cert_path','key_path','chain_path','enable_ssh_export_recovery','ssh_username','ssh_port','ssh_password_secret_name','ssh_private_key_path','ssh_host_key_fingerprint','export_recovery_path') -PlaintextSecretNameFields @{ password_secret_name = 'password' }) -Fields @($schema.Fields)
     }
 
@@ -473,14 +477,17 @@ function Invoke-SophosCertificateRequestSetup {
 
     $profileValues = Invoke-SophosCertificateTargetSelection -ProjectRoot $ProjectRoot -Values $profileValues
     if ($null -eq $profileValues) { return $null }
-    Save-SophosDeploymentSelection -ConfigDir $configDir -Values $profileValues
+    Save-SophosDeploymentSelection -ConfigDir $configDir -Values $profileValues -DeviceId $deviceId | Out-Null
     Write-Host 'The WACS scheduled renewal hook will reuse this saved Sophos target selection automatically.'
 
     $scriptPath = Join-Path $ProjectRoot 'Scripts/deploy-sophos.ps1'
     $Values['ACME_TARGET_SYSTEM'] = 'sophos'
     $Values['TARGET_SYSTEM'] = 'sophos'
+    $Values['ACME_TARGET_DEVICE_TYPE'] = 'sophos'
+    $Values['ACME_TARGET_DEVICE_LABEL'] = 'Sophos firewall'
+    $Values['ACME_TARGET_DEVICE_ID'] = $deviceId
     $Values['ACME_SCRIPT_PATH'] = $scriptPath
-    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -ConfigDir $(ConvertTo-SophosSingleQuotedArgument -Value $configDir)"
+    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -ConfigDir $(ConvertTo-SophosSingleQuotedArgument -Value $configDir) -DeviceId $(ConvertTo-SophosSingleQuotedArgument -Value $deviceId)"
     $Values
 }
 
@@ -850,7 +857,7 @@ function Invoke-SophosProfileForm {
     if ($null -eq $skipValue) { return [pscustomobject]@{ Status = 'Canceled' } }
     $values['skip_certificate_check'] = if ($skipValue) { 'true' } else { 'false' }
 
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'sophos' -Label 'Sophos firewall' -Values $values -SecretFields @('password') -DefaultDeviceId 'sophos-firewall'
+    $saveResult = Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'sophos' -Label 'Sophos firewall' -Values $values -SecretFields @('password') -DefaultDeviceId 'sophos-firewall'
 
     Show-DeviceProfileSummary -Title 'Saved Sophos connection profile' -Values $values -Fields (Get-SophosGuidedProfileFields)
 
@@ -891,7 +898,7 @@ function Invoke-SophosProfileForm {
         Wait-SophosGuidedOperator -Message 'Press any key to continue.'
     }
 
-    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
+    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; DeviceId = [string]$saveResult.DeviceId; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
 }
 
 function Invoke-SophosDeploymentForm {

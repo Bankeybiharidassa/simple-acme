@@ -70,6 +70,7 @@ scripts/modules/SimpleAcme.OPNsense/SimpleAcme.OPNsense.psd1
 scripts/modules/SimpleAcme.Sophos/SophosFirewallXml.psm1
 scripts/modules/SimpleAcme.Sophos/SimpleAcme.Sophos.psd1
 scripts/deploy-rds-farm.ps1
+scripts/deploy-rds-sessionhost.ps1
 scripts/deploy-paloalto.ps1
 scripts/deploy-sophos.ps1
 setup/Connector-Registry.ps1

@@ -19,6 +19,20 @@ Import-Module (Join-Path $PSScriptRoot 'core\connector-core.psm1') -Force
 function Write-DeployLog { param([string]$Action,[string]$Target,[string]$Result,[hashtable]$Details=@{}) Write-ConnectorLog -Component 'deploy-rds-farm' -Action $Action -Target $Target -Result $Result -Details $Details -EmitConsole }
 function Normalize-Thumbprint { param([string]$Thumbprint) (($Thumbprint -replace '\s','').ToUpperInvariant()) }
 
+function Assert-Admin {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'This script must run elevated as Administrator or as the scheduled task SYSTEM account.'
+  }
+}
+
+function Assert-FileReadable {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "PFX/cache file not found: $Path" }
+  $item = Get-Item -LiteralPath $Path
+  if ($item.Length -lt 1024) { throw "PFX/cache file is unexpectedly small: $Path ($($item.Length) bytes)" }
+}
 
 function Resolve-DeploymentSecret {
   param([hashtable]$Config,[string]$PlainKey,[string]$ReferenceKey)
@@ -60,14 +74,30 @@ function Invoke-LocalRdsBinding {
   $scriptPath = Join-Path $PSScriptRoot 'cert2rds.ps1'
   if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Local RDS binding script not found: $scriptPath" }
 
-  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-CertThumbprint',$Thumbprint) -Wait -PassThru -WindowStyle Hidden
-  if ($process.ExitCode -ne 0) { throw "Local RDS binding failed with exit code $($process.ExitCode)." }
+  $stdoutPath = Join-Path $env:TEMP ("simple-acme-rds-local-{0}.out.log" -f ([guid]::NewGuid().ToString('N')))
+  $stderrPath = Join-Path $env:TEMP ("simple-acme-rds-local-{0}.err.log" -f ([guid]::NewGuid().ToString('N')))
+  try {
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-CertThumbprint',$Thumbprint) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { @(Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue) } else { @() }
+    $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) } else { @() }
+    $details = @{ thumbprint = $Thumbprint; exitCode = $process.ExitCode; stdoutTail = @($stdout | Select-Object -Last 20); stderrTail = @($stderr | Select-Object -Last 20) }
+    if ($process.ExitCode -ne 0) {
+      Write-DeployLog -Action 'local-rds-binding' -Target 'localhost' -Result 'fail' -Details $details
+      $summary = @($details.stderrTail + $details.stdoutTail) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Last 8
+      if ($summary.Count -gt 0) {
+        throw "Local RDS binding failed with exit code $($process.ExitCode). Last output: $($summary -join ' | ')"
+      }
+      throw "Local RDS binding failed with exit code $($process.ExitCode). No child output was captured."
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
+  }
   Write-DeployLog -Action 'local-rds-binding' -Target 'localhost' -Result 'success' -Details @{ thumbprint = $Thumbprint }
 }
 $normalized = Normalize-Thumbprint $CertThumbprint
 if (-not $SkipLocalRdsBinding) {
-  try { Invoke-LocalRdsBinding -Thumbprint $normalized }
-  catch { Write-DeployLog -Action 'local-rds-binding' -Target 'localhost' -Result 'fail' -Details @{ error = $_.Exception.Message }; throw }
+  Invoke-LocalRdsBinding -Thumbprint $normalized
 }
 if ($SkipSessionHosts) { exit 0 }
 $config = Read-ConnectorDeploymentConfigFile -Path $ConfigFile
@@ -90,6 +120,8 @@ if ([string]::IsNullOrWhiteSpace($pfxPath) -or -not (Test-Path -LiteralPath $pfx
   if ([string]::IsNullOrWhiteSpace($plainPassword)) { $plainPassword = $PfxPassword }
 }
 if ([string]::IsNullOrWhiteSpace($plainPassword)) { throw 'No PFX password available. Provide -CachePassword, -PfxPassword, or PFX_PASSWORD in -ConfigFile.' }
+Assert-Admin
+Assert-FileReadable -Path $pfxPath
 $failed=$false
 foreach($hostName in $hosts){
   $session=$null
@@ -100,7 +132,7 @@ foreach($hostName in $hosts){
   } catch { Write-DeployLog -Action 'session-connect' -Target $hostName -Result 'fail' -Details @{ reason = $_.Exception.Message }; $failed=$true; continue }
   try {
     Invoke-Command -Session $session -ScriptBlock { param($p) New-Item -ItemType Directory -Path $p -Force | Out-Null } -ArgumentList $RemoteTempDirectory
-    $remotePfxPath = Join-Path $RemoteTempDirectory ([System.IO.Path]::GetFileName($pfxPath))
+    $remotePfxPath = Join-Path $RemoteTempDirectory ("rds-cert-{0}.pfx" -f ([guid]::NewGuid().ToString('N')))
     Copy-Item -LiteralPath $pfxPath -ToSession $session -Destination $remotePfxPath -Force
     Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'deploy-rds-sessionhost.ps1') -ArgumentList $normalized,$remotePfxPath,$plainPassword
     Write-DeployLog -Action 'deploy' -Target $hostName -Result 'success' -Details @{ thumbprint = $normalized }

@@ -24,4 +24,11 @@ function Invoke-TestScriptsSyntax {
             if ($txt -notmatch [regex]::Escape($role)) { throw "Missing role $role" }
         }
     }
+
+    & $Assert 'cert2rds emits actionable RDS binding diagnostics' {
+        $txt = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Scripts\cert2rds.ps1') -Raw
+        foreach ($expected in @('Import-Module RemoteDesktop','Set-RDCertificate was not found','RDS role binding failed for','HasPrivateKey','Assert-Administrator')) {
+            if ($txt -notmatch [regex]::Escape($expected)) { throw "Missing diagnostic marker: $expected" }
+        }
+    }
 }

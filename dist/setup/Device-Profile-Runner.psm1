@@ -838,6 +838,20 @@ function Save-DeviceProfile {
         settings = $settings
     }
     Save-DeviceConfig -Device $device -ConfigDir $ConfigDir -SecretFields $SecretFields | Out-Null
+    return [pscustomobject]@{
+        Status = 'Saved'
+        DeviceId = $deviceId
+        ConfigDir = $ConfigDir
+        ConnectorType = $ConnectorType
+        Label = $effectiveLabel
+    }
+}
+
+function ConvertTo-DeviceProfileSingleQuotedArgument {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) { return "''" }
+    return "'" + ([string]$Value).Replace("'", "''") + "'"
 }
 
 function Invoke-GuidedDeviceProfileForm {
@@ -906,13 +920,13 @@ function Invoke-GuidedDeviceProfileForm {
     }
     $secretFields = @($secretFields | Sort-Object -Unique)
 
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $profileLabel -Values $values -SecretFields $secretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
+    $saveResult = Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $profileLabel -Values $values -SecretFields $secretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
     Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $displayLabel) -Values $values -Fields @($schema.Fields)
 
     $testResult = $null
     $testLogPath = $null
     $shouldTest = Read-DeviceProfileGuidedYesNo -Prompt ("Test communication with {0} now?" -f $displayLabel) -Default $true
-    if ($null -eq $shouldTest) { return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $null } }
+    if ($null -eq $shouldTest) { return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; DeviceId = [string]$saveResult.DeviceId; CommunicationTest = $null } }
     if ($shouldTest) {
         Write-Host ''
         Write-Host ("Testing communication with {0}..." -f $displayLabel)
@@ -936,7 +950,34 @@ function Invoke-GuidedDeviceProfileForm {
         Wait-DeviceProfileOperatorKey
     }
 
-    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
+    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; DeviceId = [string]$saveResult.DeviceId; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
+}
+
+function Invoke-PaloAltoCertificateRequestSetup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+
+    $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
+    $profileResult = Invoke-DeviceProfileConnectorWizard -ProjectRoot $ProjectRoot -ConnectorType 'paloalto'
+    if ($null -eq $profileResult -or [string]$profileResult.Status -ne 'Saved') { return $null }
+
+    $deviceId = [string]$profileResult.DeviceId
+    if ([string]::IsNullOrWhiteSpace($deviceId)) { throw 'Palo Alto device profile was saved without a device id.' }
+
+    $Values['CERTIFICATE_CONFIG_DIR'] = $configDir
+    $Values['ACME_TARGET_SYSTEM'] = 'paloalto'
+    $Values['TARGET_SYSTEM'] = 'paloalto'
+    $Values['ACME_TARGET_DEVICE_TYPE'] = 'paloalto'
+    $Values['ACME_TARGET_DEVICE_LABEL'] = 'Palo Alto firewall'
+    $Values['ACME_TARGET_DEVICE_ID'] = $deviceId
+    $Values['ACME_INSTALLATION_PLUGINS'] = 'script'
+    $Values['ACME_STORE_PLUGIN'] = 'pfxfile,certificatestore'
+    $Values['ACME_SCRIPT_PATH'] = Join-Path $ProjectRoot 'Scripts\cert2paloalto.ps1'
+    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -CertCommonName '{CertCommonName}' -ConfigDir $(ConvertTo-DeviceProfileSingleQuotedArgument -Value $configDir) -DeviceId $(ConvertTo-DeviceProfileSingleQuotedArgument -Value $deviceId)"
+    return $Values
 }
 
 function Invoke-PaloAltoProfileForm {
@@ -1277,7 +1318,7 @@ function Invoke-DeviceProfileForm {
         }
         $SecretFields = @($SecretFields | Sort-Object -Unique)
     }
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
+    $saveResult = Save-DeviceProfile -ConfigDir $configDir -ConnectorType $ConnectorType -Label $label -Values $values -SecretFields $SecretFields -DefaultDeviceId $DefaultDeviceId -DeviceId $DeviceId -FriendlyName $displayLabel
     Show-DeviceProfileSummary -Title ("Saved {0} device profile" -f $displayLabel) -Values $values -Fields @($schema.Fields)
 
     $testResult = $null
@@ -1312,7 +1353,7 @@ function Invoke-DeviceProfileForm {
 
     Show-TuiStatus -Message ("{0} device profile saved." -f $displayLabel) -Type Success -Row ([Math]::Max(0,[Console]::WindowHeight)-2)
     Start-Sleep -Milliseconds 1200
-    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
+    return [pscustomobject]@{ Status = 'Saved'; ConfigDir = $configDir; DeviceId = [string]$saveResult.DeviceId; CommunicationTest = $testResult; CommunicationTestLog = $testLogPath }
 }
 
 function Invoke-DeviceProfileInventory {
@@ -1352,4 +1393,4 @@ function Invoke-DeviceProfileInventory {
     return [pscustomobject]@{ Status = 'Shown'; Count = $devices.Count; ConfigDir = $configDir }
 }
 
-Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-PaloAltoProfileForm,Invoke-DeviceProfileWizard,Invoke-DeviceProfileConnectorWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId
+Export-ModuleMember -Function Resolve-DeviceProfileConfigDir,Get-DeviceProfileCurrentValues,Add-DeviceProfileDefaults,Remove-DeviceProfilePlaceholderValues,Get-DeviceProfileFieldDefault,Save-DeviceProfile,Invoke-DeviceProfileForm,Invoke-GuidedDeviceProfileForm,Invoke-PaloAltoProfileForm,Invoke-PaloAltoCertificateRequestSetup,Invoke-DeviceProfileWizard,Invoke-DeviceProfileConnectorWizard,Invoke-DeviceProfileManager,Invoke-DeviceProfileInventory,Invoke-DeviceProfileAdd,Invoke-DeviceProfileEdit,Invoke-DeviceProfileDelete,Invoke-DeviceProfileTcpTest,Test-DeviceProfileLikelyPlaintextSecret,Show-DeviceProfileSummary,ConvertTo-DeviceProfileDisplayValue,Write-DeviceProfileJsonLog,Read-DeviceProfileYesNo,Read-DeviceProfileConsoleLine,Read-DeviceProfileGuidedYesNo,Wait-DeviceProfileOperatorKey,New-DeviceProfileId,ConvertTo-DeviceProfileSingleQuotedArgument

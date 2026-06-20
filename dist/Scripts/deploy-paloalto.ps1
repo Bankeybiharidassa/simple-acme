@@ -381,14 +381,44 @@ function Get-ExistingCertificateFingerprint {
         if ($_.Exception.Message -match 'No such node') { return $null }
         throw
     }
-    $certNode = $resp.response.result.entry
-    if ($null -eq $certNode) { return $null }
+    $resultProperty = $resp.response.PSObject.Properties['result']
+    if ($null -eq $resultProperty -or $null -eq $resultProperty.Value) { return $null }
+    $entryProperty = $resultProperty.Value.PSObject.Properties['entry']
+    if ($null -eq $entryProperty -or $null -eq $entryProperty.Value) { return $null }
+    $certNode = $entryProperty.Value
 
-    if ($certNode.'fingerprint') {
-        return ([string]$certNode.'fingerprint').Replace(':', '').ToUpperInvariant()
+    foreach ($propertyName in @('fingerprint','sha256-fingerprint','sha1-fingerprint')) {
+        $property = $certNode.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return ([string]$property.Value).Replace(':', '').ToUpperInvariant()
+        }
     }
 
     return $null
+}
+
+function Test-PaloAltoCertificateExists {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Firewall,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$ApiKey,
+        [Parameter(Mandatory = $true)][string]$CertName,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+
+    $xpath = "/config/shared/certificate/entry[@name='$(Get-XmlEscaped -Text $CertName)']"
+    try {
+        $resp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $xpath } -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        if ($_.Exception.Message -match 'No such node') { return $false }
+        throw
+    }
+
+    $resultProperty = $resp.response.PSObject.Properties['result']
+    if ($null -eq $resultProperty -or $null -eq $resultProperty.Value) { return $false }
+    $entryProperty = $resultProperty.Value.PSObject.Properties['entry']
+    return ($null -ne $entryProperty -and $null -ne $entryProperty.Value)
 }
 
 function Upload-Certificate {
@@ -549,6 +579,10 @@ function Validate-Deployment {
         [Parameter(Mandatory = $true)][string]$BindingXPath,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
+
+    if (-not (Test-PaloAltoCertificateExists -Firewall $Firewall -Port $Port -ApiKey $ApiKey -CertName $CertName -TimeoutSeconds $TimeoutSeconds)) {
+        throw "Validation failed: certificate '$CertName' was not found in the PAN-OS certificate store."
+    }
 
     $profileXPath = "/config/shared/ssl-tls-service-profile/entry[@name='$(Get-XmlEscaped -Text $ProfileName)']"
     $profileResp = Invoke-PanApi -Firewall $Firewall -Port $Port -ApiKey $ApiKey -Method GET -Query @{ type = 'config'; action = 'show'; xpath = $profileXPath } -TimeoutSeconds $TimeoutSeconds
