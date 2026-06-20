@@ -139,8 +139,8 @@ $trackedFiles = Get-SyncTrackedFiles -Root $ProjectRoot
 
 switch ($Mode) {
     'DevToTestAndDist' {
-        Invoke-SyncCopySet -SourceRoot $ProjectRoot -TargetRoot $TestRoot -Files $trackedFiles -Name 'dev -> test\certificaat'
         Invoke-SyncCopySet -SourceRoot $ProjectRoot -TargetRoot $DistRoot -Files $manifestFiles -Name 'dev -> dist'
+        Invoke-SyncCopySet -SourceRoot $ProjectRoot -TargetRoot $TestRoot -Files $trackedFiles -Name 'dev -> test\certificaat'
     }
     'DevToTest' {
         Invoke-SyncCopySet -SourceRoot $ProjectRoot -TargetRoot $TestRoot -Files $trackedFiles -Name 'dev -> test\certificaat'
