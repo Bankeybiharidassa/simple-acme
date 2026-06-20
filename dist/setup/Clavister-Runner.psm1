@@ -184,8 +184,10 @@ function Invoke-ClavisterCertificateRequestSetup {
     if ($null -eq $profileResult -or [string]$profileResult.Status -eq 'Canceled') {
         return $null
     }
+    $deviceId = [string]$profileResult.DeviceId
+    if ([string]::IsNullOrWhiteSpace($deviceId)) { throw 'Clavister device profile was saved without a device id.' }
 
-    $targetResult = Invoke-ClavisterCertificateTargetSelection -ProjectRoot $ProjectRoot -ConfigDir $configDir
+    $targetResult = Invoke-ClavisterCertificateTargetSelection -ProjectRoot $ProjectRoot -ConfigDir $configDir -DeviceId $deviceId
     if ($null -eq $targetResult -or [string]$targetResult.Status -ne 'Saved') {
         return $null
     }
@@ -194,10 +196,11 @@ function Invoke-ClavisterCertificateRequestSetup {
     $Values['TARGET_SYSTEM'] = 'clavister'
     $Values['ACME_TARGET_DEVICE_TYPE'] = 'clavister'
     $Values['ACME_TARGET_DEVICE_LABEL'] = 'Clavister NetWall / cOS Core'
+    $Values['ACME_TARGET_DEVICE_ID'] = $deviceId
     $Values['ACME_INSTALLATION_PLUGINS'] = 'script'
     $Values['ACME_STORE_PLUGIN'] = 'pfxfile,certificatestore'
     $Values['ACME_SCRIPT_PATH'] = Join-Path $ProjectRoot 'Scripts\cert2clavister.ps1'
-    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir $(ConvertTo-ClavisterSingleQuotedArgument -Value $configDir)"
+    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir $(ConvertTo-ClavisterSingleQuotedArgument -Value $configDir) -DeviceId $(ConvertTo-ClavisterSingleQuotedArgument -Value $deviceId)"
 
     return $Values
 }

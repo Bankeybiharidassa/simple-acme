@@ -10,6 +10,7 @@ Import-Module "$PSScriptRoot/../core/Env-Loader.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Native-Process.psm1" -Force -Global
 Import-Module "$PSScriptRoot/../core/Simple-Acme-Reconciler.psm1" -Force -Global
 Import-Module (Join-Path $PSScriptRoot '..\core\Crypto.psm1') -Force
+Import-Module "$PSScriptRoot/Device-Profile-Runner.psm1" -Force -Global
 Import-Module "$PSScriptRoot/Sophos-Runner.psm1" -Force -Global
 . "$PSScriptRoot/Device-Schemas.ps1"
 . "$PSScriptRoot/Connector-Registry.ps1"
@@ -1914,6 +1915,16 @@ function Invoke-AcmeForm {
             return $null
         }
         $values = $clavisterResult
+    }
+
+    if ([string]$targetSelection['DeviceType'] -eq 'paloalto') {
+        $paloAltoResult = Invoke-PaloAltoCertificateRequestSetup -ProjectRoot (Split-Path $PSScriptRoot -Parent) -Values $values
+        if ($null -eq $paloAltoResult) {
+            [Console]::WriteLine('')
+            [Console]::WriteLine('Setup cancelled.')
+            return $null
+        }
+        $values = $paloAltoResult
     }
 
     while ($true) {

@@ -59,11 +59,14 @@ function Get-KempProfileFields {
 }
 
 function Get-KempProfileValues {
-    param([Parameter(Mandatory)][string]$ProjectRoot)
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [string]$DeviceId = ''
+    )
 
     $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
     $fields = Get-KempProfileFields
-    Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'kemp') -Fields $fields
+    Add-DeviceProfileDefaults -Values (Get-DeviceProfileCurrentValues -ConfigDir $configDir -ConnectorType 'kemp' -DeviceId $DeviceId) -Fields $fields
 }
 
 function Resolve-KempProfilePasswordForTui {
@@ -233,13 +236,11 @@ function Invoke-KempCertificateRequestSetup {
     )
 
     $configDir = Resolve-DeviceProfileConfigDir -ProjectRoot $ProjectRoot
-    $profileValues = Get-KempProfileValues -ProjectRoot $ProjectRoot
-    if (-not $profileValues.ContainsKey('host') -or [string]::IsNullOrWhiteSpace([string]$profileValues['host'])) {
-        Write-Host 'No Kemp device profile exists yet. Create the LoadMaster connection profile first.' -ForegroundColor Yellow
-        $created = Invoke-KempProfileForm -ProjectRoot $ProjectRoot
-        if ($null -eq $created -or [string]$created.Status -ne 'Saved') { return $null }
-        $profileValues = Get-KempProfileValues -ProjectRoot $ProjectRoot
-    }
+    $profileResult = Invoke-DeviceProfileConnectorWizard -ProjectRoot $ProjectRoot -ConnectorType 'kemp'
+    if ($null -eq $profileResult -or [string]$profileResult.Status -ne 'Saved') { return $null }
+    $deviceId = [string]$profileResult.DeviceId
+    if ([string]::IsNullOrWhiteSpace($deviceId)) { throw 'Kemp device profile was saved without a device id.' }
+    $profileValues = Get-KempProfileValues -ProjectRoot $ProjectRoot -DeviceId $deviceId
 
     try {
         $profileValues = Invoke-KempTargetSelection -ProjectRoot $ProjectRoot -Values $profileValues
@@ -255,14 +256,15 @@ function Invoke-KempCertificateRequestSetup {
         $profileValues['certificate_name'] = Get-KempDefaultCertificateName -ProjectRoot $ProjectRoot
     }
 
-    Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -Values $profileValues -SecretFields @('password','api_key') -DefaultDeviceId 'kemp-loadmaster'
+    Save-DeviceProfile -ConfigDir $configDir -ConnectorType 'kemp' -Label 'Kemp LoadMaster' -Values $profileValues -SecretFields @('password','api_key') -DeviceId $deviceId | Out-Null
     $Values['ACME_TARGET_SYSTEM'] = 'waf'
     $Values['ACME_TARGET_DEVICE_TYPE'] = 'kemp'
     $Values['ACME_TARGET_DEVICE_LABEL'] = 'Kemp LoadMaster'
+    $Values['ACME_TARGET_DEVICE_ID'] = $deviceId
     $Values['ACME_INSTALLATION_PLUGINS'] = 'script'
     $Values['ACME_STORE_PLUGIN'] = 'pfxfile,certificatestore'
     $Values['ACME_SCRIPT_PATH'] = Join-Path $ProjectRoot 'Scripts\cert2kemp.ps1'
-    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir $(ConvertTo-KempSingleQuotedArgument -Value $configDir)"
+    $Values['ACME_SCRIPT_PARAMETERS'] = "-PfxPath '{CacheFile}' -CachePassword '{CachePassword}' -ConfigDir $(ConvertTo-KempSingleQuotedArgument -Value $configDir) -DeviceId $(ConvertTo-KempSingleQuotedArgument -Value $deviceId)"
     return $Values
 }
 
