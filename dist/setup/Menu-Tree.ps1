@@ -1,0 +1,42 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments','CertificateMenuTree',Justification='Dot-sourced data table consumed by setup modules and scripts.')]
+param()
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$CertificateMenuTree = @{
+    Title = 'Certificate setup'
+    Items = @(
+        @{ Label='Setup new certificate'; Key='setup-new'; Type='action' },
+        @{ Label='Manage existing certificates'; Key='manage-certs'; Type='action' },
+        @{ Label='Deployment targets'; Key='deployment-targets'; Type='submenu'; Items=@(
+            @{ Label='Manage configured devices (view/add/change/delete)'; Key='device-manager'; Type='action' },
+            @{ Label='Create or edit any device profile'; Key='device-profile'; Type='action' },
+            @{ Label='Clavister NetWall / cOS Core - Create or edit device profile'; Key='clavister-profile'; Type='action' },
+            @{ Label='Kemp LoadMaster - Create or edit device profile'; Key='kemp-profile'; Type='action' },
+            @{ Label='Kemp LoadMaster - Check what would happen (safe preview, no changes)'; Key='kemp-whatif'; Type='action' },
+            @{ Label='Kemp LoadMaster - Install certificate on selected virtual services'; Key='kemp-deploy'; Type='action' },
+            @{ Label='Kemp LoadMaster - Check setup and show diagnostics'; Key='kemp-diagnostics'; Type='action' },
+            @{ Label='Palo Alto Firewall - Create or edit device profile'; Key='paloalto-profile'; Type='action' },
+            @{ Label='Sophos Firewall - Create or edit device profile'; Key='sophos-profile'; Type='action' },
+            @{ Label='NetScaler / Citrix ADC - Check what would happen (safe preview, no changes)'; Key='netscaler-whatif'; Type='action' },
+            @{ Label='NetScaler / Citrix ADC - Install certificate on appliance (asks for confirmation)'; Key='netscaler-deploy'; Type='action' },
+            @{ Label='NetScaler / Citrix ADC - Check setup and show diagnostics'; Key='netscaler-diagnostics'; Type='action' },
+            @{ Label='Sophos Firewall - Check what would happen (safe preview, no changes)'; Key='sophos-whatif'; Type='action' },
+            @{ Label='Sophos Firewall - Install certificate on selected services'; Key='sophos-deploy'; Type='action' },
+            @{ Label='Sophos Firewall - Check setup and show diagnostics'; Key='sophos-diagnostics'; Type='action' },
+            @{ Label='Sophos Firewall - Recover certificate export over SSH (diagnostics only)'; Key='sophos-export-recovery'; Type='action' },
+            @{ Key='back'; Label='.. Back'; Type='back' }
+        )},
+        @{ Label='Backup / Restore'; Key='backup'; Type='submenu'; Items=@(@{ Label='Create backup'; Key='backup-create'; Type='action' },@{ Label='Restore from backup'; Key='backup-restore'; Type='action' },@{ Label='Verify backup'; Key='backup-verify'; Type='action' },@{Key='back';Label='.. Back';Type='back'})},
+        @{ Label='Advanced / Phase 2 features'; Key='advanced'; Type='submenu'; Items=@(
+            @{ Label='ACME settings'; Key='acme'; Type='action' },
+            @{ Label='View logs / diagnostics'; Key='logs-diagnostics'; Type='action' },
+            @{ Label='Full ACME TUI wiring diagnostics'; Key='acme-tui-diagnostics'; Type='action' },
+            @{ Label='Deployment policies'; Key='policies'; Type='action' },
+            @{ Label='View existing policies'; Key='policies-view'; Type='action' },
+            @{ Label='Register/Repair orchestrator task'; Key='task-register'; Type='action' },
+            @{ Key='back'; Label='.. Back'; Type='back' }
+        )},
+        @{ Label='Exit'; Key='exit'; Type='action' }
+    )
+}
